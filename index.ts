@@ -1,3 +1,3 @@
-import { Logger } from "./utils/logger";
+import logger from './utils/logger';
 
-const logger = new Logger();
+logger.info('lel');
