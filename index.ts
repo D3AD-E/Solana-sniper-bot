@@ -1,3 +1,3 @@
-import logger from './utils/logger';
+import dotenv from 'dotenv';
 
-logger.info('lel');
+dotenv.config();
