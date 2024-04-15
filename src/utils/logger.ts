@@ -3,8 +3,8 @@ import winston, { Logger as WinstonLogger } from 'winston';
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
-    winston.format.timestamp(), // Add timestamp
     winston.format.json(),
+    winston.format.timestamp(), // Add timestamp
   ),
   transports: [
     new winston.transports.Console({
@@ -14,5 +14,4 @@ const logger = winston.createLogger({
     new winston.transports.File({ filename: 'combined.log' }),
   ],
 });
-
 export default logger;

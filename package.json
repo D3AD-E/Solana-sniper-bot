@@ -9,6 +9,8 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@types/node-telegram-bot-api": "^0.64.6",
+    "@types/user-agents": "^1.0.4",
     "prettier": "^3.2.5",
     "ts-node": "^10.9.2",
     "typescript": "^5.4.4"
@@ -21,6 +23,9 @@
     "bigint-buffer": "^1.1.5",
     "bs58": "^5.0.0",
     "dotenv": "^16.4.5",
+    "node-telegram-bot-api": "^0.65.1",
+    "puppeteer": "^22.6.4",
+    "user-agents": "^1.1.174",
     "winston": "^3.13.0"
   }
 }
