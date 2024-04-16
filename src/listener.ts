@@ -78,32 +78,9 @@ export default async function listen(): Promise<void> {
     wallet.publicKey,
     process.env.COMMITMENT as Commitment,
   );
-  let n = undefined;
-  for (const acc of existingTokenAccounts) {
-    const bigAmount: BigNumberish = acc!.accountInfo.amount as BigNumberish;
-    if (bigAmount.eqn(1049446)) {
-      n = acc;
-      break;
-    }
-  }
-  // if (!tokenAccount) {
-  //   throw new Error(`No ${quoteToken.symbol} token account found in wallet: ${wallet.publicKey}`);
-  // }
-  // allKeys = await loadPoolKeys();
-  // const poolKeys = findPoolInfoForTokensById(allKeys, '879F697iuDJGMevRkRcnW21fcXiAeLJK1ffsw2ATebce');
-  // console.log(poolKeys);
-  // const amount = await getTokenAmount(n!.accountInfo.mint.toString(), poolKeys!);
-  const bal = await getTokenBalanceSpl(n!.pubkey);
-  console.log(bal);
-  // await sellToken({
-  //   amount: bal,
-  //   initialPrice: 1,
-  //   symbol: 'A',
-  //   address: 'MEW1gQWJ3nEXg2qgERiKu7FAFj79PHvQVREQUzScPP5',
-  //   mintAddress: '879F697iuDJGMevRkRcnW21fcXiAeLJK1ffsw2ATebce',
-  // });
-  // const token = await monitorDexTools();
-  // await monitorToken(token);
+
+  const token = await monitorDexTools();
+  await monitorToken(token);
 }
 
 async function monitorDexTools() {
@@ -195,7 +172,7 @@ async function sellToken(token: BoughtTokenData) {
   allKeys = await loadPoolKeys();
   const poolKeys = findPoolInfoForTokensById(allKeys, token.mintAddress);
 
-  await preformSwap(token.address, token.amount, poolKeys!, 100000, 'in');
+  await preformSwap(token.address, token.amount, poolKeys!, 100000, 'in', true);
 }
 
 export async function loadNewTokens(): Promise<TokenInfo[]> {
@@ -244,9 +221,10 @@ async function preformSwap(
   poolKeys: LiquidityPoolKeys,
   maxLamports: number = 100000,
   fixedSide: 'in' | 'out' = 'in',
+  shouldSell: boolean = false,
   slippage: number = 5,
 ): Promise<void> {
-  const directionIn = true;
+  const directionIn = shouldSell || poolKeys.quoteMint.toString() == toToken;
   const { minAmountOut, amountIn } = await calcAmountOut(solanaConnection, poolKeys, amount, slippage, directionIn);
   console.log(minAmountOut.raw, amountIn.raw);
   const userTokenAccounts = await getOwnerTokenAccounts();
@@ -296,7 +274,7 @@ async function preformSwap(
   );
   if (!confirmation.value.err) {
     logger.info(txid);
-    if (fixedSide === 'in') sendMessage(`Bought ${txid}`);
+    if (!shouldSell) sendMessage(`Bought ${txid}`);
     else sendMessage(`Sold ${txid}`);
   } else {
     console.log(confirmation.value.err);
