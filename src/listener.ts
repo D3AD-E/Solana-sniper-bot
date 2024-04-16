@@ -15,7 +15,9 @@ import {
 import {
   createAssociatedTokenAccountIdempotentInstruction,
   createCloseAccountInstruction,
+  getAccount,
   getAssociatedTokenAddressSync,
+  getMint,
 } from '@solana/spl-token';
 import {
   Commitment,
@@ -44,6 +46,7 @@ import { readFile, writeFile } from 'fs/promises';
 import { TokenInfo, getLastUpdatedTokens, getSwapInfo } from './browser/scrape';
 import { sendMessage } from './telegramBot';
 import { getTokenPrice } from './birdEye';
+import BigNumber from 'bignumber.js';
 
 type BoughtTokenData = {
   address: string;
@@ -75,17 +78,32 @@ export default async function listen(): Promise<void> {
     wallet.publicKey,
     process.env.COMMITMENT as Commitment,
   );
-
-  const tokenAccount = existingTokenAccounts.find(
-    (acc) => acc.accountInfo.mint.toString() === quoteToken.mint.toString(),
-  )!;
-
-  if (!tokenAccount) {
-    throw new Error(`No ${quoteToken.symbol} token account found in wallet: ${wallet.publicKey}`);
+  let n = undefined;
+  for (const acc of existingTokenAccounts) {
+    const bigAmount: BigNumberish = acc!.accountInfo.amount as BigNumberish;
+    if (bigAmount.eqn(1049446)) {
+      n = acc;
+      break;
+    }
   }
-
-  const token = await monitorDexTools();
-  await monitorToken(token);
+  // if (!tokenAccount) {
+  //   throw new Error(`No ${quoteToken.symbol} token account found in wallet: ${wallet.publicKey}`);
+  // }
+  // allKeys = await loadPoolKeys();
+  // const poolKeys = findPoolInfoForTokensById(allKeys, '879F697iuDJGMevRkRcnW21fcXiAeLJK1ffsw2ATebce');
+  // console.log(poolKeys);
+  // const amount = await getTokenAmount(n!.accountInfo.mint.toString(), poolKeys!);
+  const bal = await getTokenBalanceSpl(n!.pubkey);
+  console.log(bal);
+  // await sellToken({
+  //   amount: bal,
+  //   initialPrice: 1,
+  //   symbol: 'A',
+  //   address: 'MEW1gQWJ3nEXg2qgERiKu7FAFj79PHvQVREQUzScPP5',
+  //   mintAddress: '879F697iuDJGMevRkRcnW21fcXiAeLJK1ffsw2ATebce',
+  // });
+  // const token = await monitorDexTools();
+  // await monitorToken(token);
 }
 
 async function monitorDexTools() {
@@ -107,13 +125,16 @@ async function monitorDexTools() {
       logger.info(
         `Got new token info ${tokenInfo.links[0].id} ${tokenInfo.links[1].id}, price ${tokenInfo.initialPrice}`,
       );
-      sendMessage(`Trying to buy a token ${token.symbol} ${tokenInfo.initialPrice}$`);
+      sendMessage(
+        `Trying to buy a token ${token.symbol} ${tokenInfo.initialPrice}$ ${tokenInfo.links[0].id} ${tokenInfo.links[1].id}`,
+      );
       allKeys = await loadPoolKeys();
       const poolKeys = findPoolInfoForTokensById(allKeys, tokenInfo.links[1].id);
 
       await preformSwap(tokenInfo.links[0].id, Number(process.env.SWAP_SOL_AMOUNT), poolKeys!);
-      const amount = await getTokenAmount(tokenInfo.links[0].id, poolKeys!);
       const tokenPrice = await getTokenPrice(tokenInfo.links[0].id);
+
+      const amount = await getTokenBalanceSpl(new PublicKey(tokenInfo.links[0].id));
       console.log({
         mintAddress: tokenInfo.links[1].id,
         address: tokenInfo.links[0].id,
@@ -131,20 +152,16 @@ async function monitorDexTools() {
     }
     const randomInterval = Math.random() * (MAX_REFRESH_DELAY - MIN_REFRESH_DELAY) + MIN_REFRESH_DELAY;
     await new Promise((resolve) => setTimeout(resolve, randomInterval));
-    // logger.info('Refresh');
+    logger.info('Refresh');
   }
 }
 
-async function getTokenAmount(tokenAddress: string, poolKeys: LiquidityPoolKeys) {
-  existingTokenAccounts = await getTokenAccounts(
-    solanaConnection,
-    wallet.publicKey,
-    process.env.COMMITMENT as Commitment,
-  );
-  const newTokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === tokenAddress);
-  const bigAmount: BigNumberish = newTokenAccount!.accountInfo.amount as BigNumberish;
-  const amount = bigAmount.divn(10 ** poolKeys!.baseDecimals).toNumber();
-  return amount;
+async function getTokenBalanceSpl(tokenAccount: PublicKey) {
+  const info = await getAccount(solanaConnection, tokenAccount);
+  const amount = Number(info.amount);
+  const mint = await getMint(solanaConnection, info.mint);
+  const balance = amount / 10 ** mint.decimals;
+  return balance;
 }
 
 async function monitorToken(token: BoughtTokenData) {
@@ -178,7 +195,7 @@ async function sellToken(token: BoughtTokenData) {
   allKeys = await loadPoolKeys();
   const poolKeys = findPoolInfoForTokensById(allKeys, token.mintAddress);
 
-  await preformSwap(token.address, token.amount, poolKeys!, 100000, 'out');
+  await preformSwap(token.address, token.amount, poolKeys!, 100000, 'in');
 }
 
 export async function loadNewTokens(): Promise<TokenInfo[]> {
@@ -229,7 +246,7 @@ async function preformSwap(
   fixedSide: 'in' | 'out' = 'in',
   slippage: number = 5,
 ): Promise<void> {
-  const directionIn = poolKeys.quoteMint.toString() == toToken;
+  const directionIn = true;
   const { minAmountOut, amountIn } = await calcAmountOut(solanaConnection, poolKeys, amount, slippage, directionIn);
   console.log(minAmountOut.raw, amountIn.raw);
   const userTokenAccounts = await getOwnerTokenAccounts();
@@ -282,7 +299,7 @@ async function preformSwap(
     if (fixedSide === 'in') sendMessage(`Bought ${txid}`);
     else sendMessage(`Sold ${txid}`);
   } else {
-    logger.debug(confirmation.value.err);
+    console.log(confirmation.value.err);
     logger.info(`Error confirming tx`);
   }
 }
