@@ -11,6 +11,10 @@ import {
   TokenAccount,
   PoolInfoLayout,
   SqrtPriceMath,
+  LIQUIDITY_STATE_LAYOUT_V4,
+  MARKET_STATE_LAYOUT_V3,
+  SPL_MINT_LAYOUT,
+  Market,
 } from '@raydium-io/raydium-sdk';
 import {
   createAssociatedTokenAccountIdempotentInstruction,
@@ -105,13 +109,14 @@ async function monitorDexTools() {
       sendMessage(
         `Trying to buy a token ${token.symbol} ${tokenInfo.initialPrice}$ ${tokenInfo.links[0].id} ${tokenInfo.links[1].id}`,
       );
-      allKeys = await loadPoolKeys();
-      const poolKeys = findPoolInfoForTokensById(allKeys, tokenInfo.links[1].id);
-
+      const poolKeys = await getPoolKeys(
+        new PublicKey('So11111111111111111111111111111111111111112'),
+        new PublicKey(tokenInfo.links[0].id),
+      );
       await preformSwap(tokenInfo.links[0].id, Number(process.env.SWAP_SOL_AMOUNT), poolKeys!);
       const tokenPrice = await getTokenPrice(tokenInfo.links[0].id);
-
-      const amount = await getTokenBalanceSpl(new PublicKey(tokenInfo.links[0].id));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const amount = await getTokenBalanceSpl(tokenInfo.links[0].id);
       console.log({
         mintAddress: tokenInfo.links[1].id,
         address: tokenInfo.links[0].id,
@@ -133,10 +138,94 @@ async function monitorDexTools() {
   }
 }
 
-async function getTokenBalanceSpl(tokenAccount: PublicKey) {
-  const info = await getAccount(solanaConnection, tokenAccount);
-  const amount = Number(info.amount);
-  const mint = await getMint(solanaConnection, info.mint);
+async function getPoolKeys(base: PublicKey, quote: PublicKey) {
+  const rsp = await fetchMarketAccounts(base, quote);
+  const poolKeys = await formatAmmKeysById(rsp[0].id, solanaConnection);
+  return poolKeys;
+}
+
+async function formatAmmKeysById(id: string, connection: Connection): Promise<LiquidityPoolKeysV4> {
+  const account = await solanaConnection.getAccountInfo(new PublicKey(id));
+  if (account === null) throw Error(' get id info error ');
+  const info = LIQUIDITY_STATE_LAYOUT_V4.decode(account.data);
+
+  const marketId = info.marketId;
+  const marketAccount = await connection.getAccountInfo(marketId);
+  if (marketAccount === null) throw Error(' get market info error');
+  const marketInfo = MARKET_STATE_LAYOUT_V3.decode(marketAccount.data);
+
+  const lpMint = info.lpMint;
+  const lpMintAccount = await connection.getAccountInfo(lpMint);
+  if (lpMintAccount === null) throw Error(' get lp mint info error');
+  const lpMintInfo = SPL_MINT_LAYOUT.decode(lpMintAccount.data);
+
+  return {
+    id: new PublicKey(id),
+    baseMint: info.baseMint,
+    quoteMint: info.quoteMint,
+    lpMint: info.lpMint,
+    baseDecimals: info.baseDecimal.toNumber(),
+    quoteDecimals: info.quoteDecimal.toNumber(),
+    lpDecimals: lpMintInfo.decimals,
+    version: 4,
+    programId: account.owner,
+    authority: Liquidity.getAssociatedAuthority({ programId: account.owner }).publicKey,
+    openOrders: info.openOrders,
+    targetOrders: info.targetOrders,
+    baseVault: info.baseVault,
+    quoteVault: info.quoteVault,
+    withdrawQueue: info.withdrawQueue,
+    lpVault: info.lpVault,
+    marketVersion: 3,
+    marketProgramId: info.marketProgramId,
+    marketId: info.marketId,
+    marketAuthority: Market.getAssociatedAuthority({ programId: info.marketProgramId, marketId: info.marketId })
+      .publicKey,
+    marketBaseVault: marketInfo.baseVault,
+    marketQuoteVault: marketInfo.quoteVault,
+    marketBids: marketInfo.bids,
+    marketAsks: marketInfo.asks,
+    marketEventQueue: marketInfo.eventQueue,
+    lookupTableAccount: PublicKey.default,
+  };
+}
+
+async function fetchMarketAccounts(base: PublicKey, quote: PublicKey) {
+  const marketProgramId = new PublicKey('675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8');
+  const accounts = await solanaConnection.getProgramAccounts(marketProgramId, {
+    commitment: process.env.COMMITMENT as Commitment,
+    filters: [
+      { dataSize: LIQUIDITY_STATE_LAYOUT_V4.span },
+      {
+        memcmp: {
+          offset: LIQUIDITY_STATE_LAYOUT_V4.offsetOf('baseMint'),
+          bytes: base.toBase58(),
+        },
+      },
+      {
+        memcmp: {
+          offset: LIQUIDITY_STATE_LAYOUT_V4.offsetOf('quoteMint'),
+          bytes: quote.toBase58(),
+        },
+      },
+    ],
+  });
+
+  return accounts.map(({ pubkey, account }) => ({
+    id: pubkey.toString(),
+    ...LIQUIDITY_STATE_LAYOUT_V4.decode(account.data),
+  }));
+}
+
+async function getTokenBalanceSpl(tokenAccount: string) {
+  existingTokenAccounts = await getTokenAccounts(
+    solanaConnection,
+    wallet.publicKey,
+    process.env.COMMITMENT as Commitment,
+  );
+  const token = existingTokenAccounts.find((x) => x.accountInfo.mint.toString() === tokenAccount);
+  const amount = Number(token!.accountInfo.amount);
+  const mint = await getMint(solanaConnection, token!.accountInfo.mint);
   const balance = amount / 10 ** mint.decimals;
   return balance;
 }
@@ -169,9 +258,10 @@ async function monitorToken(token: BoughtTokenData) {
 }
 
 async function sellToken(token: BoughtTokenData) {
-  allKeys = await loadPoolKeys();
-  const poolKeys = findPoolInfoForTokensById(allKeys, token.mintAddress);
-
+  const poolKeys = await getPoolKeys(
+    new PublicKey('So11111111111111111111111111111111111111112'),
+    new PublicKey(token.address),
+  );
   await preformSwap(token.address, token.amount, poolKeys!, 100000, 'in', true);
 }
 
@@ -224,10 +314,9 @@ async function preformSwap(
   shouldSell: boolean = false,
   slippage: number = 5,
 ): Promise<void> {
-  const directionIn = shouldSell || poolKeys.quoteMint.toString() == toToken;
+  const directionIn = !shouldSell ? poolKeys.quoteMint.toString() == toToken : false;
   const { minAmountOut, amountIn } = await calcAmountOut(solanaConnection, poolKeys, amount, slippage, directionIn);
-  console.log(minAmountOut.raw, amountIn.raw);
-  const userTokenAccounts = await getOwnerTokenAccounts();
+
   const swapTransaction = await Liquidity.makeSwapInstructionSimple({
     connection: solanaConnection,
     makeTxVersion: 0,
@@ -235,7 +324,7 @@ async function preformSwap(
       ...poolKeys,
     },
     userKeys: {
-      tokenAccounts: userTokenAccounts,
+      tokenAccounts: existingTokenAccounts,
       owner: wallet.publicKey,
     },
     amountIn: amountIn,
