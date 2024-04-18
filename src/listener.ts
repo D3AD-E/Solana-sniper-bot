@@ -35,7 +35,13 @@ import {
 } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { MinimalTokenAccountData, buy } from '.';
-import { createPoolKeys, getMinimalMarketV3, getTokenAccounts, MinimalMarketLayoutV3 } from './cryptoQueries';
+import {
+  createPoolKeys,
+  getMinimalMarketV3,
+  getTokenAccounts,
+  MinimalMarketLayoutV3,
+  OPENBOOK_PROGRAM_ID,
+} from './cryptoQueries';
 import logger from './utils/logger';
 import { solanaConnection, wallet } from './solana';
 import { MAX_REFRESH_DELAY, MAX_SELL_RETRIES, MIN_REFRESH_DELAY, TOKENS_FILE_NAME } from './constants';
@@ -61,14 +67,13 @@ type BoughtTokenData = {
 };
 
 let existingTokenAccounts: TokenAccount[] = [];
+let boughtPoolKeys: LiquidityPoolKeysV4[] = [];
 
 let quoteToken = Token.WSOL;
 let wsolAddress: PublicKey;
 let swapAmount: TokenAmount;
 let minPoolSize: TokenAmount;
-let allKeys: any;
 
-let boughtTokenData: BoughtTokenData[] = [];
 export default async function listen(): Promise<void> {
   logger.info(`Wallet Address: ${wallet.publicKey}`);
 
@@ -82,12 +87,16 @@ export default async function listen(): Promise<void> {
     wallet.publicKey,
     process.env.COMMITMENT as Commitment,
   );
+  await new Promise((resolve) => setTimeout(resolve, 1000));
 
-  const token = await monitorDexTools();
-  await monitorToken(token);
+  while (true) {
+    const token = await monitorDexTools();
+    await monitorToken(token);
+  }
 }
 
 async function monitorDexTools() {
+  await clearTokenData();
   let isFirstRun = true;
   while (true) {
     const newTokens = await loadNewTokens();
@@ -109,14 +118,12 @@ async function monitorDexTools() {
       sendMessage(
         `Trying to buy a token ${token.symbol} ${tokenInfo.initialPrice}$ ${tokenInfo.links[0].id} ${tokenInfo.links[1].id}`,
       );
-      const poolKeys = await getPoolKeys(
-        new PublicKey('So11111111111111111111111111111111111111112'),
-        new PublicKey(tokenInfo.links[0].id),
-      );
-      await preformSwap(tokenInfo.links[0].id, Number(process.env.SWAP_SOL_AMOUNT), poolKeys!);
+      const poolKeys = await getPoolKeysToWSOL(new PublicKey(tokenInfo.links[0].id));
+      const txId = await preformSwap(tokenInfo.links[0].id, Number(process.env.SWAP_SOL_AMOUNT), poolKeys!, 150000);
       const tokenPrice = await getTokenPrice(tokenInfo.links[0].id);
       await new Promise((resolve) => setTimeout(resolve, 1000));
       const amount = await getTokenBalanceSpl(tokenInfo.links[0].id);
+      sendMessage(`Bought ${amount} ${txId} at ${tokenPrice}`);
       console.log({
         mintAddress: tokenInfo.links[1].id,
         address: tokenInfo.links[0].id,
@@ -124,6 +131,7 @@ async function monitorDexTools() {
         amount: amount,
         symbol: token.symbol,
       });
+      boughtPoolKeys.push(poolKeys);
       return {
         mintAddress: tokenInfo.links[1].id,
         address: tokenInfo.links[0].id,
@@ -135,6 +143,15 @@ async function monitorDexTools() {
     const randomInterval = Math.random() * (MAX_REFRESH_DELAY - MIN_REFRESH_DELAY) + MIN_REFRESH_DELAY;
     await new Promise((resolve) => setTimeout(resolve, randomInterval));
     logger.info('Refresh');
+  }
+}
+async function getPoolKeysToWSOL(address: PublicKey) {
+  try {
+    const poolKeys = await getPoolKeys(address, new PublicKey('So11111111111111111111111111111111111111112'));
+    return poolKeys;
+  } catch (e) {
+    const poolKeys = await getPoolKeys(new PublicKey('So11111111111111111111111111111111111111112'), address);
+    return poolKeys;
   }
 }
 
@@ -233,6 +250,7 @@ async function getTokenBalanceSpl(tokenAccount: string) {
 async function monitorToken(token: BoughtTokenData) {
   const stopLossPrecents = Number(process.env.STOP_LOSS_PERCENTS!) * -1;
   const takeProfitPercents = Number(process.env.TAKE_PROFIT_PERCENTS!);
+  let percentageGainCurrent = 0;
   while (true) {
     const tokenPrice = await getTokenPrice(token.address);
     if (tokenPrice === undefined) {
@@ -240,7 +258,10 @@ async function monitorToken(token: BoughtTokenData) {
       continue;
     }
     const percentageGain = ((tokenPrice - token.initialPrice) / token.initialPrice) * 100;
-    console.log(percentageGain);
+    if (percentageGainCurrent !== percentageGain) {
+      percentageGainCurrent = percentageGain;
+      console.log(percentageGain);
+    }
     if (percentageGain <= stopLossPrecents) {
       logger.warn(`Selling ${token.symbol} at ${tokenPrice}$ LOSS, loss ${percentageGain}%`);
       sendMessage(`🔴Selling ${token.symbol} at ${tokenPrice}$ LOSS, loss ${percentageGain}%🔴`);
@@ -258,11 +279,13 @@ async function monitorToken(token: BoughtTokenData) {
 }
 
 async function sellToken(token: BoughtTokenData) {
-  const poolKeys = await getPoolKeys(
-    new PublicKey('So11111111111111111111111111111111111111112'),
-    new PublicKey(token.address),
-  );
-  await preformSwap(token.address, token.amount, poolKeys!, 100000, 'in', true);
+  const poolKeys = boughtPoolKeys.pop();
+  const txId = await preformSwap(token.address, token.amount, poolKeys!, 100000, 'in', true);
+  sendMessage(`Sold ${txId}`);
+}
+
+async function clearTokenData() {
+  await writeFile(TOKENS_FILE_NAME, '');
 }
 
 export async function loadNewTokens(): Promise<TokenInfo[]> {
@@ -309,13 +332,18 @@ async function preformSwap(
   toToken: string,
   amount: number,
   poolKeys: LiquidityPoolKeys,
-  maxLamports: number = 100000,
+  maxLamports: number = 150000,
   fixedSide: 'in' | 'out' = 'in',
   shouldSell: boolean = false,
-  slippage: number = 5,
-): Promise<void> {
-  const directionIn = !shouldSell ? poolKeys.quoteMint.toString() == toToken : false;
+  slippage: number = 7,
+): Promise<string | undefined> {
+  console.log(poolKeys.quoteMint.toString() == toToken); // true sold
+  const directionIn = shouldSell
+    ? !(poolKeys.quoteMint.toString() == toToken)
+    : poolKeys.quoteMint.toString() == toToken;
+  console.log(directionIn);
   const { minAmountOut, amountIn } = await calcAmountOut(solanaConnection, poolKeys, amount, slippage, directionIn);
+  console.log(minAmountOut.raw, amountIn.raw);
 
   const swapTransaction = await Liquidity.makeSwapInstructionSimple({
     connection: solanaConnection,
@@ -338,8 +366,8 @@ async function preformSwap(
     },
   });
 
-  const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash();
   const instructions = swapTransaction.innerTransactions[0].instructions.filter(Boolean);
+  const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash();
 
   const versionedTransaction = new VersionedTransaction(
     new TransactionMessage({
@@ -351,7 +379,7 @@ async function preformSwap(
 
   versionedTransaction.sign([wallet]);
   const txid = await solanaConnection.sendTransaction(versionedTransaction, {
-    skipPreflight: true,
+    preflightCommitment: process.env.COMMITMENT as Commitment,
   });
   const confirmation = await solanaConnection.confirmTransaction(
     {
@@ -363,10 +391,11 @@ async function preformSwap(
   );
   if (!confirmation.value.err) {
     logger.info(txid);
-    if (!shouldSell) sendMessage(`Bought ${txid}`);
-    else sendMessage(`Sold ${txid}`);
+
+    return txid;
   } else {
     console.log(confirmation.value.err);
     logger.info(`Error confirming tx`);
+    throw 'Failed to confirm';
   }
 }
