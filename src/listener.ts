@@ -280,7 +280,7 @@ async function monitorToken(token: BoughtTokenData) {
 
 async function sellToken(token: BoughtTokenData) {
   const poolKeys = boughtPoolKeys.pop();
-  const txId = await preformSwap(token.address, token.amount, poolKeys!, 100000, 'in', true);
+  const txId = await preformSwap(token.address, token.amount, poolKeys!, 150000, 'in', true);
   sendMessage(`Sold ${txId}`);
 }
 
