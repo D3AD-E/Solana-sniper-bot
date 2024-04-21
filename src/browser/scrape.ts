@@ -6,6 +6,7 @@ import { HeadlessBrowser } from './headlessBrowser';
 export type TokenInfo = {
   symbol: string;
   url: string;
+  timeOfCreation?: string;
 };
 //top-list
 const browser = new HeadlessBrowser();
@@ -31,10 +32,14 @@ export const getLastUpdatedTokens = async (): Promise<TokenInfo[] | undefined> =
     const symbolsArray = Array.from(symbols);
     const linksToDex = linksArray.filter((link) => link.href.startsWith('https://www.dextools.io'));
 
+    const timeCreated = topListData.getElementsByClassName('time');
+    const timeCreatedArray = Array.from(timeCreated);
+
     return symbolsArray.map((symbol, index) => {
       return {
         symbol: symbol.innerHTML,
         url: linksToDex[index].href,
+        timeCreated: timeCreatedArray[index].innerHTML,
       };
     });
   });

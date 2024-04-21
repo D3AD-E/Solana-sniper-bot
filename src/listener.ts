@@ -34,7 +34,6 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import bs58 from 'bs58';
-import { MinimalTokenAccountData, buy } from '.';
 import {
   createPoolKeys,
   getMinimalMarketV3,
@@ -88,10 +87,14 @@ export default async function listen(): Promise<void> {
     process.env.COMMITMENT as Commitment,
   );
   await new Promise((resolve) => setTimeout(resolve, 1000));
-
-  while (true) {
-    const token = await monitorDexTools();
-    await monitorToken(token);
+  try {
+    while (true) {
+      const token = await monitorDexTools();
+      await monitorToken(token);
+    }
+  } catch (e) {
+    console.log(e);
+    sendMessage(`🟥🟥🟥App crashed!🟥🟥🟥`);
   }
 }
 
@@ -116,14 +119,21 @@ async function monitorDexTools() {
         `Got new token info ${tokenInfo.links[0].id} ${tokenInfo.links[1].id}, price ${tokenInfo.initialPrice}`,
       );
       sendMessage(
-        `Trying to buy a token ${token.symbol} ${tokenInfo.initialPrice}$ ${tokenInfo.links[0].id} ${tokenInfo.links[1].id}`,
+        `ℹTrying to buy a token ${token.symbol} ${tokenInfo.initialPrice}$ ${tokenInfo.links[0].id} ${tokenInfo.links[1].id}`,
       );
       const poolKeys = await getPoolKeysToWSOL(new PublicKey(tokenInfo.links[0].id));
-      const txId = await preformSwap(tokenInfo.links[0].id, Number(process.env.SWAP_SOL_AMOUNT), poolKeys!, 150000);
+      const txId = await buyToken(tokenInfo.links[0].id, poolKeys!);
+      if (txId === undefined) {
+        logger.info(`Failed to buy ${tokenInfo.links[0].id} ${tokenInfo.links[1].id}`);
+        sendMessage(
+          `Failed to buy a token ${token.symbol} ${tokenInfo.initialPrice}$ ${tokenInfo.links[0].id} ${tokenInfo.links[1].id}`,
+        );
+        continue;
+      }
       const tokenPrice = await getTokenPrice(tokenInfo.links[0].id);
       await new Promise((resolve) => setTimeout(resolve, 1000));
       const amount = await getTokenBalanceSpl(tokenInfo.links[0].id);
-      sendMessage(`Bought ${amount} ${txId} at ${tokenPrice}`);
+      sendMessage(`🆗Bought ${amount} ${txId} at ${tokenPrice}`);
       console.log({
         mintAddress: tokenInfo.links[1].id,
         address: tokenInfo.links[0].id,
@@ -240,9 +250,17 @@ async function getTokenBalanceSpl(tokenAccount: string) {
     wallet.publicKey,
     process.env.COMMITMENT as Commitment,
   );
-  const token = existingTokenAccounts.find((x) => x.accountInfo.mint.toString() === tokenAccount);
-  const amount = Number(token!.accountInfo.amount);
-  const mint = await getMint(solanaConnection, token!.accountInfo.mint);
+  let accountInfo = undefined;
+  while (accountInfo === undefined) {
+    const token = existingTokenAccounts.find((x) => x.accountInfo.mint.toString() === tokenAccount);
+    accountInfo = token?.accountInfo;
+    if (accountInfo === undefined) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      console.log('Failed to find token');
+    }
+  }
+  const amount = Number(accountInfo.amount);
+  const mint = await getMint(solanaConnection, accountInfo.mint);
   const balance = amount / 10 ** mint.decimals;
   return balance;
 }
@@ -250,6 +268,8 @@ async function getTokenBalanceSpl(tokenAccount: string) {
 async function monitorToken(token: BoughtTokenData) {
   const stopLossPrecents = Number(process.env.STOP_LOSS_PERCENTS!) * -1;
   const takeProfitPercents = Number(process.env.TAKE_PROFIT_PERCENTS!);
+  const timeToSellTimeout = new Date();
+  timeToSellTimeout.setTime(timeToSellTimeout.getTime() + 60 * 30 * 1000);
   let percentageGainCurrent = 0;
   while (true) {
     const tokenPrice = await getTokenPrice(token.address);
@@ -274,14 +294,51 @@ async function monitorToken(token: BoughtTokenData) {
       await sellToken(token);
       return;
     }
+    if (new Date() >= timeToSellTimeout) {
+      logger.info(`Selling ${token.symbol} at ${tokenPrice}$ TIMEOUT, change ${percentageGain}%`);
+      sendMessage(`⏰Selling ${token.symbol} at ${tokenPrice}$ TIMEOUT, change ${percentageGain}%⏰`);
+      await sellToken(token);
+      return;
+    }
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 }
 
 async function sellToken(token: BoughtTokenData) {
+  const sellTries = 7;
+  let currentTries = 0;
   const poolKeys = boughtPoolKeys.pop();
-  const txId = await preformSwap(token.address, token.amount, poolKeys!, 150000, 'in', true);
-  sendMessage(`Sold ${txId}`);
+
+  while (sellTries > currentTries) {
+    try {
+      const txId = await preformSwap(token.address, token.amount, poolKeys!, 150000, 'in', true);
+      sendMessage(`💸Sold ${txId}`);
+      return;
+    } catch (e) {
+      sendMessage(`Retrying sell`);
+      currentTries++;
+      console.log(e);
+    }
+  }
+  throw 'Could not sell';
+}
+
+async function buyToken(address: string, poolKeys: LiquidityPoolKeysV4) {
+  const buyTries = 2;
+  let currentTries = 0;
+
+  while (buyTries > currentTries) {
+    try {
+      const txId = await preformSwap(address, Number(process.env.SWAP_SOL_AMOUNT), poolKeys!, 150000);
+      console.log(txId);
+      return txId;
+    } catch (e) {
+      sendMessage(`Retrying buy`);
+      currentTries++;
+      console.log(e);
+    }
+  }
+  return undefined;
 }
 
 async function clearTokenData() {
@@ -293,7 +350,6 @@ export async function loadNewTokens(): Promise<TokenInfo[]> {
     if (existsSync(TOKENS_FILE_NAME)) {
       const data = JSON.parse((await readFile(TOKENS_FILE_NAME)).toString()) as TokenInfo[];
       const tokens = await getLastUpdatedTokens();
-      console.log(tokens);
       if (tokens === undefined) {
         logger.error('Could not load tokens');
         return [];
@@ -337,11 +393,9 @@ async function preformSwap(
   shouldSell: boolean = false,
   slippage: number = 7,
 ): Promise<string | undefined> {
-  console.log(poolKeys.quoteMint.toString() == toToken); // true sold
   const directionIn = shouldSell
     ? !(poolKeys.quoteMint.toString() == toToken)
     : poolKeys.quoteMint.toString() == toToken;
-  console.log(directionIn);
   const { minAmountOut, amountIn } = await calcAmountOut(solanaConnection, poolKeys, amount, slippage, directionIn);
   console.log(minAmountOut.raw, amountIn.raw);
 
@@ -362,7 +416,8 @@ async function preformSwap(
       bypassAssociatedCheck: false,
     },
     computeBudgetConfig: {
-      microLamports: maxLamports,
+      microLamports: 421197,
+      units: 101337,
     },
   });
 
