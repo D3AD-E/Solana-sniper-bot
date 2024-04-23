@@ -62,7 +62,7 @@ export const getSwapInfo = async (url: string) => {
     const prices = Array.from(price);
     const actualPrice = prices[0].textContent!.split(' ')[1];
     console.log(actualPrice);
-    if (Number.isNaN(Number(actualPrice))) return undefined;
+    // if (Number.isNaN(Number(actualPrice))) return undefined;
     const linksToRet = linksArray
       .filter((link) => link.href.startsWith('https:'))
       .map((link) => {
