@@ -173,6 +173,22 @@ async function monitorDexTools() {
       }
       await new Promise((resolve) => setTimeout(resolve, 200));
       const tokenPrice = await getTokenPrice(tokenInfo.links[0].id);
+      let updatedAccountInfo = undefined;
+      while (updatedAccountInfo === undefined) {
+        existingTokenAccounts = await getTokenAccounts(
+          solanaConnection,
+          wallet.publicKey,
+          process.env.COMMITMENT as Commitment,
+        );
+        const token = existingTokenAccounts.find((x) => x.accountInfo.mint.toString() === tokenInfo.links[0].id);
+        updatedAccountInfo = token?.accountInfo;
+        if (accountInfo === undefined || token === undefined) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          console.log('Failed to find token');
+          continue;
+        }
+        selectedTokenAccount = token;
+      }
       await new Promise((resolve) => setTimeout(resolve, 1000));
       const amount = await getTokenBalanceSpl();
       sendMessage(`🆗Bought ${amount} ${txId} at ${tokenPrice}`);
@@ -455,6 +471,7 @@ async function preformSwap(
   const directionIn = shouldSell
     ? !(poolKeys.quoteMint.toString() == toToken)
     : poolKeys.quoteMint.toString() == toToken;
+
   const { minAmountOut, amountIn } = await calcAmountOut(solanaConnection, poolKeys, amount, slippage, directionIn);
 
   const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
