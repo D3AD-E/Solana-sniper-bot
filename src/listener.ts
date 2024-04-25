@@ -77,7 +77,6 @@ let quoteTokenAssociatedAddress: PublicKey;
 
 export default async function listen(): Promise<void> {
   logger.info(`Wallet Address: ${wallet.publicKey}`);
-
   swapAmount = new TokenAmount(Token.WSOL, process.env.SWAP_SOL_AMOUNT, false);
   minPoolSize = new TokenAmount(quoteToken, process.env.MIN_POOL_SIZE, false);
 
@@ -134,8 +133,12 @@ async function monitorDexTools() {
         `ℹTrying to buy a token ${token.symbol} ${tokenInfo.initialPrice}$ ${tokenInfo.links[0].id} ${tokenInfo.links[1].id}`,
       );
       const poolKeys = await getPoolKeysToWSOL(new PublicKey(tokenInfo.links[0].id));
-
-      await createAccount(tokenInfo.links[0].id, poolKeys);
+      try {
+        await createAccount(tokenInfo.links[0].id, poolKeys);
+      } catch (e) {
+        logger.warn('Cannot create acc');
+        continue;
+      }
 
       let accountInfo = undefined;
       while (accountInfo === undefined) {
@@ -348,7 +351,7 @@ async function monitorToken(token: BoughtTokenData) {
   const takeProfitPercents = Number(process.env.TAKE_PROFIT_PERCENTS!);
   const timeToSellTimeout = new Date();
   timeToSellTimeout.setTime(timeToSellTimeout.getTime() + 60 * 30 * 1000);
-  const timeToSellTimeoutByPriceNotChanging = new Date();
+  let timeToSellTimeoutByPriceNotChanging = new Date();
   timeToSellTimeoutByPriceNotChanging.setTime(timeToSellTimeoutByPriceNotChanging.getTime() + 150 * 1000);
   let percentageGainCurrent = 0;
   while (true) {
@@ -360,7 +363,7 @@ async function monitorToken(token: BoughtTokenData) {
     const percentageGain = ((tokenPrice - token.initialPrice) / token.initialPrice) * 100;
     if (percentageGainCurrent !== percentageGain) {
       percentageGainCurrent = percentageGain;
-      const timeToSellTimeoutByPriceNotChanging = new Date();
+      timeToSellTimeoutByPriceNotChanging = new Date();
       timeToSellTimeoutByPriceNotChanging.setTime(timeToSellTimeoutByPriceNotChanging.getTime() + 120 * 1000);
       console.log(percentageGain);
     }
@@ -466,7 +469,7 @@ async function preformSwap(
   poolKeys: LiquidityPoolKeys,
   maxLamports: number = 150000,
   shouldSell: boolean = false,
-  slippage: number = 12,
+  slippage: number = 15,
 ): Promise<string | undefined> {
   const directionIn = shouldSell
     ? !(poolKeys.quoteMint.toString() == toToken)
