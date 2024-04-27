@@ -52,9 +52,13 @@ export const getSwapInfo = async (url: string) => {
 
   const data = await page.evaluate(() => {
     // Your scraping code here
-    const tokenInfo = document.getElementsByClassName('token-pair-info');
+    const tokenInfo = document.getElementsByClassName('token-pair-info'); //exchange
     const tokenInfoArray = Array.from(tokenInfo);
     if (tokenInfoArray.length === 0) return undefined;
+
+    const exchangeInfo = document.getElementsByClassName('exchange');
+    const exchangeInfoArray = Array.from(exchangeInfo);
+    const exchangeString = exchangeInfoArray[0].innerHTML.trim();
     const tokenInfoData = tokenInfoArray[0];
     const links = tokenInfoData.querySelectorAll('a');
     const linksArray = Array.from(links);
@@ -75,6 +79,7 @@ export const getSwapInfo = async (url: string) => {
     return {
       links: linksToRet,
       initialPrice: Number(actualPrice),
+      exchangeString,
     };
   });
   page.close();

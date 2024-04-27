@@ -50,13 +50,14 @@ import {
   findPoolInfoForTokensById,
   findPoolInfoForTokens as findPoolKeysForTokens,
   loadPoolKeys,
+  regeneratePoolKeys,
 } from './cryptoQueries/raydiumSwapUtils/liquidity';
 import { existsSync } from 'fs';
 import { readFile, writeFile } from 'fs/promises';
 import { TokenInfo, getLastUpdatedTokens, getSwapInfo } from './browser/scrape';
 import { sendMessage } from './telegramBot';
 import { getTokenPrice } from './birdEye';
-import BigNumber from 'bignumber.js';
+import { ProviderType, getProviderType } from './enums/LiqudityProviderType';
 
 type BoughtTokenData = {
   address: string;
@@ -72,15 +73,15 @@ let boughtPoolKeys: LiquidityPoolKeysV4[] = [];
 const quoteToken = Token.WSOL;
 let selectedTokenAccount: TokenAccount;
 let swapAmount: TokenAmount;
-let minPoolSize: TokenAmount;
 let quoteTokenAssociatedAddress: PublicKey;
-
+let poolKeys: LiquidityPoolKeys[] = [];
 export default async function listen(): Promise<void> {
   logger.info(`Wallet Address: ${wallet.publicKey}`);
   swapAmount = new TokenAmount(Token.WSOL, process.env.SWAP_SOL_AMOUNT, false);
-  minPoolSize = new TokenAmount(quoteToken, process.env.MIN_POOL_SIZE, false);
 
   logger.info(`Swap sol amount: ${swapAmount.toFixed()} ${quoteToken.symbol}`);
+  poolKeys = await regeneratePoolKeys();
+  logger.info(`Regenerated keys`);
 
   existingTokenAccounts = await getTokenAccounts(
     solanaConnection,
@@ -126,19 +127,18 @@ async function monitorDexTools() {
         logger.warn('Price too low');
         continue;
       }
+      if (getProviderType(tokenInfo.exchangeString) !== ProviderType.Raydium) {
+        logger.warn('Only raydium pairs are supported');
+        continue;
+      }
       logger.info(
         `Got new token info ${tokenInfo.links[0].id} ${tokenInfo.links[1].id}, price ${tokenInfo.initialPrice}`,
       );
       sendMessage(
-        `ℹTrying to buy a token ${token.symbol} ${tokenInfo.initialPrice}$ ${tokenInfo.links[0].id} ${tokenInfo.links[1].id}`,
+        `ℹTrying to buy a token ${token.symbol} ${tokenInfo.initialPrice}$ ${tokenInfo.links[0].id} ${tokenInfo.links[1].id} ${token.url}`,
       );
-      const poolKeys = await getPoolKeysToWSOL(new PublicKey(tokenInfo.links[0].id));
-      try {
-        await createAccount(tokenInfo.links[0].id, poolKeys);
-      } catch (e) {
-        logger.warn('Cannot create acc');
-        continue;
-      }
+      const poolKeys = await getPoolKeysToWSOL(new PublicKey(tokenInfo.links[0].id), tokenInfo.links[1].id);
+      await createAccount(tokenInfo.links[0].id, poolKeys);
 
       let accountInfo = undefined;
       while (accountInfo === undefined) {
@@ -176,24 +176,28 @@ async function monitorDexTools() {
       }
       await new Promise((resolve) => setTimeout(resolve, 200));
       const tokenPrice = await getTokenPrice(tokenInfo.links[0].id);
-      let updatedAccountInfo = undefined;
-      while (updatedAccountInfo === undefined) {
-        existingTokenAccounts = await getTokenAccounts(
-          solanaConnection,
-          wallet.publicKey,
-          process.env.COMMITMENT as Commitment,
-        );
-        const token = existingTokenAccounts.find((x) => x.accountInfo.mint.toString() === tokenInfo.links[0].id);
-        updatedAccountInfo = token?.accountInfo;
-        if (accountInfo === undefined || token === undefined) {
-          await new Promise((resolve) => setTimeout(resolve, 100));
-          console.log('Failed to find token');
-          continue;
+
+      let amount = 0;
+      while (amount === 0) {
+        let updatedAccountInfo = undefined;
+        while (updatedAccountInfo === undefined) {
+          existingTokenAccounts = await getTokenAccounts(
+            solanaConnection,
+            wallet.publicKey,
+            process.env.COMMITMENT as Commitment,
+          );
+          const token = existingTokenAccounts.find((x) => x.accountInfo.mint.toString() === tokenInfo.links[0].id);
+          updatedAccountInfo = token?.accountInfo;
+          if (updatedAccountInfo === undefined || token === undefined) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            console.log('Failed to find token');
+            continue;
+          }
+          selectedTokenAccount = token;
         }
-        selectedTokenAccount = token;
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        amount = await getTokenBalanceSpl();
       }
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      const amount = await getTokenBalanceSpl();
       sendMessage(`🆗Bought ${amount} ${txId} at ${tokenPrice}`);
       console.log({
         mintAddress: tokenInfo.links[1].id,
@@ -250,7 +254,13 @@ async function shouldBuy(address: string) {
   }
 }
 
-async function getPoolKeysToWSOL(address: PublicKey) {
+async function getPoolKeysToWSOL(address: PublicKey, id: string) {
+  const keys = findPoolInfoForTokensById(poolKeys, id);
+  if (keys) return keys;
+  poolKeys = await regeneratePoolKeys();
+  const keysAfterRefresh = findPoolInfoForTokensById(poolKeys, id);
+  if (keysAfterRefresh) return keysAfterRefresh;
+
   try {
     const poolKeys = await getPoolKeys(address, new PublicKey('So11111111111111111111111111111111111111112'));
     return poolKeys;
@@ -399,7 +409,7 @@ async function sellToken(token: BoughtTokenData) {
 
   while (sellTries > currentTries) {
     try {
-      const txId = await preformSwap(token.address, token.amount, poolKeys!, 150000, true);
+      const txId = await preformSwap(token.address, token.amount, poolKeys!, true);
       sendMessage(`💸Sold ${txId}`);
       return;
     } catch (e) {
@@ -418,7 +428,7 @@ async function buyToken(address: string, poolKeys: LiquidityPoolKeysV4) {
 
   while (buyTries > currentTries) {
     try {
-      const txId = await preformSwap(address, Number(process.env.SWAP_SOL_AMOUNT), poolKeys!, 150000);
+      const txId = await preformSwap(address, Number(process.env.SWAP_SOL_AMOUNT), poolKeys!);
       console.log(txId);
       return txId;
     } catch (e) {
@@ -467,7 +477,6 @@ async function preformSwap(
   toToken: string,
   amount: number,
   poolKeys: LiquidityPoolKeys,
-  maxLamports: number = 150000,
   shouldSell: boolean = false,
   slippage: number = 15,
 ): Promise<string | undefined> {
@@ -513,7 +522,6 @@ async function createAccount(toToken: string, poolKeys: LiquidityPoolKeys): Prom
     owner: wallet.publicKey,
     programId: TOKEN_PROGRAM_ID,
   });
-
   const versionedTransaction = new TransactionMessage({
     payerKey: wallet.publicKey,
     recentBlockhash: latestBlockhash.blockhash,
@@ -524,7 +532,7 @@ async function createAccount(toToken: string, poolKeys: LiquidityPoolKeys): Prom
         wallet.publicKey,
         ata,
         wallet.publicKey,
-        poolKeys.baseMint,
+        poolKeys.quoteMint.toString() === quoteToken.mint.toString() ? poolKeys.baseMint : poolKeys.quoteMint,
         TOKEN_PROGRAM_ID,
       ),
     ],

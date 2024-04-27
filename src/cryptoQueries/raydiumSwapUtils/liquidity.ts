@@ -16,20 +16,24 @@ import logger from '../../utils/logger';
 
 export async function loadPoolKeys() {
   try {
-    // if (existsSync(POOL_FILE_NAME)) {
-    //   return JSON.parse((await readFile(POOL_FILE_NAME)).toString());
-    // }
+    if (existsSync(POOL_FILE_NAME)) {
+      return JSON.parse((await readFile(POOL_FILE_NAME)).toString()) as LiquidityPoolKeys[];
+    }
 
     throw new Error('no file found');
   } catch (error) {
-    const liquidityJsonResp = await fetch('https://api.raydium.io/v2/sdk/liquidity/mainnet.json');
-    if (!liquidityJsonResp.ok) return [];
-    const liquidityJson = (await liquidityJsonResp.json()) as { official: any; unOfficial: any };
-    const allPoolKeysJson = [...(liquidityJson?.official ?? []), ...(liquidityJson?.unOfficial ?? [])];
-
-    // await writeFile(POOL_FILE_NAME, JSON.stringify(allPoolKeysJson));
-    return allPoolKeysJson;
+    return await regeneratePoolKeys();
   }
+}
+
+export async function regeneratePoolKeys() {
+  const liquidityJsonResp = await fetch('https://api.raydium.io/v2/sdk/liquidity/mainnet.json');
+  if (!liquidityJsonResp.ok) return [];
+  const liquidityJson = (await liquidityJsonResp.json()) as { official: any; unOfficial: any };
+  const allPoolKeysJson = [...(liquidityJson?.official ?? []), ...(liquidityJson?.unOfficial ?? [])];
+
+  await writeFile(POOL_FILE_NAME, JSON.stringify(allPoolKeysJson));
+  return allPoolKeysJson as LiquidityPoolKeys[];
 }
 
 export function findPoolInfoForTokens(allPoolKeysJson: any, mintA: string, mintB: string) {
@@ -58,7 +62,6 @@ export async function calcAmountOut(
   swapInDirection: boolean,
 ) {
   const poolInfo = await Liquidity.fetchInfo({ connection, poolKeys });
-
   let currencyInMint = poolKeys.baseMint;
   let currencyInDecimals = poolInfo.baseDecimals;
   let currencyOutMint = poolKeys.quoteMint;
