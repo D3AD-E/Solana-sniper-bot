@@ -74,13 +74,13 @@ const quoteToken = Token.WSOL;
 let selectedTokenAccount: TokenAccount;
 let swapAmount: TokenAmount;
 let quoteTokenAssociatedAddress: PublicKey;
-let poolKeys: LiquidityPoolKeys[] = [];
+let liquidityPoolKeys: LiquidityPoolKeys[] = [];
 export default async function listen(): Promise<void> {
   logger.info(`Wallet Address: ${wallet.publicKey}`);
   swapAmount = new TokenAmount(Token.WSOL, process.env.SWAP_SOL_AMOUNT, false);
 
   logger.info(`Swap sol amount: ${swapAmount.toFixed()} ${quoteToken.symbol}`);
-  poolKeys = await regeneratePoolKeys();
+  liquidityPoolKeys = await regeneratePoolKeys();
   logger.info(`Regenerated keys`);
 
   existingTokenAccounts = await getTokenAccounts(
@@ -255,10 +255,10 @@ async function shouldBuy(address: string) {
 }
 
 async function getPoolKeysToWSOL(address: PublicKey, id: string) {
-  const keys = findPoolInfoForTokensById(poolKeys, id);
+  const keys = findPoolInfoForTokensById(liquidityPoolKeys, id);
   if (keys) return keys;
-  poolKeys = await regeneratePoolKeys();
-  const keysAfterRefresh = findPoolInfoForTokensById(poolKeys, id);
+  liquidityPoolKeys = await regeneratePoolKeys();
+  const keysAfterRefresh = findPoolInfoForTokensById(liquidityPoolKeys, id);
   if (keysAfterRefresh) return keysAfterRefresh;
 
   try {
@@ -436,7 +436,7 @@ async function buyToken(address: string, poolKeys: LiquidityPoolKeysV4) {
 
       currentTries++;
       console.log(e);
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 200));
     }
   }
   return undefined;
@@ -485,13 +485,13 @@ async function preformSwap(
     : poolKeys.quoteMint.toString() == toToken;
 
   const { minAmountOut, amountIn } = await calcAmountOut(solanaConnection, poolKeys, amount, slippage, directionIn);
-
+  console.log(amountIn.raw.toString(), minAmountOut.raw.toString());
   const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
     {
       poolKeys: poolKeys,
       userKeys: {
-        tokenAccountIn: !directionIn ? quoteTokenAssociatedAddress : selectedTokenAccount.pubkey,
-        tokenAccountOut: !directionIn ? selectedTokenAccount.pubkey : quoteTokenAssociatedAddress,
+        tokenAccountIn: shouldSell ? selectedTokenAccount.pubkey : quoteTokenAssociatedAddress,
+        tokenAccountOut: shouldSell ? quoteTokenAssociatedAddress : selectedTokenAccount.pubkey,
         owner: wallet.publicKey,
       },
       amountIn: amountIn.raw,
