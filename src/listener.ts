@@ -478,7 +478,7 @@ async function preformSwap(
   amount: number,
   poolKeys: LiquidityPoolKeys,
   shouldSell: boolean = false,
-  slippage: number = 15,
+  slippage: number = 7,
 ): Promise<string | undefined> {
   const directionIn = shouldSell
     ? !(poolKeys.quoteMint.toString() == toToken)
