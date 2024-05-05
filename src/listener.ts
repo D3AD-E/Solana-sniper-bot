@@ -376,6 +376,9 @@ async function monitorToken(token: BoughtTokenData) {
       timeToSellTimeoutByPriceNotChanging = new Date();
       timeToSellTimeoutByPriceNotChanging.setTime(timeToSellTimeoutByPriceNotChanging.getTime() + 120 * 1000);
       console.log(percentageGain);
+      if (percentageGain - percentageGainCurrent > 7) {
+        continue;
+      }
     }
     if (percentageGain <= stopLossPrecents) {
       logger.warn(`Selling ${token.symbol} at ${tokenPrice}$ LOSS, loss ${percentageGain}%`);
