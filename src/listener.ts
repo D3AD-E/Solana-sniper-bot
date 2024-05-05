@@ -132,32 +132,17 @@ async function monitorDexTools() {
         continue;
       }
       logger.info(
-        `Got new token info ${tokenInfo.links[0].id} ${tokenInfo.links[1].id}, price ${tokenInfo.initialPrice}`,
+        `Got new token info ${tokenInfo.tokenAddress} ${tokenInfo.pairAddress}, price ${tokenInfo.initialPrice}`,
       );
       sendMessage(
-        `ℹTrying to buy a token ${token.symbol} ${tokenInfo.initialPrice}$ ${tokenInfo.links[0].id} ${tokenInfo.links[1].id} ${token.url}`,
+        `ℹTrying to buy a token ${token.symbol} ${tokenInfo.initialPrice}$ ${tokenInfo.tokenAddress} ${tokenInfo.pairAddress} ${token.url}`,
       );
-      const poolKeys = await getPoolKeysToWSOL(new PublicKey(tokenInfo.links[0].id), tokenInfo.links[1].id);
-      await createAccount(tokenInfo.links[0].id, poolKeys);
+      const poolKeys = await getPoolKeysToWSOL(new PublicKey(tokenInfo.tokenAddress), tokenInfo.pairAddress);
+      await createAccount(tokenInfo.tokenAddress, poolKeys);
 
-      let accountInfo = undefined;
-      while (accountInfo === undefined) {
-        existingTokenAccounts = await getTokenAccounts(
-          solanaConnection,
-          wallet.publicKey,
-          process.env.COMMITMENT as Commitment,
-        );
-        const token = existingTokenAccounts.find((x) => x.accountInfo.mint.toString() === tokenInfo.links[0].id);
-        accountInfo = token?.accountInfo;
-        if (accountInfo === undefined || token === undefined) {
-          await new Promise((resolve) => setTimeout(resolve, 100));
-          console.log('Failed to find token');
-          continue;
-        }
-        selectedTokenAccount = token;
-      }
+      selectedTokenAccount = await getSelectedAccount(tokenInfo.tokenAddress);
 
-      const shouldBuyToken = await shouldBuy(tokenInfo.links[0].id);
+      const shouldBuyToken = await shouldBuy(tokenInfo.tokenAddress);
       if (!shouldBuyToken) {
         logger.info(`Skipping token`);
         sendMessage(`Skipping token`);
@@ -165,51 +150,36 @@ async function monitorDexTools() {
         continue;
       }
 
-      const txId = await buyToken(tokenInfo.links[0].id, poolKeys!);
+      const txId = await buyToken(tokenInfo.tokenAddress, poolKeys!);
       if (txId === undefined) {
-        logger.info(`Failed to buy ${tokenInfo.links[0].id} ${tokenInfo.links[1].id}`);
+        logger.info(`Failed to buy ${tokenInfo.tokenAddress} ${tokenInfo.pairAddress}`);
         sendMessage(
-          `Failed to buy a token ${token.symbol} ${tokenInfo.initialPrice}$ ${tokenInfo.links[0].id} ${tokenInfo.links[1].id}`,
+          `Failed to buy a token ${token.symbol} ${tokenInfo.initialPrice}$ ${tokenInfo.tokenAddress} ${tokenInfo.pairAddress}`,
         );
         await closeAccount(selectedTokenAccount.pubkey);
         continue;
       }
       await new Promise((resolve) => setTimeout(resolve, 200));
-      const tokenPrice = await getTokenPrice(tokenInfo.links[0].id);
+      const tokenPrice = await getTokenPrice(tokenInfo.tokenAddress);
 
       let amount = 0;
       while (amount === 0) {
-        let updatedAccountInfo = undefined;
-        while (updatedAccountInfo === undefined) {
-          existingTokenAccounts = await getTokenAccounts(
-            solanaConnection,
-            wallet.publicKey,
-            process.env.COMMITMENT as Commitment,
-          );
-          const token = existingTokenAccounts.find((x) => x.accountInfo.mint.toString() === tokenInfo.links[0].id);
-          updatedAccountInfo = token?.accountInfo;
-          if (updatedAccountInfo === undefined || token === undefined) {
-            await new Promise((resolve) => setTimeout(resolve, 100));
-            console.log('Failed to find token');
-            continue;
-          }
-          selectedTokenAccount = token;
-        }
+        selectedTokenAccount = await getSelectedAccount(tokenInfo.tokenAddress);
         await new Promise((resolve) => setTimeout(resolve, 1000));
-        amount = await getTokenBalanceSpl();
+        amount = await getTokenBalanceSpl(selectedTokenAccount);
       }
       sendMessage(`🆗Bought ${amount} ${txId} at ${tokenPrice}`);
       console.log({
-        mintAddress: tokenInfo.links[1].id,
-        address: tokenInfo.links[0].id,
+        mintAddress: tokenInfo.pairAddress,
+        address: tokenInfo.tokenAddress,
         initialPrice: tokenPrice!,
         amount: amount,
         symbol: token.symbol,
       });
       boughtPoolKeys.push(poolKeys);
       return {
-        mintAddress: tokenInfo.links[1].id,
-        address: tokenInfo.links[0].id,
+        mintAddress: tokenInfo.pairAddress,
+        address: tokenInfo.tokenAddress,
         initialPrice: tokenPrice!,
         amount: amount,
         symbol: token.symbol,
@@ -217,8 +187,27 @@ async function monitorDexTools() {
     }
     const randomInterval = Math.random() * (MAX_REFRESH_DELAY - MIN_REFRESH_DELAY) + MIN_REFRESH_DELAY;
     await new Promise((resolve) => setTimeout(resolve, randomInterval));
-    // logger.info('Refresh');
   }
+}
+
+async function getSelectedAccount(address: string) {
+  let accountInfo = undefined;
+  while (accountInfo === undefined) {
+    existingTokenAccounts = await getTokenAccounts(
+      solanaConnection,
+      wallet.publicKey,
+      process.env.COMMITMENT as Commitment,
+    );
+    const token = existingTokenAccounts.find((x) => x.accountInfo.mint.toString() === address);
+    accountInfo = token?.accountInfo;
+    if (accountInfo === undefined || token === undefined) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      console.log('Failed to find token');
+      continue;
+    }
+    return token;
+  }
+  throw 'Cannot find token';
 }
 
 async function shouldBuy(address: string) {
@@ -349,9 +338,9 @@ async function fetchMarketAccounts(base: PublicKey, quote: PublicKey) {
   }));
 }
 
-async function getTokenBalanceSpl() {
-  const amount = Number(selectedTokenAccount.accountInfo.amount);
-  const mint = await getMint(solanaConnection, selectedTokenAccount.accountInfo.mint);
+async function getTokenBalanceSpl(account: TokenAccount) {
+  const amount = Number(account.accountInfo.amount);
+  const mint = await getMint(solanaConnection, account.accountInfo.mint);
   const balance = amount / 10 ** mint.decimals;
   return balance;
 }

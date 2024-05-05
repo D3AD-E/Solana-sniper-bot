@@ -77,7 +77,8 @@ export const getSwapInfo = async (url: string) => {
         };
       });
     return {
-      links: linksToRet,
+      pairAddress: linksToRet[1].id,
+      tokenAddress: linksToRet[0].id,
       initialPrice: Number(actualPrice),
       exchangeString,
     };
