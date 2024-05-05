@@ -1,71 +1,36 @@
 import {
   TokenAmount,
   Token,
-  BigNumberish,
   Liquidity,
-  LiquidityStateV4,
   LiquidityPoolKeysV4,
-  SPL_ACCOUNT_LAYOUT,
-  TOKEN_PROGRAM_ID,
   LiquidityPoolKeys,
   TokenAccount,
-  PoolInfoLayout,
-  SqrtPriceMath,
   LIQUIDITY_STATE_LAYOUT_V4,
   MARKET_STATE_LAYOUT_V3,
   SPL_MINT_LAYOUT,
   Market,
-  Spl,
 } from '@raydium-io/raydium-sdk';
+import { getMint } from '@solana/spl-token';
+import { Commitment, Connection, PublicKey } from '@solana/web3.js';
 import {
-  createAssociatedTokenAccountIdempotentInstruction,
-  createCloseAccountInstruction,
-  getAccount,
-  getAssociatedTokenAddressSync,
-  getMint,
-} from '@solana/spl-token';
-import {
-  Commitment,
-  ComputeBudgetProgram,
-  Connection,
-  Keypair,
-  PublicKey,
-  Transaction,
-  TransactionMessage,
-  VersionedTransaction,
-} from '@solana/web3.js';
-import bs58 from 'bs58';
-import {
-  createPoolKeys,
-  getMinimalMarketV3,
+  closeAccount,
+  createAccount,
+  getPoolKeys,
   getTokenAccounts,
-  MinimalMarketLayoutV3,
-  OPENBOOK_PROGRAM_ID,
+  getTokenBalanceSpl,
+  preformSwap,
 } from './cryptoQueries';
 import logger from './utils/logger';
 import { solanaConnection, wallet } from './solana';
-import { MAX_REFRESH_DELAY, MAX_SELL_RETRIES, MIN_REFRESH_DELAY, TOKENS_FILE_NAME } from './constants';
-import {
-  calcAmountOut,
-  findPoolInfoForTokensById,
-  findPoolInfoForTokens as findPoolKeysForTokens,
-  loadPoolKeys,
-  regeneratePoolKeys,
-} from './cryptoQueries/raydiumSwapUtils/liquidity';
+import { MAX_REFRESH_DELAY, MIN_REFRESH_DELAY, TOKENS_FILE_NAME } from './constants';
+import { findPoolInfoForTokensById, regeneratePoolKeys } from './cryptoQueries/raydiumSwapUtils/liquidity';
 import { existsSync } from 'fs';
 import { readFile, writeFile } from 'fs/promises';
 import { TokenInfo, getLastUpdatedTokens, getSwapInfo } from './browser/scrape';
 import { sendMessage } from './telegramBot';
 import { getTokenPrice } from './birdEye';
 import { ProviderType, getProviderType } from './enums/LiqudityProviderType';
-
-type BoughtTokenData = {
-  address: string;
-  mintAddress: string;
-  initialPrice: number;
-  amount: number;
-  symbol: string;
-};
+import { BoughtTokenData } from './listener.types';
 
 let existingTokenAccounts: TokenAccount[] = [];
 let boughtPoolKeys: LiquidityPoolKeysV4[] = [];
@@ -138,7 +103,7 @@ async function monitorDexTools() {
         `ℹTrying to buy a token ${token.symbol} ${tokenInfo.initialPrice}$ ${tokenInfo.tokenAddress} ${tokenInfo.pairAddress} ${token.url}`,
       );
       const poolKeys = await getPoolKeysToWSOL(new PublicKey(tokenInfo.tokenAddress), tokenInfo.pairAddress);
-      await createAccount(tokenInfo.tokenAddress, poolKeys);
+      await createAccount(tokenInfo.tokenAddress, poolKeys, quoteToken);
 
       selectedTokenAccount = await getSelectedAccount(tokenInfo.tokenAddress);
 
@@ -259,92 +224,6 @@ async function getPoolKeysToWSOL(address: PublicKey, id: string) {
   }
 }
 
-async function getPoolKeys(base: PublicKey, quote: PublicKey) {
-  const rsp = await fetchMarketAccounts(base, quote);
-  const poolKeys = await formatAmmKeysById(rsp[0].id, solanaConnection);
-  return poolKeys;
-}
-
-async function formatAmmKeysById(id: string, connection: Connection): Promise<LiquidityPoolKeysV4> {
-  const account = await solanaConnection.getAccountInfo(new PublicKey(id));
-  if (account === null) throw Error(' get id info error ');
-  const info = LIQUIDITY_STATE_LAYOUT_V4.decode(account.data);
-
-  const marketId = info.marketId;
-  const marketAccount = await connection.getAccountInfo(marketId);
-  if (marketAccount === null) throw Error(' get market info error');
-  const marketInfo = MARKET_STATE_LAYOUT_V3.decode(marketAccount.data);
-
-  const lpMint = info.lpMint;
-  const lpMintAccount = await connection.getAccountInfo(lpMint);
-  if (lpMintAccount === null) throw Error(' get lp mint info error');
-  const lpMintInfo = SPL_MINT_LAYOUT.decode(lpMintAccount.data);
-
-  return {
-    id: new PublicKey(id),
-    baseMint: info.baseMint,
-    quoteMint: info.quoteMint,
-    lpMint: info.lpMint,
-    baseDecimals: info.baseDecimal.toNumber(),
-    quoteDecimals: info.quoteDecimal.toNumber(),
-    lpDecimals: lpMintInfo.decimals,
-    version: 4,
-    programId: account.owner,
-    authority: Liquidity.getAssociatedAuthority({ programId: account.owner }).publicKey,
-    openOrders: info.openOrders,
-    targetOrders: info.targetOrders,
-    baseVault: info.baseVault,
-    quoteVault: info.quoteVault,
-    withdrawQueue: info.withdrawQueue,
-    lpVault: info.lpVault,
-    marketVersion: 3,
-    marketProgramId: info.marketProgramId,
-    marketId: info.marketId,
-    marketAuthority: Market.getAssociatedAuthority({ programId: info.marketProgramId, marketId: info.marketId })
-      .publicKey,
-    marketBaseVault: marketInfo.baseVault,
-    marketQuoteVault: marketInfo.quoteVault,
-    marketBids: marketInfo.bids,
-    marketAsks: marketInfo.asks,
-    marketEventQueue: marketInfo.eventQueue,
-    lookupTableAccount: PublicKey.default,
-  };
-}
-
-async function fetchMarketAccounts(base: PublicKey, quote: PublicKey) {
-  const marketProgramId = new PublicKey('675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8');
-  const accounts = await solanaConnection.getProgramAccounts(marketProgramId, {
-    commitment: process.env.COMMITMENT as Commitment,
-    filters: [
-      { dataSize: LIQUIDITY_STATE_LAYOUT_V4.span },
-      {
-        memcmp: {
-          offset: LIQUIDITY_STATE_LAYOUT_V4.offsetOf('baseMint'),
-          bytes: base.toBase58(),
-        },
-      },
-      {
-        memcmp: {
-          offset: LIQUIDITY_STATE_LAYOUT_V4.offsetOf('quoteMint'),
-          bytes: quote.toBase58(),
-        },
-      },
-    ],
-  });
-
-  return accounts.map(({ pubkey, account }) => ({
-    id: pubkey.toString(),
-    ...LIQUIDITY_STATE_LAYOUT_V4.decode(account.data),
-  }));
-}
-
-async function getTokenBalanceSpl(account: TokenAccount) {
-  const amount = Number(account.accountInfo.amount);
-  const mint = await getMint(solanaConnection, account.accountInfo.mint);
-  const balance = amount / 10 ** mint.decimals;
-  return balance;
-}
-
 async function monitorToken(token: BoughtTokenData) {
   const stopLossPrecents = Number(process.env.STOP_LOSS_PERCENTS!) * -1;
   const takeProfitPercents = Number(process.env.TAKE_PROFIT_PERCENTS!);
@@ -401,7 +280,14 @@ async function sellToken(token: BoughtTokenData) {
 
   while (sellTries > currentTries) {
     try {
-      const txId = await preformSwap(token.address, token.amount, poolKeys!, true);
+      const txId = await preformSwap(
+        token.address,
+        token.amount,
+        poolKeys!,
+        selectedTokenAccount.pubkey,
+        quoteTokenAssociatedAddress,
+        true,
+      );
       sendMessage(`💸Sold ${txId}`);
       return;
     } catch (e) {
@@ -420,7 +306,13 @@ async function buyToken(address: string, poolKeys: LiquidityPoolKeysV4) {
 
   while (buyTries > currentTries) {
     try {
-      const txId = await preformSwap(address, Number(process.env.SWAP_SOL_AMOUNT), poolKeys!);
+      const txId = await preformSwap(
+        address,
+        Number(process.env.SWAP_SOL_AMOUNT),
+        poolKeys!,
+        selectedTokenAccount.pubkey,
+        quoteTokenAssociatedAddress,
+      );
       console.log(txId);
       return txId;
     } catch (e) {
@@ -463,120 +355,4 @@ export async function loadNewTokens(): Promise<TokenInfo[]> {
     await writeFile(TOKENS_FILE_NAME, JSON.stringify(tokens));
     return tokens;
   }
-}
-
-async function preformSwap(
-  toToken: string,
-  amount: number,
-  poolKeys: LiquidityPoolKeys,
-  shouldSell: boolean = false,
-  slippage: number = 7,
-): Promise<string | undefined> {
-  const directionIn = shouldSell
-    ? !(poolKeys.quoteMint.toString() == toToken)
-    : poolKeys.quoteMint.toString() == toToken;
-
-  const { minAmountOut, amountIn } = await calcAmountOut(solanaConnection, poolKeys, amount, slippage, directionIn);
-  console.log(amountIn.raw.toString(), minAmountOut.raw.toString());
-  const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
-    {
-      poolKeys: poolKeys,
-      userKeys: {
-        tokenAccountIn: shouldSell ? selectedTokenAccount.pubkey : quoteTokenAssociatedAddress,
-        tokenAccountOut: shouldSell ? quoteTokenAssociatedAddress : selectedTokenAccount.pubkey,
-        owner: wallet.publicKey,
-      },
-      amountIn: amountIn.raw,
-      minAmountOut: minAmountOut.raw,
-    },
-    poolKeys.version,
-  );
-  const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash();
-
-  const versionedTransaction = new TransactionMessage({
-    payerKey: wallet.publicKey,
-    recentBlockhash: recentBlockhashForSwap.blockhash,
-    instructions: [
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 421197 }),
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 101337 }),
-      ...innerTransaction.instructions,
-    ],
-  }).compileToV0Message();
-  const transaction = new VersionedTransaction(versionedTransaction);
-
-  return await confirmTransaction(transaction, recentBlockhashForSwap);
-}
-
-async function createAccount(toToken: string, poolKeys: LiquidityPoolKeys): Promise<string | undefined> {
-  const latestBlockhash = await solanaConnection.getLatestBlockhash();
-  const ata = Spl.getAssociatedTokenAccount({
-    mint: new PublicKey(toToken),
-    owner: wallet.publicKey,
-    programId: TOKEN_PROGRAM_ID,
-  });
-  const versionedTransaction = new TransactionMessage({
-    payerKey: wallet.publicKey,
-    recentBlockhash: latestBlockhash.blockhash,
-    instructions: [
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 421197 }),
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 101337 }),
-      createAssociatedTokenAccountIdempotentInstruction(
-        wallet.publicKey,
-        ata,
-        wallet.publicKey,
-        poolKeys.quoteMint.toString() === quoteToken.mint.toString() ? poolKeys.baseMint : poolKeys.quoteMint,
-        TOKEN_PROGRAM_ID,
-      ),
-    ],
-  }).compileToV0Message();
-  const transaction = new VersionedTransaction(versionedTransaction);
-  const txId = await confirmTransaction(transaction, latestBlockhash);
-  logger.info('Created account');
-  return txId;
-}
-
-async function confirmTransaction(
-  transaction: VersionedTransaction,
-  latestBlockhash: { lastValidBlockHeight: any; blockhash: any },
-) {
-  transaction.sign([wallet]);
-  const txid = await solanaConnection.sendTransaction(transaction, {
-    preflightCommitment: process.env.COMMITMENT as Commitment,
-  });
-  const confirmation = await solanaConnection.confirmTransaction(
-    {
-      signature: txid,
-      lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
-      blockhash: latestBlockhash.blockhash,
-    },
-    process.env.COMMITMENT as Commitment,
-  );
-  if (!confirmation.value.err) {
-    logger.info(txid);
-
-    return txid;
-  } else {
-    console.log(confirmation.value.err);
-    logger.error(`Error confirming tx`);
-    throw 'Failed to confirm';
-  }
-}
-
-async function closeAccount(tokenAddress: PublicKey): Promise<string | undefined> {
-  const latestBlockhash = await solanaConnection.getLatestBlockhash();
-
-  const versionedTransaction = new TransactionMessage({
-    payerKey: wallet.publicKey,
-    recentBlockhash: latestBlockhash.blockhash,
-    instructions: [
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 421197 }),
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 101337 }),
-      createCloseAccountInstruction(tokenAddress, wallet.publicKey, wallet.publicKey),
-    ],
-  }).compileToV0Message();
-  const transaction = new VersionedTransaction(versionedTransaction);
-
-  const txId = await confirmTransaction(transaction, latestBlockhash);
-  logger.info('Closed account');
-  return txId;
 }
