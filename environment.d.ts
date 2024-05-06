@@ -7,6 +7,8 @@ declare global {
       WEBSOCKET_ENDPOINT: string;
       WALLET_PRIVATE_KEY: string;
       BIRDEYE_API_KEY: string;
+      JITO_URL: string;
+      BUNDLE_TRANSACTION_LIMIT: number;
       BOT_TOKEN: string;
       COMMITMENT: Commitment;
       TAKE_PROFIT_PERCENTS: number;

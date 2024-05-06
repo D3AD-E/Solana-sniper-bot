@@ -19,11 +19,16 @@ import {
   getTokenAccounts,
   getTokenBalanceSpl,
   preformSwap,
+  preformSwapJito,
 } from './cryptoQueries';
 import logger from './utils/logger';
 import { solanaConnection, wallet } from './solana';
 import { MAX_REFRESH_DELAY, MIN_REFRESH_DELAY, TOKENS_FILE_NAME } from './constants';
-import { findPoolInfoForTokensById, regeneratePoolKeys } from './cryptoQueries/raydiumSwapUtils/liquidity';
+import {
+  findPoolInfoForTokensById,
+  loadPoolKeys,
+  regeneratePoolKeys,
+} from './cryptoQueries/raydiumSwapUtils/liquidity';
 import { existsSync } from 'fs';
 import { readFile, writeFile } from 'fs/promises';
 import { TokenInfo, getLastUpdatedTokens, getSwapInfo } from './browser/scrape';
@@ -45,7 +50,7 @@ export default async function listen(): Promise<void> {
   swapAmount = new TokenAmount(Token.WSOL, process.env.SWAP_SOL_AMOUNT, false);
 
   logger.info(`Swap sol amount: ${swapAmount.toFixed()} ${quoteToken.symbol}`);
-  liquidityPoolKeys = await regeneratePoolKeys();
+  liquidityPoolKeys = await loadPoolKeys();
   logger.info(`Regenerated keys`);
 
   existingTokenAccounts = await getTokenAccounts(
@@ -73,6 +78,32 @@ export default async function listen(): Promise<void> {
     console.log(e);
     sendMessage(`🟥🟥🟥App crashed!🟥🟥🟥`);
   }
+}
+
+async function Test() {
+  // const tokenInfo = {
+  //   tokenAddress: '',
+  //   pairAddress: '',
+  // };
+  // const poolKeys = await getPoolKeysToWSOL(new PublicKey(tokenInfo.tokenAddress), tokenInfo.pairAddress);
+  // selectedTokenAccount = await getSelectedAccount(tokenInfo.tokenAddress);
+  // const amount = await getTokenBalanceSpl(selectedTokenAccount);
+  // const txId = await preformSwapJito(
+  //   tokenInfo.tokenAddress,
+  //   amount,
+  //   poolKeys!,
+  //   selectedTokenAccount.pubkey,
+  //   quoteTokenAssociatedAddress,
+  //   true,
+  // );
+  // await preformSwapJito(
+  //   tokenInfo.tokenAddress,
+  //   Number(process.env.SWAP_SOL_AMOUNT),
+  //   poolKeys!,
+  //   selectedTokenAccount.pubkey,
+  //   quoteTokenAssociatedAddress,
+  // );
+  // await createAccount(tokenInfo.tokenAddress, poolKeys, quoteToken);
 }
 
 async function monitorDexTools() {
