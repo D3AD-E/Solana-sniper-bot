@@ -4,34 +4,18 @@ import { solanaConnection } from '../solana';
 import { Bundle } from 'jito-ts/dist/sdk/block-engine/types';
 import { isError } from 'jito-ts/dist/sdk/block-engine/utils';
 import { JitoClient } from './searcher';
+import { getRandomAccount } from './constants';
 
-export const sendBundles = async (wallet: Keypair, transactions: VersionedTransaction) => {
+export const sendBundles = async (wallet: Keypair, transactions: VersionedTransaction, blockHash: string) => {
   const client = await JitoClient.getInstance();
-  const _tipAccount = (await client.getTipAccounts())[0];
-  console.log('tip account:', _tipAccount);
-  const tipAccount = new PublicKey(_tipAccount);
-
-  let isLeaderSlot = false;
-  while (!isLeaderSlot) {
-    let next_leader = await client.getNextScheduledLeader();
-    let num_slots = next_leader.nextLeaderSlot - next_leader.currentSlot;
-    isLeaderSlot = num_slots <= 10;
-    console.log(`next jito leader slot in ${num_slots} slots`);
-    await new Promise((r) => setTimeout(r, 500));
-  }
-
-  let blockHash = await solanaConnection.getLatestBlockhash('processed');
+  const tipAccount = getRandomAccount();
   const b = new Bundle([transactions], Number(process.env.BUNDLE_TRANSACTION_LIMIT));
-
-  console.log(blockHash.blockhash);
-
-  let bundles = [b];
 
   if (isError(b)) {
     throw b;
   }
 
-  const maybeBundle = b.addTipTx(wallet, 30_000, tipAccount, blockHash.blockhash);
+  const maybeBundle = b.addTipTx(wallet, 30_000, tipAccount, blockHash);
 
   if (isError(maybeBundle)) {
     throw maybeBundle;

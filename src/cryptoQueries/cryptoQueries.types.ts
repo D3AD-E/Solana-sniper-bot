@@ -1,6 +1,8 @@
+import { LiquidityPoolKeys } from '@raydium-io/raydium-sdk';
 import { struct, u32, u8 } from '@solana/buffer-layout';
 import { bool, publicKey, u64 } from '@solana/buffer-layout-utils';
 import { Commitment, Connection, PublicKey } from '@solana/web3.js';
+import { MinimalMarketLayoutV3 } from './raydiumSwapUtils/liquidity';
 
 /** Information about a mint */
 export interface Mint {
@@ -42,3 +44,10 @@ export const MintLayout = struct<RawMint>([
   u32('freezeAuthorityOption'),
   publicKey('freezeAuthority'),
 ]);
+
+export interface MinimalTokenAccountData {
+  mint: PublicKey;
+  address: PublicKey;
+  poolKeys?: LiquidityPoolKeys;
+  market?: MinimalMarketLayoutV3;
+}
