@@ -12,6 +12,11 @@ import {
   TOKEN_PROGRAM_ID,
   LiquidityStateV4,
   MarketStateV3,
+  struct,
+  nu64,
+  u8,
+  blob,
+  Price,
 } from '@raydium-io/raydium-sdk';
 import { AccountLayout, getMint } from '@solana/spl-token';
 import { Commitment, Connection, KeyedAccountInfo, PublicKey } from '@solana/web3.js';
@@ -48,6 +53,7 @@ import { BoughtTokenData } from './listener.types';
 import bs58 from 'bs58';
 import { MinimalTokenAccountData } from './cryptoQueries/cryptoQueries.types';
 import { JitoClient } from './jito/searcher';
+import BigNumber from 'bignumber.js';
 
 let existingTokenAccounts: TokenAccount[] = [];
 
@@ -57,7 +63,8 @@ let quoteTokenAssociatedAddress: PublicKey;
 const existingLiquidityPools: Set<string> = new Set<string>();
 const existingTokenAccountsExtended: Map<string, MinimalTokenAccountData> = new Map<string, MinimalTokenAccountData>();
 const existingOpenBookMarkets: Set<string> = new Set<string>();
-
+let watchTokenAddress = '';
+let price = 0;
 export default async function snipe(): Promise<void> {
   logger.info(`Wallet Address: ${wallet.publicKey}`);
   swapAmount = new TokenAmount(Token.WSOL, process.env.SWAP_SOL_AMOUNT, false);
@@ -85,10 +92,13 @@ export default async function snipe(): Promise<void> {
 export async function processRaydiumPool(id: PublicKey, poolState: LiquidityStateV4) {
   const poolSize = new TokenAmount(quoteToken, poolState.swapQuoteInAmount, true);
   logger.info(`Processing pool: ${id.toString()} with ${poolSize.toFixed()} ${quoteToken.symbol} in liquidity`);
-
+  watchTokenAddress = poolState.baseMint.toString();
   await buyJito(id, poolState, existingTokenAccountsExtended, quoteTokenAssociatedAddress);
-  let currentPrice = (await getTokenPrice(poolState.baseMint.toString())) ?? 0;
-  logger.info(`Price, ${currentPrice}`);
+  while (price === 0) {
+    price = (await getTokenPrice(watchTokenAddress)) ?? 0;
+    logger.info(`Price, ${price}`);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
 }
 
 export async function processOpenBookMarket(updatedAccountInfo: KeyedAccountInfo) {
@@ -105,7 +115,6 @@ export async function processOpenBookMarket(updatedAccountInfo: KeyedAccountInfo
     logger.debug(e);
   }
 }
-
 async function listenToChanges() {
   let processing = false;
   const runTimestamp = Math.floor(new Date().getTime() / 1000);
@@ -179,7 +188,12 @@ async function listenToChanges() {
         return;
       }
       logger.info(`Selling?`);
-      await new Promise((resolve) => setTimeout(resolve, 60000));
+      while (price === 0) {
+        price = (await getTokenPrice(watchTokenAddress)) ?? 0;
+        logger.info(`Price, ${price}`);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      await monitorToken(watchTokenAddress, price);
       const _ = sellJito(
         accountData.mint,
         accountData.amount,
@@ -200,4 +214,53 @@ async function listenToChanges() {
       },
     ],
   );
+}
+
+async function monitorToken(address: string, initialPrice: number) {
+  const stopLossPrecents = Number(process.env.STOP_LOSS_PERCENTS!) * -1;
+  const takeProfitPercents = Number(process.env.TAKE_PROFIT_PERCENTS!);
+  const timeToSellTimeout = new Date();
+  timeToSellTimeout.setTime(timeToSellTimeout.getTime() + 60 * 4 * 1000);
+  let timeToSellTimeoutByPriceNotChanging = new Date();
+  timeToSellTimeoutByPriceNotChanging.setTime(timeToSellTimeoutByPriceNotChanging.getTime() + 150 * 1000);
+  let percentageGainCurrent = 0;
+  while (true) {
+    const tokenPrice = await getTokenPrice(address);
+    if (tokenPrice === undefined) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      continue;
+    }
+    const percentageGain = ((tokenPrice - initialPrice) / initialPrice) * 100;
+    if (percentageGainCurrent !== percentageGain) {
+      percentageGainCurrent = percentageGain;
+      timeToSellTimeoutByPriceNotChanging = new Date();
+      timeToSellTimeoutByPriceNotChanging.setTime(timeToSellTimeoutByPriceNotChanging.getTime() + 120 * 1000);
+      console.log(percentageGain);
+      if (percentageGain - percentageGainCurrent > 7) {
+        continue;
+      }
+    }
+    if (percentageGain <= stopLossPrecents) {
+      logger.warn(`Selling at ${tokenPrice}$ LOSS, loss ${percentageGain}%`);
+      // sendMessage(`🔴Selling ${token.symbol} at ${tokenPrice}$ LOSS, loss ${percentageGain}%🔴`);
+      // await sellToken(token);
+      // await closeAccount(selectedTokenAccount.pubkey);
+      return;
+    }
+    if (percentageGain >= takeProfitPercents) {
+      logger.info(`Selling at ${tokenPrice}$ TAKEPROFIT, increase ${percentageGain}%`);
+      // sendMessage(`🟢Selling ${token.symbol} at ${tokenPrice}$ TAKEPROFIT, increase ${percentageGain}%🟢`);
+      // await sellToken(token);
+      // await closeAccount(selectedTokenAccount.pubkey);
+      return;
+    }
+    if (new Date() >= timeToSellTimeout || new Date() >= timeToSellTimeoutByPriceNotChanging) {
+      logger.info(`Selling at ${tokenPrice}$ TIMEOUT, change ${percentageGain}%`);
+      // sendMessage(`⏰Selling ${token.symbol} at ${tokenPrice}$ TIMEOUT, change ${percentageGain}%⏰`);
+      // await sellToken(token);
+      // await closeAccount(selectedTokenAccount.pubkey);
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
 }
