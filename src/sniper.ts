@@ -94,10 +94,13 @@ export async function processRaydiumPool(id: PublicKey, poolState: LiquidityStat
   logger.info(`Processing pool: ${id.toString()} with ${poolSize.toFixed()} ${quoteToken.symbol} in liquidity`);
   watchTokenAddress = poolState.baseMint.toString();
   await buyJito(id, poolState, existingTokenAccountsExtended, quoteTokenAssociatedAddress);
+  let pricefetchTry = 0;
   while (price === 0) {
     price = (await getTokenPrice(watchTokenAddress)) ?? 0;
     logger.info(`Price, ${price}`);
     await new Promise((resolve) => setTimeout(resolve, 500));
+    pricefetchTry += 1;
+    if (pricefetchTry >= 5) return;
   }
 }
 
@@ -129,6 +132,7 @@ async function listenToChanges() {
       const existing = existingLiquidityPools.has(key);
 
       if (poolOpenTime > runTimestamp && !existing) {
+        if (processing) return;
         processing = true;
         existingLiquidityPools.add(key);
         const _ = processRaydiumPool(updatedAccountInfo.accountId, poolState);
@@ -188,10 +192,21 @@ async function listenToChanges() {
         return;
       }
       logger.info(`Selling?`);
+      let priceFetchTry = 0;
       while (price === 0) {
         price = (await getTokenPrice(watchTokenAddress)) ?? 0;
         logger.info(`Price, ${price}`);
         await new Promise((resolve) => setTimeout(resolve, 500));
+        priceFetchTry += 1;
+        if (priceFetchTry >= 15) {
+          const _ = sellJito(
+            accountData.mint,
+            accountData.amount,
+            existingTokenAccountsExtended,
+            quoteTokenAssociatedAddress,
+          );
+          return;
+        }
       }
       await monitorToken(watchTokenAddress, price);
       const _ = sellJito(

@@ -5,8 +5,14 @@ import { Bundle } from 'jito-ts/dist/sdk/block-engine/types';
 import { isError } from 'jito-ts/dist/sdk/block-engine/utils';
 import { JitoClient } from './searcher';
 import { getRandomAccount } from './constants';
+import logger from '../utils/logger';
 
-export const sendBundles = async (wallet: Keypair, transactions: VersionedTransaction, blockHash: string) => {
+export const sendBundles = async (
+  wallet: Keypair,
+  transactions: VersionedTransaction,
+  blockHash: string,
+  retry: any,
+) => {
   const client = await JitoClient.getInstance();
   const tipAccount = getRandomAccount();
   const b = new Bundle([transactions], Number(process.env.BUNDLE_TRANSACTION_LIMIT));
@@ -27,10 +33,13 @@ export const sendBundles = async (wallet: Keypair, transactions: VersionedTransa
     async (bundleResult) => {
       if (resp === bundleResult.bundleId) {
         console.log('result:', bundleResult);
+        logger.info('Res');
         return bundleResult.bundleId;
       }
     },
     (e) => {
+      // logger.warn('Error');
+      // if (retry) retry();
       throw e;
     },
   );
