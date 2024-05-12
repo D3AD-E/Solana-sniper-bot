@@ -34,6 +34,10 @@ export const sendBundles = async (
       if (resp === bundleResult.bundleId) {
         console.log('result:', bundleResult);
         logger.info('Res');
+        if (bundleResult.rejected?.simulationFailure?.msg?.endsWith('Blockhash not found]') && retry !== undefined) {
+          retry();
+          return;
+        }
         return bundleResult.bundleId;
       }
     },

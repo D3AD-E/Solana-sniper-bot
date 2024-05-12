@@ -98,7 +98,6 @@ export async function processRaydiumPool(id: PublicKey, poolState: LiquidityStat
   await new Promise((resolve) => setTimeout(resolve, 1000));
   while (price === 0) {
     price = (await getTokenPrice(watchTokenAddress)) ?? 0;
-    logger.info(`Price, ${price}`);
     await new Promise((resolve) => setTimeout(resolve, 500));
     pricefetchTry += 1;
     if (pricefetchTry >= 5) return;
@@ -189,13 +188,11 @@ async function listenToChanges() {
     TOKEN_PROGRAM_ID,
     async (updatedAccountInfo) => {
       const accountData = AccountLayout.decode(updatedAccountInfo.accountInfo!.data);
-      console.log(accountData);
       if (accountData.mint.toString() === quoteToken.mint.toString()) {
-        logger.info('Sell confirmed');
-        gotWalletToken = false;
-        processing = false;
+        logger.info('WSOL amount change');
+
         const walletBalance = new TokenAmount(Token.WSOL, accountData.amount, true);
-        logger.info(walletBalance.toString());
+        logger.info(walletBalance.toFixed(4));
         return;
       }
       if (updatedAccountInfo.accountId.equals(quoteTokenAssociatedAddress)) {
@@ -203,30 +200,34 @@ async function listenToChanges() {
       }
       if (gotWalletToken) return;
       gotWalletToken = true;
-      logger.info(`Selling?`);
+      logger.info(`Monitoring`);
       let priceFetchTry = 0;
       while (price === 0) {
         price = (await getTokenPrice(watchTokenAddress)) ?? 0;
-        logger.info(`Price, ${price}`);
         await new Promise((resolve) => setTimeout(resolve, 500));
         priceFetchTry += 1;
         if (priceFetchTry >= 15) {
-          const _ = sellJito(
+          const _ = await sellJito(
             accountData.mint,
             accountData.amount,
             existingTokenAccountsExtended,
             quoteTokenAssociatedAddress,
           );
+          gotWalletToken = false;
+          processing = false;
           return;
         }
       }
-      await monitorToken(watchTokenAddress, price);
-      const _ = sellJito(
-        accountData.mint,
-        accountData.amount,
-        existingTokenAccountsExtended,
-        quoteTokenAssociatedAddress,
-      );
+      monitorToken(watchTokenAddress, price, async () => {
+        const _ = await sellJito(
+          accountData.mint,
+          accountData.amount,
+          existingTokenAccountsExtended,
+          quoteTokenAssociatedAddress,
+        );
+        gotWalletToken = false;
+        processing = false;
+      });
     },
     process.env.COMMITMENT as Commitment,
     [
@@ -243,7 +244,7 @@ async function listenToChanges() {
   );
 }
 
-async function monitorToken(address: string, initialPrice: number) {
+async function monitorToken(address: string, initialPrice: number, sell: any) {
   const stopLossPrecents = Number(process.env.STOP_LOSS_PERCENTS!) * -1;
   const takeProfitPercents = Number(process.env.TAKE_PROFIT_PERCENTS!);
   const timeToSellTimeout = new Date();
@@ -265,36 +266,32 @@ async function monitorToken(address: string, initialPrice: number) {
       percentageGainCurrent = percentageGain;
       timeToSellTimeoutByPriceNotChanging = new Date();
       timeToSellTimeoutByPriceNotChanging.setTime(timeToSellTimeoutByPriceNotChanging.getTime() + 120 * 1000);
-      console.log(percentageGain);
+      console.log(address, percentageGain);
     }
     if (percentageGain > megaPriceIncrease) {
       currentSuddenPriceIncrease++;
     } else currentSuddenPriceIncrease = 0;
     if (percentageGain <= stopLossPrecents) {
-      logger.warn(`Selling at ${tokenPrice}$ LOSS, loss ${percentageGain}%`);
-      // sendMessage(`🔴Selling ${token.symbol} at ${tokenPrice}$ LOSS, loss ${percentageGain}%🔴`);
-      // await sellToken(token);
-      // await closeAccount(selectedTokenAccount.pubkey);
+      logger.warn(`Selling at ${tokenPrice}$ LOSS, loss ${percentageGain}%, addr ${address}`);
+      sell();
       return;
     }
     if (percentageGain >= takeProfitPercents) {
       if (percentageGain > megaPriceIncrease) {
         if (currentSuddenPriceIncrease >= increasePriceDelay) {
-          logger.info(`Selling at ${tokenPrice}$ TAKEPROFIT, increase ${percentageGain}%`);
+          logger.info(`Selling at ${tokenPrice}$ TAKEPROFIT, increase ${percentageGain}, addr ${address}%`);
+          sell();
           return;
         } else continue;
       }
-      logger.info(`Selling at ${tokenPrice}$ TAKEPROFIT, increase ${percentageGain}%`);
-      // sendMessage(`🟢Selling ${token.symbol} at ${tokenPrice}$ TAKEPROFIT, increase ${percentageGain}%🟢`);
-      // await sellToken(token);
-      // await closeAccount(selectedTokenAccount.pubkey);
+      logger.info(`Selling at ${tokenPrice}$ TAKEPROFIT, increase ${percentageGain}%, addr ${address}`);
+      sell();
+
       return;
     }
     if (new Date() >= timeToSellTimeout || new Date() >= timeToSellTimeoutByPriceNotChanging) {
-      logger.info(`Selling at ${tokenPrice}$ TIMEOUT, change ${percentageGain}%`);
-      // sendMessage(`⏰Selling ${token.symbol} at ${tokenPrice}$ TIMEOUT, change ${percentageGain}%⏰`);
-      // await sellToken(token);
-      // await closeAccount(selectedTokenAccount.pubkey);
+      logger.info(`Selling at ${tokenPrice}$ TIMEOUT, change ${percentageGain}%, addr ${address}`);
+      sell();
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
