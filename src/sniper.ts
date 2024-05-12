@@ -49,7 +49,7 @@ import { TokenInfo, getLastUpdatedTokens, getSwapInfo } from './browser/scrape';
 import { sendMessage } from './telegramBot';
 import { getTokenPrice } from './birdEye';
 import { ProviderType, getProviderType } from './enums/LiqudityProviderType';
-import { BoughtTokenData } from './listener.types';
+import { BoughtTokenData, BundlePacket } from './listener.types';
 import bs58 from 'bs58';
 import { MinimalTokenAccountData } from './cryptoQueries/cryptoQueries.types';
 import { JitoClient } from './jito/searcher';
@@ -63,6 +63,8 @@ let quoteTokenAssociatedAddress: PublicKey;
 const existingLiquidityPools: Set<string> = new Set<string>();
 const existingTokenAccountsExtended: Map<string, MinimalTokenAccountData> = new Map<string, MinimalTokenAccountData>();
 const existingOpenBookMarkets: Set<string> = new Set<string>();
+let client = undefined;
+let bundleIdProcessQueue: BundlePacket[] = [];
 let price = 0;
 export default async function snipe(): Promise<void> {
   logger.info(`Wallet Address: ${wallet.publicKey}`);
@@ -85,6 +87,38 @@ export default async function snipe(): Promise<void> {
   }
 
   quoteTokenAssociatedAddress = tokenAccount.pubkey;
+  client = await JitoClient.getInstance();
+
+  client.onBundleResult(
+    async (bundleResult) => {
+      const bundlePacket = bundleIdProcessQueue.find((x) => x.bundleId === bundleResult.bundleId);
+      if (bundlePacket !== undefined) {
+        console.log('result:', bundleResult);
+        logger.info('Res');
+        console.log(
+          bundleResult.rejected?.simulationFailure?.msg?.endsWith('Blockhash not found]') &&
+            bundlePacket.failAction !== undefined,
+          bundleResult.rejected?.simulationFailure?.msg?.endsWith('Blockhash not found]'),
+          bundlePacket.failAction !== undefined,
+        );
+        if (
+          bundleResult.rejected?.simulationFailure?.msg?.endsWith('Blockhash not found]') &&
+          bundlePacket.failAction !== undefined
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          bundlePacket.failAction();
+          return;
+        }
+        bundleIdProcessQueue = bundleIdProcessQueue.filter((item) => item.bundleId !== bundlePacket.bundleId);
+        return bundleResult.bundleId;
+      }
+    },
+    (e) => {
+      // logger.warn('Error');
+      // if (retry) retry();
+      throw e;
+    },
+  );
   await listenToChanges();
 }
 
@@ -213,12 +247,15 @@ async function listenToChanges() {
         console.log(priceFetchTry);
         if (priceFetchTry >= 15) {
           logger.warn('Cannot get token price so selling');
-          const _ = await sellJito(
+          const packet = await sellJito(
             accountData.mint,
             accountData.amount,
             existingTokenAccountsExtended,
             quoteTokenAssociatedAddress,
           );
+          if (packet !== undefined) {
+            bundleIdProcessQueue.push(packet);
+          }
           gotWalletToken = false;
           processing = false;
           price = 0;
@@ -226,12 +263,15 @@ async function listenToChanges() {
         }
       }
       monitorToken(watchTokenAddress, price, async () => {
-        const _ = await sellJito(
+        const packet = await sellJito(
           accountData.mint,
           accountData.amount,
           existingTokenAccountsExtended,
           quoteTokenAssociatedAddress,
         );
+        if (packet !== undefined) {
+          bundleIdProcessQueue.push(packet);
+        }
         gotWalletToken = false;
         processing = false;
         price = 0;

@@ -40,6 +40,7 @@ import logger from '../utils/logger';
 import { solanaConnection, wallet } from '../solana';
 import { MinimalMarketLayoutV3, calcAmountOut, createPoolKeys, getMinimalMarketV3 } from './raydiumSwapUtils/liquidity';
 import { sendBundles } from '../jito/bundles';
+import { BundlePacket } from '../listener.types';
 
 export async function getTokenAccounts(connection: Connection, owner: PublicKey, commitment: Commitment) {
   const tokenResp = await connection.getTokenAccountsByOwner(
@@ -182,7 +183,11 @@ export async function preformSwapJito(
 
 export async function confirmTransactionJito(transaction: VersionedTransaction, blockHash: string, retry: any) {
   transaction.sign([wallet]);
-  sendBundles(wallet, transaction, blockHash, retry);
+  const bundleId = await sendBundles(wallet, transaction, blockHash);
+  return {
+    bundleId,
+    failAction: retry,
+  };
 }
 
 export async function closeAccount(tokenAddress: PublicKey): Promise<string | undefined> {
@@ -266,7 +271,7 @@ export async function buyJito(
   accountData: LiquidityStateV4,
   existingTokenAccounts: Map<string, MinimalTokenAccountData>,
   quoteTokenAccountAddress: PublicKey,
-): Promise<void> {
+): Promise<BundlePacket> {
   const quoteAmount = new TokenAmount(Token.WSOL, Number(process.env.SWAP_SOL_AMOUNT), false);
   let tokenAccount = existingTokenAccounts.get(accountData.baseMint.toString());
 
@@ -315,7 +320,7 @@ export async function buyJito(
   }).compileToV0Message();
   const transaction = new VersionedTransaction(messageV0);
 
-  await confirmTransactionJito(transaction, recentBlockhashForSwap.blockhash, undefined);
+  return await confirmTransactionJito(transaction, recentBlockhashForSwap.blockhash, undefined);
 }
 
 export async function sellJito(
@@ -323,21 +328,21 @@ export async function sellJito(
   amount: BigNumberish,
   existingTokenAccounts: Map<string, MinimalTokenAccountData>,
   quoteTokenAccountAddress: PublicKey,
-): Promise<void> {
+): Promise<BundlePacket | undefined> {
   const tokenAccount = existingTokenAccounts.get(mint.toString());
 
   if (!tokenAccount) {
-    return;
+    return undefined;
   }
 
   if (!tokenAccount.poolKeys) {
     logger.warn('No pool keys found');
-    return;
+    return undefined;
   }
 
   if (amount === 0) {
     logger.warn(`Empty balance, can't sell`);
-    return;
+    return undefined;
   }
 
   const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
@@ -366,7 +371,7 @@ export async function sellJito(
     ],
   }).compileToV0Message();
   const transaction = new VersionedTransaction(messageV0);
-  await confirmTransactionJito(transaction, recentBlockhashForSwap.blockhash, () =>
+  return await confirmTransactionJito(transaction, recentBlockhashForSwap.blockhash, () =>
     sellJito(mint, amount, existingTokenAccounts, quoteTokenAccountAddress),
   );
 }

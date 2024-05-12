@@ -5,3 +5,8 @@ export type BoughtTokenData = {
   amount: number;
   symbol: string;
 };
+
+export type BundlePacket = {
+  bundleId: string;
+  failAction: any;
+};

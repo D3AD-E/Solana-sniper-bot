@@ -7,12 +7,7 @@ import { JitoClient } from './searcher';
 import { getRandomAccount } from './constants';
 import logger from '../utils/logger';
 
-export const sendBundles = async (
-  wallet: Keypair,
-  transactions: VersionedTransaction,
-  blockHash: string,
-  retry: any,
-) => {
+export const sendBundles = async (wallet: Keypair, transactions: VersionedTransaction, blockHash: string) => {
   const client = await JitoClient.getInstance();
   const tipAccount = getRandomAccount();
   const b = new Bundle([transactions], Number(process.env.BUNDLE_TRANSACTION_LIMIT));
@@ -29,28 +24,5 @@ export const sendBundles = async (
 
   const resp = await client.sendBundle(maybeBundle);
   console.log('resp:', resp);
-  client.onBundleResult(
-    async (bundleResult) => {
-      if (resp === bundleResult.bundleId) {
-        console.log('result:', bundleResult);
-        logger.info('Res');
-        console.log(
-          bundleResult.rejected?.simulationFailure?.msg?.endsWith('Blockhash not found]') && retry !== undefined,
-          bundleResult.rejected?.simulationFailure?.msg?.endsWith('Blockhash not found]'),
-          retry !== undefined,
-        );
-        if (bundleResult.rejected?.simulationFailure?.msg?.endsWith('Blockhash not found]') && retry !== undefined) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-          retry();
-          return;
-        }
-        return bundleResult.bundleId;
-      }
-    },
-    (e) => {
-      // logger.warn('Error');
-      // if (retry) retry();
-      throw e;
-    },
-  );
+  return resp;
 };
