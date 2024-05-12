@@ -95,6 +95,7 @@ export async function processRaydiumPool(id: PublicKey, poolState: LiquidityStat
   watchTokenAddress = poolState.baseMint.toString();
   await buyJito(id, poolState, existingTokenAccountsExtended, quoteTokenAssociatedAddress);
   let pricefetchTry = 0;
+  await new Promise((resolve) => setTimeout(resolve, 1000));
   while (price === 0) {
     price = (await getTokenPrice(watchTokenAddress)) ?? 0;
     logger.info(`Price, ${price}`);
@@ -120,6 +121,7 @@ export async function processOpenBookMarket(updatedAccountInfo: KeyedAccountInfo
 }
 async function listenToChanges() {
   let processing = false;
+  let gotWalletToken = false;
   const runTimestamp = Math.floor(new Date().getTime() / 1000);
 
   const raydiumSubscriptionId = solanaConnection.onProgramAccountChange(
@@ -187,10 +189,20 @@ async function listenToChanges() {
     TOKEN_PROGRAM_ID,
     async (updatedAccountInfo) => {
       const accountData = AccountLayout.decode(updatedAccountInfo.accountInfo!.data);
-
+      console.log(accountData);
+      if (accountData.mint.toString() === quoteToken.mint.toString()) {
+        logger.info('Sell confirmed');
+        gotWalletToken = false;
+        processing = false;
+        const walletBalance = new TokenAmount(Token.WSOL, accountData.amount, true);
+        logger.info(walletBalance.toString());
+        return;
+      }
       if (updatedAccountInfo.accountId.equals(quoteTokenAssociatedAddress)) {
         return;
       }
+      if (gotWalletToken) return;
+      gotWalletToken = true;
       logger.info(`Selling?`);
       let priceFetchTry = 0;
       while (price === 0) {
@@ -239,6 +251,9 @@ async function monitorToken(address: string, initialPrice: number) {
   let timeToSellTimeoutByPriceNotChanging = new Date();
   timeToSellTimeoutByPriceNotChanging.setTime(timeToSellTimeoutByPriceNotChanging.getTime() + 150 * 1000);
   let percentageGainCurrent = 0;
+  const increasePriceDelay = 4;
+  let currentSuddenPriceIncrease = 0;
+  const megaPriceIncrease = 18;
   while (true) {
     const tokenPrice = await getTokenPrice(address);
     if (tokenPrice === undefined) {
@@ -251,10 +266,10 @@ async function monitorToken(address: string, initialPrice: number) {
       timeToSellTimeoutByPriceNotChanging = new Date();
       timeToSellTimeoutByPriceNotChanging.setTime(timeToSellTimeoutByPriceNotChanging.getTime() + 120 * 1000);
       console.log(percentageGain);
-      if (percentageGain - percentageGainCurrent > 7) {
-        continue;
-      }
     }
+    if (percentageGain > megaPriceIncrease) {
+      currentSuddenPriceIncrease++;
+    } else currentSuddenPriceIncrease = 0;
     if (percentageGain <= stopLossPrecents) {
       logger.warn(`Selling at ${tokenPrice}$ LOSS, loss ${percentageGain}%`);
       // sendMessage(`🔴Selling ${token.symbol} at ${tokenPrice}$ LOSS, loss ${percentageGain}%🔴`);
@@ -263,6 +278,12 @@ async function monitorToken(address: string, initialPrice: number) {
       return;
     }
     if (percentageGain >= takeProfitPercents) {
+      if (percentageGain > megaPriceIncrease) {
+        if (currentSuddenPriceIncrease >= increasePriceDelay) {
+          logger.info(`Selling at ${tokenPrice}$ TAKEPROFIT, increase ${percentageGain}%`);
+          return;
+        } else continue;
+      }
       logger.info(`Selling at ${tokenPrice}$ TAKEPROFIT, increase ${percentageGain}%`);
       // sendMessage(`🟢Selling ${token.symbol} at ${tokenPrice}$ TAKEPROFIT, increase ${percentageGain}%🟢`);
       // await sellToken(token);

@@ -22,7 +22,7 @@ export const getTokenPrice = async (tokenAddress: string) => {
     }
     return result.data!.value;
   } catch (e) {
-    console.error(e);
+    // console.error(e);
     return undefined;
   }
 };
