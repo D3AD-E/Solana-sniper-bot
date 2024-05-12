@@ -63,7 +63,6 @@ let quoteTokenAssociatedAddress: PublicKey;
 const existingLiquidityPools: Set<string> = new Set<string>();
 const existingTokenAccountsExtended: Map<string, MinimalTokenAccountData> = new Map<string, MinimalTokenAccountData>();
 const existingOpenBookMarkets: Set<string> = new Set<string>();
-let watchTokenAddress = '';
 let price = 0;
 export default async function snipe(): Promise<void> {
   logger.info(`Wallet Address: ${wallet.publicKey}`);
@@ -91,11 +90,14 @@ export default async function snipe(): Promise<void> {
 
 export async function processRaydiumPool(id: PublicKey, poolState: LiquidityStateV4) {
   const poolSize = new TokenAmount(quoteToken, poolState.swapQuoteInAmount, true);
-  logger.info(`Processing pool: ${id.toString()} with ${poolSize.toFixed()} ${quoteToken.symbol} in liquidity`);
-  watchTokenAddress = poolState.baseMint.toString();
+  logger.info(
+    `Processing pool: ${poolState.baseMint.toString()} with ${poolSize.toFixed()} ${quoteToken.symbol} in liquidity`,
+  );
+  const watchTokenAddress = poolState.baseMint.toString();
   await buyJito(id, poolState, existingTokenAccountsExtended, quoteTokenAssociatedAddress);
   let pricefetchTry = 0;
   await new Promise((resolve) => setTimeout(resolve, 1000));
+  price = 0;
   while (price === 0) {
     price = (await getTokenPrice(watchTokenAddress)) ?? 0;
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -202,11 +204,15 @@ async function listenToChanges() {
       gotWalletToken = true;
       logger.info(`Monitoring`);
       let priceFetchTry = 0;
+      const watchTokenAddress = accountData.mint.toString();
+      console.log(price);
       while (price === 0) {
         price = (await getTokenPrice(watchTokenAddress)) ?? 0;
         await new Promise((resolve) => setTimeout(resolve, 500));
         priceFetchTry += 1;
+        console.log(priceFetchTry);
         if (priceFetchTry >= 15) {
+          logger.warn('Cannot get token price so selling');
           const _ = await sellJito(
             accountData.mint,
             accountData.amount,
@@ -215,6 +221,7 @@ async function listenToChanges() {
           );
           gotWalletToken = false;
           processing = false;
+          price = 0;
           return;
         }
       }
@@ -227,6 +234,7 @@ async function listenToChanges() {
         );
         gotWalletToken = false;
         processing = false;
+        price = 0;
       });
     },
     process.env.COMMITMENT as Commitment,
@@ -245,12 +253,13 @@ async function listenToChanges() {
 }
 
 async function monitorToken(address: string, initialPrice: number, sell: any) {
+  console.log('monitorToken');
   const stopLossPrecents = Number(process.env.STOP_LOSS_PERCENTS!) * -1;
   const takeProfitPercents = Number(process.env.TAKE_PROFIT_PERCENTS!);
   const timeToSellTimeout = new Date();
   timeToSellTimeout.setTime(timeToSellTimeout.getTime() + 60 * 4 * 1000);
   let timeToSellTimeoutByPriceNotChanging = new Date();
-  timeToSellTimeoutByPriceNotChanging.setTime(timeToSellTimeoutByPriceNotChanging.getTime() + 150 * 1000);
+  timeToSellTimeoutByPriceNotChanging.setTime(timeToSellTimeoutByPriceNotChanging.getTime() + 30 * 1000);
   let percentageGainCurrent = 0;
   const increasePriceDelay = 4;
   let currentSuddenPriceIncrease = 0;
@@ -265,8 +274,13 @@ async function monitorToken(address: string, initialPrice: number, sell: any) {
     if (percentageGainCurrent !== percentageGain) {
       percentageGainCurrent = percentageGain;
       timeToSellTimeoutByPriceNotChanging = new Date();
-      timeToSellTimeoutByPriceNotChanging.setTime(timeToSellTimeoutByPriceNotChanging.getTime() + 120 * 1000);
+      timeToSellTimeoutByPriceNotChanging.setTime(timeToSellTimeoutByPriceNotChanging.getTime() + 30 * 1000);
       console.log(address, percentageGain);
+      if (percentageGain >= 500) {
+        logger.info(`Selling at ${tokenPrice}$ STRANGEACTION, increase ${percentageGain}, addr ${address}%`);
+        sell();
+        return;
+      }
     }
     if (percentageGain > megaPriceIncrease) {
       currentSuddenPriceIncrease++;

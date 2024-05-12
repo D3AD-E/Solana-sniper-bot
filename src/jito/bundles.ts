@@ -34,7 +34,13 @@ export const sendBundles = async (
       if (resp === bundleResult.bundleId) {
         console.log('result:', bundleResult);
         logger.info('Res');
+        console.log(
+          bundleResult.rejected?.simulationFailure?.msg?.endsWith('Blockhash not found]') && retry !== undefined,
+          bundleResult.rejected?.simulationFailure?.msg?.endsWith('Blockhash not found]'),
+          retry !== undefined,
+        );
         if (bundleResult.rejected?.simulationFailure?.msg?.endsWith('Blockhash not found]') && retry !== undefined) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
           retry();
           return;
         }
