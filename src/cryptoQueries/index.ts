@@ -176,18 +176,13 @@ export async function preformSwapJito(
   }).compileToV0Message();
   const transaction = new VersionedTransaction(versionedTransaction);
 
-  confirmTransactionJito(transaction, recentBlockhashForSwap.blockhash, () =>
-    preformSwapJito(toToken, amount, poolKeys, tokenAccountAddress, quoteTokenAccountAddress, shouldSell, slippage),
-  );
+  confirmTransactionJito(transaction, recentBlockhashForSwap.blockhash);
 }
 
-export async function confirmTransactionJito(transaction: VersionedTransaction, blockHash: string, retry: any) {
+export async function confirmTransactionJito(transaction: VersionedTransaction, blockHash: string) {
   transaction.sign([wallet]);
   const bundleId = await sendBundles(wallet, transaction, blockHash);
-  return {
-    bundleId,
-    failAction: retry,
-  };
+  return bundleId;
 }
 
 export async function closeAccount(tokenAddress: PublicKey): Promise<string | undefined> {
@@ -271,7 +266,7 @@ export async function buyJito(
   accountData: LiquidityStateV4,
   existingTokenAccounts: Map<string, MinimalTokenAccountData>,
   quoteTokenAccountAddress: PublicKey,
-): Promise<BundlePacket> {
+): Promise<string> {
   const quoteAmount = new TokenAmount(Token.WSOL, Number(process.env.SWAP_SOL_AMOUNT), false);
   let tokenAccount = existingTokenAccounts.get(accountData.baseMint.toString());
 
@@ -320,7 +315,7 @@ export async function buyJito(
   }).compileToV0Message();
   const transaction = new VersionedTransaction(messageV0);
 
-  return await confirmTransactionJito(transaction, recentBlockhashForSwap.blockhash, undefined);
+  return await confirmTransactionJito(transaction, recentBlockhashForSwap.blockhash);
 }
 
 export async function sellJito(
@@ -328,7 +323,7 @@ export async function sellJito(
   amount: BigNumberish,
   existingTokenAccounts: Map<string, MinimalTokenAccountData>,
   quoteTokenAccountAddress: PublicKey,
-): Promise<BundlePacket | undefined> {
+): Promise<string | undefined> {
   const tokenAccount = existingTokenAccounts.get(mint.toString());
 
   if (!tokenAccount) {
@@ -371,9 +366,7 @@ export async function sellJito(
     ],
   }).compileToV0Message();
   const transaction = new VersionedTransaction(messageV0);
-  return await confirmTransactionJito(transaction, recentBlockhashForSwap.blockhash, () =>
-    sellJito(mint, amount, existingTokenAccounts, quoteTokenAccountAddress),
-  );
+  return await confirmTransactionJito(transaction, recentBlockhashForSwap.blockhash);
 }
 
 // async function preformSwapSimpleJito(

@@ -23,6 +23,6 @@ export const sendBundles = async (wallet: Keypair, transactions: VersionedTransa
   }
 
   const resp = await client.sendBundle(maybeBundle);
-  console.log('resp:', resp);
+  logger.info('resp: ' + resp);
   return resp;
 };

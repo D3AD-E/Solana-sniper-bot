@@ -8,7 +8,7 @@ export class JitoClient {
 
   private constructor() {}
 
-  static async getInstance() {
+  static async getInstance(): Promise<SearcherClient> {
     if (this.instance) {
       return this.instance;
     }

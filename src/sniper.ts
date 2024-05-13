@@ -54,6 +54,7 @@ import bs58 from 'bs58';
 import { MinimalTokenAccountData } from './cryptoQueries/cryptoQueries.types';
 import { JitoClient } from './jito/searcher';
 import BigNumber from 'bignumber.js';
+import { SearcherClient } from 'jito-ts/dist/sdk/block-engine/searcher';
 
 let existingTokenAccounts: TokenAccount[] = [];
 
@@ -63,7 +64,7 @@ let quoteTokenAssociatedAddress: PublicKey;
 const existingLiquidityPools: Set<string> = new Set<string>();
 const existingTokenAccountsExtended: Map<string, MinimalTokenAccountData> = new Map<string, MinimalTokenAccountData>();
 const existingOpenBookMarkets: Set<string> = new Set<string>();
-let client = undefined;
+let client: SearcherClient | undefined = undefined;
 let bundleIdProcessQueue: BundlePacket[] = [];
 let price = 0;
 export default async function snipe(): Promise<void> {
@@ -105,7 +106,11 @@ export default async function snipe(): Promise<void> {
           bundleResult.rejected?.simulationFailure?.msg?.endsWith('Blockhash not found]') &&
           bundlePacket.failAction !== undefined
         ) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+          bundlePacket.failAction();
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+          bundlePacket.failAction();
+          await new Promise((resolve) => setTimeout(resolve, 3000));
           bundlePacket.failAction();
           return;
         }
@@ -128,7 +133,7 @@ export async function processRaydiumPool(id: PublicKey, poolState: LiquidityStat
     `Processing pool: ${poolState.baseMint.toString()} with ${poolSize.toFixed()} ${quoteToken.symbol} in liquidity`,
   );
   const watchTokenAddress = poolState.baseMint.toString();
-  await buyJito(id, poolState, existingTokenAccountsExtended, quoteTokenAssociatedAddress);
+  const packet = await buyJito(id, poolState, existingTokenAccountsExtended, quoteTokenAssociatedAddress);
   let pricefetchTry = 0;
   await new Promise((resolve) => setTimeout(resolve, 1000));
   price = 0;
@@ -136,8 +141,9 @@ export async function processRaydiumPool(id: PublicKey, poolState: LiquidityStat
     price = (await getTokenPrice(watchTokenAddress)) ?? 0;
     await new Promise((resolve) => setTimeout(resolve, 500));
     pricefetchTry += 1;
-    if (pricefetchTry >= 5) return;
+    if (pricefetchTry >= 5) return packet;
   }
+  return packet;
 }
 
 export async function processOpenBookMarket(updatedAccountInfo: KeyedAccountInfo) {
@@ -172,7 +178,13 @@ async function listenToChanges() {
         if (processing) return;
         processing = true;
         existingLiquidityPools.add(key);
-        const _ = processRaydiumPool(updatedAccountInfo.accountId, poolState);
+        const packet = await processRaydiumPool(updatedAccountInfo.accountId, poolState);
+        bundleIdProcessQueue.push({
+          bundleId: packet,
+          failAction: () => {
+            processing = false;
+          },
+        });
       }
     },
     process.env.COMMITMENT as Commitment,
@@ -225,10 +237,13 @@ async function listenToChanges() {
     async (updatedAccountInfo) => {
       const accountData = AccountLayout.decode(updatedAccountInfo.accountInfo!.data);
       if (accountData.mint.toString() === quoteToken.mint.toString()) {
-        logger.info('WSOL amount change');
-
         const walletBalance = new TokenAmount(Token.WSOL, accountData.amount, true);
-        logger.info(walletBalance.toFixed(4));
+        logger.info('WSOL amount change ' + walletBalance.toFixed(4));
+        if (gotWalletToken && processing) {
+          gotWalletToken = false;
+          processing = false;
+          price = 0;
+        }
         return;
       }
       if (updatedAccountInfo.accountId.equals(quoteTokenAssociatedAddress)) {
@@ -254,7 +269,18 @@ async function listenToChanges() {
             quoteTokenAssociatedAddress,
           );
           if (packet !== undefined) {
-            bundleIdProcessQueue.push(packet);
+            bundleIdProcessQueue.push({
+              bundleId: packet,
+              failAction: async () => {
+                const packet = await sellJito(
+                  accountData.mint,
+                  accountData.amount,
+                  existingTokenAccountsExtended,
+                  quoteTokenAssociatedAddress,
+                );
+                bundleIdProcessQueue.push({ bundleId: packet!, failAction: undefined });
+              },
+            });
           }
           gotWalletToken = false;
           processing = false;
@@ -270,7 +296,18 @@ async function listenToChanges() {
           quoteTokenAssociatedAddress,
         );
         if (packet !== undefined) {
-          bundleIdProcessQueue.push(packet);
+          bundleIdProcessQueue.push({
+            bundleId: packet,
+            failAction: async () => {
+              const packet = await sellJito(
+                accountData.mint,
+                accountData.amount,
+                existingTokenAccountsExtended,
+                quoteTokenAssociatedAddress,
+              );
+              bundleIdProcessQueue.push({ bundleId: packet!, failAction: undefined });
+            },
+          });
         }
         gotWalletToken = false;
         processing = false;
@@ -297,13 +334,13 @@ async function monitorToken(address: string, initialPrice: number, sell: any) {
   const stopLossPrecents = Number(process.env.STOP_LOSS_PERCENTS!) * -1;
   const takeProfitPercents = Number(process.env.TAKE_PROFIT_PERCENTS!);
   const timeToSellTimeout = new Date();
-  timeToSellTimeout.setTime(timeToSellTimeout.getTime() + 60 * 4 * 1000);
+  timeToSellTimeout.setTime(timeToSellTimeout.getTime() + 80 * 1000);
   let timeToSellTimeoutByPriceNotChanging = new Date();
-  timeToSellTimeoutByPriceNotChanging.setTime(timeToSellTimeoutByPriceNotChanging.getTime() + 30 * 1000);
+  timeToSellTimeoutByPriceNotChanging.setTime(timeToSellTimeoutByPriceNotChanging.getTime() + 20 * 1000);
   let percentageGainCurrent = 0;
   const increasePriceDelay = 4;
   let currentSuddenPriceIncrease = 0;
-  const megaPriceIncrease = 18;
+  const megaPriceIncrease = 100;
   while (true) {
     const tokenPrice = await getTokenPrice(address);
     if (tokenPrice === undefined) {
@@ -314,7 +351,7 @@ async function monitorToken(address: string, initialPrice: number, sell: any) {
     if (percentageGainCurrent !== percentageGain) {
       percentageGainCurrent = percentageGain;
       timeToSellTimeoutByPriceNotChanging = new Date();
-      timeToSellTimeoutByPriceNotChanging.setTime(timeToSellTimeoutByPriceNotChanging.getTime() + 30 * 1000);
+      timeToSellTimeoutByPriceNotChanging.setTime(timeToSellTimeoutByPriceNotChanging.getTime() + 20 * 1000);
       console.log(address, percentageGain);
       if (percentageGain >= 500) {
         logger.info(`Selling at ${tokenPrice}$ STRANGEACTION, increase ${percentageGain}, addr ${address}%`);
