@@ -5,6 +5,7 @@ declare global {
     interface ProcessEnv {
       RPC_ENDPOINT: string;
       WEBSOCKET_ENDPOINT: string;
+      GEYSER_ENDPOINT: string;
       WALLET_PRIVATE_KEY: string;
       BIRDEYE_API_KEY: string;
       JITO_URL: string;

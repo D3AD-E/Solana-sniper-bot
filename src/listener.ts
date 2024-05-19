@@ -19,7 +19,6 @@ import {
   getTokenAccounts,
   getTokenBalanceSpl,
   preformSwap,
-  preformSwapJito,
 } from './cryptoQueries';
 import logger from './utils/logger';
 import { solanaConnection, wallet } from './solana';

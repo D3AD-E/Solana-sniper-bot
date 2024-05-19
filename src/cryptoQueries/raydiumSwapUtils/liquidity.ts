@@ -136,8 +136,8 @@ export function createPoolKeys(
     baseMint: accountData.baseMint,
     quoteMint: accountData.quoteMint,
     lpMint: accountData.lpMint,
-    baseDecimals: accountData.baseDecimal.toNumber(),
-    quoteDecimals: accountData.quoteDecimal.toNumber(),
+    baseDecimals: accountData.baseDecimal, //tonumber
+    quoteDecimals: accountData.quoteDecimal,
     lpDecimals: 5,
     version: 4,
     programId: RAYDIUM_LIQUIDITY_PROGRAM_ID_V4,

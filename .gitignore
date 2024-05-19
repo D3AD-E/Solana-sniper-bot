@@ -141,3 +141,4 @@ pnpm-lock.yaml
 pools.json
 tokens.json
 keypair.json
+test.json

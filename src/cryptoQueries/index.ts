@@ -41,7 +41,7 @@ import { solanaConnection, wallet } from '../solana';
 import { MinimalMarketLayoutV3, calcAmountOut, createPoolKeys, getMinimalMarketV3 } from './raydiumSwapUtils/liquidity';
 import { sendBundles } from '../jito/bundles';
 import { BundlePacket } from '../listener.types';
-
+import bs58 from 'bs58';
 export async function getTokenAccounts(connection: Connection, owner: PublicKey, commitment: Commitment) {
   const tokenResp = await connection.getTokenAccountsByOwner(
     owner,
@@ -136,52 +136,13 @@ export async function confirmTransaction(
   }
 }
 
-export async function preformSwapJito(
-  toToken: string,
-  amount: number,
-  poolKeys: LiquidityPoolKeys,
-  tokenAccountAddress: PublicKey,
-  quoteTokenAccountAddress: PublicKey,
-  shouldSell: boolean = false,
-  slippage: number = 7,
+export async function confirmTransactionJito(
+  transaction: VersionedTransaction,
+  blockHash: string,
+  shoutWaitForLeader: boolean,
 ) {
-  const directionIn = shouldSell
-    ? !(poolKeys.quoteMint.toString() == toToken)
-    : poolKeys.quoteMint.toString() == toToken;
-
-  const { minAmountOut, amountIn } = await calcAmountOut(solanaConnection, poolKeys, amount, slippage, directionIn);
-  const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
-    {
-      poolKeys: poolKeys,
-      userKeys: {
-        tokenAccountIn: shouldSell ? tokenAccountAddress : quoteTokenAccountAddress,
-        tokenAccountOut: shouldSell ? quoteTokenAccountAddress : tokenAccountAddress,
-        owner: wallet.publicKey,
-      },
-      amountIn: amountIn.raw,
-      minAmountOut: minAmountOut.raw,
-    },
-    poolKeys.version,
-  );
-  const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash('processed');
-
-  const versionedTransaction = new TransactionMessage({
-    payerKey: wallet.publicKey,
-    recentBlockhash: recentBlockhashForSwap.blockhash,
-    instructions: [
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 421197 }),
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 101337 }),
-      ...innerTransaction.instructions,
-    ],
-  }).compileToV0Message();
-  const transaction = new VersionedTransaction(versionedTransaction);
-
-  confirmTransactionJito(transaction, recentBlockhashForSwap.blockhash);
-}
-
-export async function confirmTransactionJito(transaction: VersionedTransaction, blockHash: string) {
   transaction.sign([wallet]);
-  const bundleId = await sendBundles(wallet, transaction, blockHash);
+  const bundleId = await sendBundles(wallet, transaction, blockHash, shoutWaitForLeader);
   return bundleId;
 }
 
@@ -261,12 +222,23 @@ export function saveTokenAccount(mint: PublicKey, accountData: MinimalMarketLayo
   return tokenAccount;
 }
 
-export async function buyJito(
+export const toBuffer = (arr: Buffer | Uint8Array | Array<number>): Buffer => {
+  if (Buffer.isBuffer(arr)) {
+    return arr;
+  } else if (arr instanceof Uint8Array) {
+    return Buffer.from(arr.buffer, arr.byteOffset, arr.byteLength);
+  } else {
+    return Buffer.from(arr);
+  }
+};
+
+export async function buy(
   accountId: PublicKey,
   accountData: LiquidityStateV4,
   existingTokenAccounts: Map<string, MinimalTokenAccountData>,
   quoteTokenAccountAddress: PublicKey,
-): Promise<string> {
+  hash: string,
+) {
   const quoteAmount = new TokenAmount(Token.WSOL, Number(process.env.SWAP_SOL_AMOUNT), false);
   let tokenAccount = existingTokenAccounts.get(accountData.baseMint.toString());
 
@@ -296,11 +268,69 @@ export async function buyJito(
     tokenAccount.poolKeys.version,
   );
 
-  const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash('processed');
+  const messageV0 = new TransactionMessage({
+    payerKey: wallet.publicKey,
+    recentBlockhash: hash,
+    instructions: [
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 421197 }),
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 101337 }),
+      createAssociatedTokenAccountIdempotentInstruction(
+        wallet.publicKey,
+        tokenAccount.address,
+        wallet.publicKey,
+        accountData.baseMint,
+      ),
+      ...innerTransaction.instructions,
+    ],
+  }).compileToV0Message();
+  const transaction = new VersionedTransaction(messageV0);
+  transaction.sign([wallet, ...innerTransaction.signers]);
+
+  const signature = await solanaConnection.sendRawTransaction(transaction.serialize(), {
+    skipPreflight: true,
+  });
+  logger.info(signature);
+}
+
+export async function buyJito(
+  accountId: PublicKey,
+  accountData: LiquidityStateV4,
+  existingTokenAccounts: Map<string, MinimalTokenAccountData>,
+  quoteTokenAccountAddress: PublicKey,
+  hash: string,
+): Promise<string | undefined> {
+  const quoteAmount = new TokenAmount(Token.WSOL, Number(process.env.SWAP_SOL_AMOUNT), false);
+  let tokenAccount = existingTokenAccounts.get(accountData.baseMint.toString());
+
+  if (!tokenAccount) {
+    // it's possible that we didn't have time to fetch open book data
+    const market = await getMinimalMarketV3(
+      solanaConnection,
+      accountData.marketId,
+      process.env.COMMITMENT as Commitment,
+    );
+    tokenAccount = saveTokenAccount(accountData.baseMint, market);
+    existingTokenAccounts.set(accountData.baseMint.toString(), tokenAccount);
+  }
+
+  tokenAccount.poolKeys = createPoolKeys(accountId, accountData, tokenAccount.market!);
+  const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
+    {
+      poolKeys: tokenAccount.poolKeys,
+      userKeys: {
+        tokenAccountIn: quoteTokenAccountAddress,
+        tokenAccountOut: tokenAccount.address,
+        owner: wallet.publicKey,
+      },
+      amountIn: quoteAmount.raw,
+      minAmountOut: 0,
+    },
+    tokenAccount.poolKeys.version,
+  );
 
   const messageV0 = new TransactionMessage({
     payerKey: wallet.publicKey,
-    recentBlockhash: recentBlockhashForSwap.blockhash,
+    recentBlockhash: hash,
     instructions: [
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 421197 }),
       ComputeBudgetProgram.setComputeUnitLimit({ units: 101337 }),
@@ -315,7 +345,7 @@ export async function buyJito(
   }).compileToV0Message();
   const transaction = new VersionedTransaction(messageV0);
 
-  return await confirmTransactionJito(transaction, recentBlockhashForSwap.blockhash);
+  return await confirmTransactionJito(transaction, hash, true);
 }
 
 export async function sellJito(
@@ -339,6 +369,7 @@ export async function sellJito(
     logger.warn(`Empty balance, can't sell`);
     return undefined;
   }
+  const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash('processed');
 
   const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
     {
@@ -354,7 +385,6 @@ export async function sellJito(
     tokenAccount.poolKeys!.version,
   );
 
-  const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash('processed');
   const messageV0 = new TransactionMessage({
     payerKey: wallet.publicKey,
     recentBlockhash: recentBlockhashForSwap.blockhash,
@@ -366,7 +396,7 @@ export async function sellJito(
     ],
   }).compileToV0Message();
   const transaction = new VersionedTransaction(messageV0);
-  return await confirmTransactionJito(transaction, recentBlockhashForSwap.blockhash);
+  return await confirmTransactionJito(transaction, recentBlockhashForSwap.blockhash, false);
 }
 
 // async function preformSwapSimpleJito(
