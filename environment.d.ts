@@ -14,6 +14,10 @@ declare global {
       COMMITMENT: Commitment;
       TAKE_PROFIT_PERCENTS: number;
       STOP_LOSS_PERCENTS: number;
+      BLOCKS_MAX_LIMIT: number;
+      BLOCKS_MIN_LIMIT: number;
+      SELL_TIMEOUT_SEC: number;
+      JITO_TIP: number;
       SWAP_SOL_AMOUNT: number;
       CHAT_ID: number;
       MIN_POOL_SIZE: number;
