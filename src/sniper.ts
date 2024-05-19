@@ -18,7 +18,7 @@ import {
   blob,
   Price,
 } from '@raydium-io/raydium-sdk';
-import { AccountLayout, getMint } from '@solana/spl-token';
+import { AccountLayout, RawAccount, getMint } from '@solana/spl-token';
 import { Commitment, Connection, KeyedAccountInfo, PublicKey } from '@solana/web3.js';
 import {
   buy,
@@ -35,7 +35,7 @@ import {
 } from './cryptoQueries';
 import logger from './utils/logger';
 import { solanaConnection, wallet } from './solana';
-import { MAX_REFRESH_DELAY, MIN_REFRESH_DELAY, TOKENS_FILE_NAME } from './constants';
+import { LEADERS_FILE_NAME, MAX_REFRESH_DELAY, MIN_REFRESH_DELAY, TOKENS_FILE_NAME } from './constants';
 import {
   OPENBOOK_PROGRAM_ID,
   RAYDIUM_LIQUIDITY_PROGRAM_ID_V4,
@@ -56,6 +56,7 @@ import { JitoClient } from './jito/searcher';
 import BigNumber from 'bignumber.js';
 import { SearcherClient } from 'jito-ts/dist/sdk/block-engine/searcher';
 import WebSocket from 'ws';
+import { SlotList } from 'jito-ts/dist/gen/block-engine/searcher';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
@@ -67,16 +68,61 @@ const existingOpenBookMarkets: Set<string> = new Set<string>();
 let client: SearcherClient | undefined = undefined;
 let bundleIdProcessQueue: BundlePacket[] = [];
 let price = 0;
+let bignumberInitialPrice: BigNumber | undefined = undefined;
+const wsPairs = new WebSocket(process.env.GEYSER_ENDPOINT!);
+const stopLossPrecents = Number(process.env.STOP_LOSS_PERCENTS!) * -1;
+const takeProfitPercents = Number(process.env.TAKE_PROFIT_PERCENTS!);
 
 let processingToken = false;
+
+let foundTokenData: RawAccount | undefined = undefined;
+let timeToSellTimeoutGeyser: Date | undefined = undefined;
+let currentSuddenPriceIncrease = 0;
+let leaders:
+  | {
+      [key: string]: SlotList;
+    }
+  | undefined = undefined;
 export default async function snipe(): Promise<void> {
-  // client = await JitoClient.getInstance();
-  // const t = await client.getConnectedLeaders();
-  // console.log(t);
+  await refreshLeaders();
+  leaders = await readLeaders();
+  wsPairs.on('open', function open() {});
+  wsPairs.on('message', async function incoming(data) {
+    const messageStr = data.toString();
+    try {
+      var jData = JSON.parse(messageStr);
+      const instructionWithSwapSell = jData?.params?.result?.transaction?.meta?.innerInstructions[0];
+      if (instructionWithSwapSell !== undefined) {
+        getSwappedAmounts(instructionWithSwapSell);
+      }
+      const instructionWithSwapBuy =
+        jData?.params?.result?.transaction?.meta?.innerInstructions[
+          jData?.params?.result?.transaction?.meta?.innerInstructions.length - 1
+        ];
+      if (instructionWithSwapBuy !== undefined) {
+        getSwappedAmounts(instructionWithSwapBuy);
+      }
+      const instructionWithSwapBuy2 =
+        jData?.params?.result?.transaction?.meta?.innerInstructions[
+          jData?.params?.result?.transaction?.meta?.innerInstructions.length - 2
+        ];
+      if (instructionWithSwapBuy2 !== undefined) {
+        getSwappedAmounts(instructionWithSwapBuy2);
+      }
+    } catch (e) {
+      console.error('Failed to parse JSON:', e);
+    }
+  });
+  wsPairs.on('error', function error(err) {
+    console.error('WebSocket error:', err);
+  });
+  wsPairs.on('close', function close() {
+    console.log('WebSocket is closed');
+  });
   const ws = new WebSocket(process.env.GEYSER_ENDPOINT!);
   // //Initialize2
   ws.on('open', function open() {
-    console.log('WebSocket is open');
+    logger.info('Listening to geyser liquidity');
     const request = {
       jsonrpc: '2.0',
       id: 420,
@@ -109,17 +155,6 @@ export default async function snipe(): Promise<void> {
     const messageStr = data.toString();
     try {
       var jData = JSON.parse(messageStr);
-      // const found = jData?.params?.result?.transaction?.meta?.innerInstructions?.find(
-      //   (x: { parsed: { type: string; info: any } }) => x.parsed?.type === 'mintTo' || x.parsed?.type === 'initialize2',
-      // );
-      // console.log(found); Initialize2
-      // fs.appendFile(filePath, messageStr, (err) => {
-      //   if (err) {
-      //     console.error('Error appending to file:', err);
-      //     return;
-      //   }
-      //   console.log('String appended to file successfully.');
-      // });
       const isntructions = jData?.params?.result?.transaction?.meta?.innerInstructions;
       if (isntructions && isntructions.length === 1) {
         const inner = isntructions[0].instructions;
@@ -138,6 +173,12 @@ export default async function snipe(): Promise<void> {
           );
           if (mintAccount.freezeAuthority !== null) {
             logger.warn('Token can be frozen, skipping');
+            processingToken = false;
+            return;
+          }
+          const isBlockSuitable = await isNextAuctionBlockSoon();
+          if (!isBlockSuitable) {
+            logger.warn('Block is too far');
             processingToken = false;
             return;
           }
@@ -204,10 +245,29 @@ export default async function snipe(): Promise<void> {
             processingToken = false;
             return;
           }
-          // existingLiquidityPools.add(mintAddress);
+          logger.info('Listening to geyser Pair');
+          const request = {
+            jsonrpc: '2.0',
+            id: 420,
+            method: 'transactionSubscribe',
+            params: [
+              {
+                vote: false,
+                failed: false,
+                accountInclude: [mintAddress],
+              },
+              {
+                commitment: 'processed',
+                encoding: 'jsonParsed',
+                transactionDetails: 'full',
+                showRewards: false,
+                maxSupportedTransactionVersion: 1,
+              },
+            ],
+          };
+          wsPairs.send(JSON.stringify(request));
         }
       }
-      //console.log(messageStr);
     } catch (e) {
       console.error('Failed to parse JSON:', e);
     }
@@ -218,7 +278,6 @@ export default async function snipe(): Promise<void> {
   ws.on('close', function close() {
     console.log('WebSocket is closed');
   });
-
   logger.info(`Wallet Address: ${wallet.publicKey}`);
   swapAmount = new TokenAmount(Token.WSOL, process.env.SWAP_SOL_AMOUNT, false);
   logger.info(`Swap sol amount: ${swapAmount.toFixed()} ${quoteToken.symbol}`);
@@ -233,7 +292,6 @@ export default async function snipe(): Promise<void> {
   if (!tokenAccount) {
     throw new Error(`No ${quoteToken.symbol} token account found in wallet: ${wallet.publicKey}`);
   }
-
   quoteTokenAssociatedAddress = tokenAccount.pubkey;
   client = await JitoClient.getInstance();
   client.onBundleResult(
@@ -272,6 +330,105 @@ export default async function snipe(): Promise<void> {
     },
   );
   await listenToChanges();
+}
+
+async function isNextAuctionBlockSoon() {
+  const b = await solanaConnection.getSlot('processed');
+  console.log(b);
+  const currentBlock = b; // 1+actual
+  for (const l in leaders) {
+    const leader = leaders[l];
+    const block = leader.slots.find((s) => s - currentBlock <= 10 && s - currentBlock > 3); //266736727 accepted at 266736730
+    if (block) {
+      console.log(block, l);
+      return true;
+    }
+  }
+  return false;
+}
+
+async function refreshLeaders() {
+  const j = await JitoClient.getInstance();
+  const l = await j.getConnectedLeaders();
+  await writeFile(LEADERS_FILE_NAME, JSON.stringify(l));
+}
+
+async function readLeaders() {
+  const data = JSON.parse((await readFile(LEADERS_FILE_NAME)).toString()) as {
+    [key: string]: SlotList;
+  };
+  return data;
+}
+
+function getSwappedAmounts(instructionWithSwap: any) {
+  const swapDataBuy = instructionWithSwap.instructions?.filter((x: any) => x.parsed?.info.amount !== undefined);
+  if (swapDataBuy !== undefined) {
+    const sol = swapDataBuy.find(
+      (x: any) => x.parsed.info.authority !== '5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1',
+    );
+    if (sol) {
+      const other = swapDataBuy.find(
+        (x: any) => x.parsed.info.authority === '5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1',
+      );
+      const price = BigNumber(sol.parsed.info.amount as string).div(other.parsed.info.amount as string);
+      if (foundTokenData && bignumberInitialPrice) {
+        const percentageGain = price.minus(bignumberInitialPrice).div(bignumberInitialPrice).multipliedBy(100);
+        logger.info(percentageGain.toString());
+        const percentageGainNumber = Number(percentageGain.toFixed(5));
+        if (percentageGainNumber > 100) {
+          currentSuddenPriceIncrease++;
+        } else currentSuddenPriceIncrease = 0;
+        if (percentageGainNumber <= stopLossPrecents) {
+          logger.warn(`Selling at LOSS, loss ${percentageGain}%, addr ${foundTokenData!.mint.toString()}`);
+          sellOnActionGeyser(foundTokenData!);
+          return;
+        }
+        if (percentageGainNumber >= takeProfitPercents) {
+          if (percentageGainNumber > 100) {
+            if (currentSuddenPriceIncrease >= 8) {
+              logger.info(`Selling at TAKEPROFIT, increase ${percentageGain}, addr ${foundTokenData!.mint.toString()}`);
+              sellOnActionGeyser(foundTokenData!);
+              return;
+            } else return;
+          }
+          logger.info(`Selling at TAKEPROFIT, increase ${percentageGain}%, addr ${foundTokenData!.mint.toString()}`);
+          sellOnActionGeyser(foundTokenData!);
+
+          return;
+        }
+        if (new Date() >= timeToSellTimeoutGeyser!) {
+          logger.info(`Selling at TIMEOUT, change ${percentageGain}%, addr ${foundTokenData!.mint.toString()}`);
+          sellOnActionGeyser(foundTokenData!);
+          return;
+        }
+      }
+    }
+  }
+}
+
+async function sellOnActionGeyser(account: RawAccount) {
+  bignumberInitialPrice = undefined;
+  foundTokenData = undefined;
+  const packet = await sellJito(
+    account.mint,
+    account.amount,
+    existingTokenAccountsExtended,
+    quoteTokenAssociatedAddress,
+  );
+  if (packet !== undefined) {
+    bundleIdProcessQueue.push({
+      bundleId: packet,
+      failAction: async () => {
+        const packet = await sellJito(
+          account!.mint,
+          account!.amount,
+          existingTokenAccountsExtended,
+          quoteTokenAssociatedAddress,
+        );
+        bundleIdProcessQueue.push({ bundleId: packet!, failAction: undefined });
+      },
+    });
+  }
 }
 
 export async function processRaydiumPool(id: PublicKey, poolState: LiquidityStateV4, hash: string) {
@@ -444,67 +601,75 @@ async function listenToChanges() {
       if (gotWalletToken) return;
       gotWalletToken = true;
       logger.info(`Monitoring`);
-      let priceFetchTry = 0;
-      const watchTokenAddress = accountData.mint.toString();
-      console.log(price);
-      while (price === 0) {
-        price = (await getTokenPrice(watchTokenAddress)) ?? 0;
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        priceFetchTry += 1;
-        console.log(priceFetchTry);
-        if (priceFetchTry >= 15) {
-          logger.warn('Cannot get token price so selling');
-          const packet = await sellJito(
-            accountData.mint,
-            accountData.amount,
-            existingTokenAccountsExtended,
-            quoteTokenAssociatedAddress,
-          );
-          if (packet !== undefined) {
-            bundleIdProcessQueue.push({
-              bundleId: packet,
-              failAction: async () => {
-                const packet = await sellJito(
-                  accountData.mint,
-                  accountData.amount,
-                  existingTokenAccountsExtended,
-                  quoteTokenAssociatedAddress,
-                );
-                bundleIdProcessQueue.push({ bundleId: packet!, failAction: undefined });
-              },
-            });
-          }
-          // gotWalletToken = false;
-          // processing = false;
-          // price = 0;
-          return;
-        }
-      }
-      monitorToken(watchTokenAddress, price, async () => {
-        const packet = await sellJito(
-          accountData.mint,
-          accountData.amount,
-          existingTokenAccountsExtended,
-          quoteTokenAssociatedAddress,
-        );
-        if (packet !== undefined) {
-          bundleIdProcessQueue.push({
-            bundleId: packet,
-            failAction: async () => {
-              const packet = await sellJito(
-                accountData.mint,
-                accountData.amount,
-                existingTokenAccountsExtended,
-                quoteTokenAssociatedAddress,
-              );
-              bundleIdProcessQueue.push({ bundleId: packet!, failAction: undefined });
-            },
-          });
-        }
-        gotWalletToken = false;
-        processing = false;
-        price = 0;
-      });
+      timeToSellTimeoutGeyser = new Date();
+      timeToSellTimeoutGeyser.setTime(timeToSellTimeoutGeyser.getTime() + 60 * 1000);
+      foundTokenData = accountData;
+      const solAmount = Number(process.env.SWAP_SOL_AMOUNT!);
+      const solAmountBn = BigNumber(solAmount).multipliedBy('1000000000');
+      bignumberInitialPrice = solAmountBn.div(BigNumber(accountData.amount.toString()));
+      console.log(accountData.mint);
+      // let priceFetchTry = 0;
+      // const watchTokenAddress = accountData.mint.toString();
+      // console.log(price);
+      // while (price === 0) {
+      //   price = (await getTokenPrice(watchTokenAddress)) ?? 0;
+      //   await new Promise((resolve) => setTimeout(resolve, 500));
+      //   priceFetchTry += 1;
+      //   console.log(priceFetchTry);
+      //   if (priceFetchTry >= 15) {
+      //     logger.warn('Cannot get token price so selling');
+      //     const packet = await sellJito(
+      //       accountData.mint,
+      //       accountData.amount,
+      //       existingTokenAccountsExtended,
+      //       quoteTokenAssociatedAddress,
+      //     );
+      //     if (packet !== undefined) {
+      //       bundleIdProcessQueue.push({
+      //         bundleId: packet,
+      //         failAction: async () => {
+      //           const packet = await sellJito(
+      //             accountData.mint,
+      //             accountData.amount,
+      //             existingTokenAccountsExtended,
+      //             quoteTokenAssociatedAddress,
+      //           );
+      //           bundleIdProcessQueue.push({ bundleId: packet!, failAction: undefined });
+      //         },
+      //       });
+      //     }
+      //     // gotWalletToken = false;
+      //     // processing = false;
+      //     // price = 0;
+      //     return;
+      //   }
+      // }
+
+      // monitorToken(watchTokenAddress, price, async () => {
+      //   const packet = await sellJito(
+      //     accountData.mint,
+      //     accountData.amount,
+      //     existingTokenAccountsExtended,
+      //     quoteTokenAssociatedAddress,
+      //   );
+      //   if (packet !== undefined) {
+      //     bundleIdProcessQueue.push({
+      //       bundleId: packet,
+      //       failAction: async () => {
+      //         const packet = await sellJito(
+      //           accountData.mint,
+      //           accountData.amount,
+      //           existingTokenAccountsExtended,
+      //           quoteTokenAssociatedAddress,
+      //         );
+      //         bundleIdProcessQueue.push({ bundleId: packet!, failAction: undefined });
+      //       },
+      //     });
+      //   }
+      //   gotWalletToken = false;
+      //   processing = false;
+      //   price = 0;
+      // });
     },
     process.env.COMMITMENT as Commitment,
     [
@@ -523,8 +688,6 @@ async function listenToChanges() {
 
 async function monitorToken(address: string, initialPrice: number, sell: any) {
   console.log('monitorToken');
-  const stopLossPrecents = Number(process.env.STOP_LOSS_PERCENTS!) * -1;
-  const takeProfitPercents = Number(process.env.TAKE_PROFIT_PERCENTS!);
   const timeToSellTimeout = new Date();
   timeToSellTimeout.setTime(timeToSellTimeout.getTime() + 60 * 1000);
   let timeToSellTimeoutByPriceNotChanging = new Date();
