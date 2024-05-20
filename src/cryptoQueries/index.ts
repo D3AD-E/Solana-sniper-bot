@@ -372,7 +372,7 @@ export async function sellJito(
     logger.warn(`Empty balance, can't sell`);
     return undefined;
   }
-  const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash('processed');
+  const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash('confirmed');
 
   const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
     {

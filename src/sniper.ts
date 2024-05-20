@@ -435,7 +435,7 @@ export async function processGeyserLiquidity(id: PublicKey, poolState: Liquidity
   logger.info(
     `Processing pool: ${poolState.baseMint.toString()} with ${poolSize.toFixed()} ${quoteToken.symbol} in liquidity`,
   );
-  const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash('finalized');
+  const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash('confirmed');
   const packet = await buyJito(
     id,
     poolState,
