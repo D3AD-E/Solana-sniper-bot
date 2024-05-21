@@ -17,6 +17,7 @@ import { MinimalTokenAccountData } from './cryptoQueries/cryptoQueries.types';
 import BigNumber from 'bignumber.js';
 import WebSocket from 'ws';
 import { exit } from 'process';
+import { sendMessage } from './telegramBot';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
@@ -38,6 +39,7 @@ let lastRequest: any | undefined = undefined;
 let foundTokenData: RawAccount | undefined = undefined;
 let timeToSellTimeoutGeyser: Date | undefined = undefined;
 let currentSuddenPriceIncrease = 0;
+let currentSuddenPriceDecrease = 0;
 let currentTokenSwaps = 0;
 
 export default async function snipe(): Promise<void> {
@@ -186,11 +188,8 @@ function setupLiquiditySocket() {
                   processingToken = false;
                 } else if (!foundTokenData && !bignumberInitialPrice && processingToken && !gotWalletToken) {
                   logger.warn('Websocket took too long');
-                  const tokenAccounts = await getTokenAccounts(
-                    solanaConnection,
-                    wallet.publicKey,
-                    process.env.COMMITMENT as Commitment,
-                  );
+                  const tokenAccounts = await getTokenAccounts(solanaConnection, wallet.publicKey, 'processed');
+                  await new Promise((resolve) => setTimeout(resolve, 500));
                   logger.info('Currentkey ' + currentTokenKey);
                   const tokenAccount = tokenAccounts.find(
                     (acc) => acc.accountInfo.mint.toString() === currentTokenKey,
@@ -320,6 +319,8 @@ function setupPairSocket() {
 }
 
 function getSwappedAmounts(instructionWithSwap: any) {
+  const suddenGainThreshold = 200;
+  const suddenLossThreshold = -90;
   const swapDataBuy = instructionWithSwap.instructions?.filter((x: any) => x.parsed?.info.amount !== undefined);
   if (swapDataBuy !== undefined) {
     const sol = swapDataBuy.find(
@@ -341,16 +342,26 @@ function getSwappedAmounts(instructionWithSwap: any) {
         if (percentageGainNumber < 0) logger.warn(percentageGain.toString());
         else logger.info(percentageGain.toString());
 
-        if (percentageGainNumber > 100) {
+        if (percentageGainNumber > suddenGainThreshold) {
           currentSuddenPriceIncrease++;
         } else currentSuddenPriceIncrease = 0;
+        if (percentageGainNumber < suddenLossThreshold) {
+          currentSuddenPriceDecrease++;
+        } else currentSuddenPriceDecrease = 0;
         if (percentageGainNumber <= stopLossPrecents) {
+          if (percentageGainNumber < suddenLossThreshold) {
+            if (currentSuddenPriceDecrease >= 6) {
+              logger.info(`Selling at LOSS, loss ${percentageGain}, addr ${foundTokenData!.mint.toString()}`);
+              sellOnActionGeyser(foundTokenData!);
+              return;
+            } else return;
+          }
           logger.warn(`Selling at LOSS, loss ${percentageGain}%, addr ${foundTokenData!.mint.toString()}`);
           sellOnActionGeyser(foundTokenData!);
           return;
         }
         if (percentageGainNumber >= takeProfitPercents) {
-          if (percentageGainNumber > 200) {
+          if (percentageGainNumber > suddenGainThreshold) {
             if (currentSuddenPriceIncrease >= 6) {
               logger.info(`Selling at TAKEPROFIT, increase ${percentageGain}, addr ${foundTokenData!.mint.toString()}`);
               sellOnActionGeyser(foundTokenData!);
@@ -379,8 +390,9 @@ async function sellOnActionGeyser(account: RawAccount) {
   gotWalletToken = false;
   processingToken = false;
   currentTokenSwaps++;
-  if (currentTokenSwaps > 5) {
+  if (currentTokenSwaps > 10) {
     exit();
+    //todo fix geyser price sometimes being too high/too low
   }
 }
 
@@ -452,19 +464,20 @@ async function listenToChanges() {
       if (accountData.mint.toString() === quoteToken.mint.toString()) {
         const walletBalance = new TokenAmount(Token.WSOL, accountData.amount, true);
         logger.info('WSOL amount change ' + walletBalance.toFixed(4));
+        sendMessage(`💸WSOL change ${walletBalance.toFixed(4)}`);
         return;
       }
       if (updatedAccountInfo.accountId.equals(quoteTokenAssociatedAddress)) {
         return;
       }
+      if (currentTokenKey !== accountData.mint.toString()) {
+        console.log(currentTokenKey, accountData.mint.toString());
+        logger.warn('Got unknown token in wallet');
+        return;
+      }
       if (gotWalletToken) return;
       gotWalletToken = true;
       logger.info(`Monitoring`);
-      if (currentTokenKey !== accountData.mint.toString()) {
-        logger.warn('Got unknown token in wallet');
-        gotWalletToken = true;
-        return;
-      }
       timeToSellTimeoutGeyser = new Date();
       timeToSellTimeoutGeyser.setTime(timeToSellTimeoutGeyser.getTime() + timoutSec * 1000);
       foundTokenData = accountData;
