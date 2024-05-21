@@ -239,11 +239,7 @@ export async function buy(
 
   if (!tokenAccount) {
     // it's possible that we didn't have time to fetch open book data
-    const market = await getMinimalMarketV3(
-      solanaConnection,
-      accountData.marketId,
-      process.env.COMMITMENT as Commitment,
-    );
+    const market = await getMinimalMarketV3(solanaConnection, accountData.marketId, 'processed');
     tokenAccount = saveTokenAccount(accountData.baseMint, market);
     existingTokenAccounts.set(accountData.baseMint.toString(), tokenAccount);
   }
@@ -278,6 +274,7 @@ export async function buy(
       ...innerTransaction.instructions,
     ],
   }).compileToV0Message();
+
   const transaction = new VersionedTransaction(messageV0);
   transaction.sign([wallet, ...innerTransaction.signers]);
 
@@ -285,6 +282,7 @@ export async function buy(
     skipPreflight: true,
   });
   logger.info(signature);
+  return signature;
 }
 
 export async function buyJito(
@@ -409,6 +407,64 @@ export async function sellJito(
   }).compileToV0Message();
   const transaction = new VersionedTransaction(messageV0);
   return await confirmTransactionJito(transaction, recentBlockhashForSwap.blockhash);
+}
+
+export async function sell(
+  mint: PublicKey,
+  amount: BigNumberish,
+  existingTokenAccounts: Map<string, MinimalTokenAccountData>,
+  quoteTokenAccountAddress: PublicKey,
+): Promise<string | undefined> {
+  const tokenAccount = existingTokenAccounts.get(mint.toString());
+
+  if (!tokenAccount) {
+    return undefined;
+  }
+
+  if (!tokenAccount.poolKeys) {
+    logger.warn('No pool keys found');
+    return undefined;
+  }
+
+  if (amount === 0) {
+    logger.warn(`Empty balance, can't sell`);
+    return undefined;
+  }
+  const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash({
+    commitment: 'finalized',
+  });
+
+  const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
+    {
+      poolKeys: tokenAccount.poolKeys!,
+      userKeys: {
+        tokenAccountOut: quoteTokenAccountAddress,
+        tokenAccountIn: tokenAccount.address,
+        owner: wallet.publicKey,
+      },
+      amountIn: amount,
+      minAmountOut: 0,
+    },
+    tokenAccount.poolKeys!.version,
+  );
+
+  const messageV0 = new TransactionMessage({
+    payerKey: wallet.publicKey,
+    recentBlockhash: recentBlockhashForSwap.blockhash,
+    instructions: [
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 421197 }),
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 101337 }),
+      ...innerTransaction.instructions,
+      createCloseAccountInstruction(tokenAccount.address, wallet.publicKey, wallet.publicKey),
+    ],
+  }).compileToV0Message();
+  const transaction = new VersionedTransaction(messageV0);
+  transaction.sign([wallet, ...innerTransaction.signers]);
+
+  const signature = await solanaConnection.sendRawTransaction(transaction.serialize(), {
+    skipPreflight: true,
+  });
+  logger.info(signature);
 }
 
 export async function getPoolKeys(base: PublicKey, quote: PublicKey) {

@@ -8,71 +8,41 @@ import {
   MarketStateV3,
 } from '@raydium-io/raydium-sdk';
 import { AccountLayout, RawAccount, getMint } from '@solana/spl-token';
-import { Commitment, KeyedAccountInfo, PublicKey } from '@solana/web3.js';
-import { buyJito, getTokenAccounts, saveTokenAccount, sellJito } from './cryptoQueries';
+import { Commitment, KeyedAccountInfo, PublicKey, TransactionConfirmationStrategy } from '@solana/web3.js';
+import { buy, getTokenAccounts, saveTokenAccount, sell } from './cryptoQueries';
 import logger from './utils/logger';
 import { solanaConnection, wallet } from './solana';
-import { LEADERS_FILE_NAME } from './constants';
 import { OPENBOOK_PROGRAM_ID, RAYDIUM_LIQUIDITY_PROGRAM_ID_V4 } from './cryptoQueries/raydiumSwapUtils/liquidity';
-import { readFile, writeFile } from 'fs/promises';
-import { getTokenPrice } from './birdEye';
-import { BundlePacket } from './listener.types';
 import { MinimalTokenAccountData } from './cryptoQueries/cryptoQueries.types';
-import { JitoClient } from './jito/searcher';
 import BigNumber from 'bignumber.js';
-import { SearcherClient } from 'jito-ts/dist/sdk/block-engine/searcher';
 import WebSocket from 'ws';
-import { SlotList } from 'jito-ts/dist/gen/block-engine/searcher';
-import { refreshLeaders, readLeaders } from './jito/leaders';
+import { exit } from 'process';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
 let swapAmount: TokenAmount;
 let quoteTokenAssociatedAddress: PublicKey;
-const existingLiquidityPools: Set<string> = new Set<string>();
 const existingTokenAccountsExtended: Map<string, MinimalTokenAccountData> = new Map<string, MinimalTokenAccountData>();
 const existingOpenBookMarkets: Set<string> = new Set<string>();
-let client: SearcherClient | undefined = undefined;
-let bundleIdProcessQueue: BundlePacket[] = [];
 let currentTokenKey = '';
 let bignumberInitialPrice: BigNumber | undefined = undefined;
 let wsPairs: WebSocket | undefined = undefined;
 let ws: WebSocket | undefined = undefined;
 const stopLossPrecents = Number(process.env.STOP_LOSS_PERCENTS!) * -1;
 const takeProfitPercents = Number(process.env.TAKE_PROFIT_PERCENTS!);
-const blocksMin = Number(process.env.BLOCKS_MIN_LIMIT!);
-const blocksMax = Number(process.env.BLOCKS_MAX_LIMIT!);
 const timoutSec = Number(process.env.SELL_TIMEOUT_SEC!);
 let processingToken = false;
 let gotWalletToken = false;
 
+let lastRequest: any | undefined = undefined;
 let foundTokenData: RawAccount | undefined = undefined;
 let timeToSellTimeoutGeyser: Date | undefined = undefined;
 let currentSuddenPriceIncrease = 0;
-let leaders:
-  | {
-      [key: string]: SlotList;
-    }
-  | undefined = undefined;
+let currentTokenSwaps = 0;
+
 export default async function snipe(): Promise<void> {
-  await refreshLeaders();
-  leaders = await readLeaders();
   setupPairSocket();
   setupLiquiditySocket();
-
-  // const tips = new WebSocket('ws://bundles-api-rest.jito.wtf/api/v1/bundles/tip_stream');
-
-  // tips.on('open', function open() {});
-  // tips.on('message', async function incoming(data) {
-  //   const messageStr = data.toString();
-  //   try {
-  //     var jData = JSON.parse(messageStr);
-  //     console.log(messageStr);
-  //   } catch (e) {
-  //     console.error('Failed to parse JSON:', e);
-  //   }
-  // });
-
   logger.info(`Wallet Address: ${wallet.publicKey}`);
   swapAmount = new TokenAmount(Token.WSOL, process.env.SWAP_SOL_AMOUNT, false);
   logger.info(`Swap sol amount: ${swapAmount.toFixed()} ${quoteToken.symbol}`);
@@ -88,42 +58,6 @@ export default async function snipe(): Promise<void> {
     throw new Error(`No ${quoteToken.symbol} token account found in wallet: ${wallet.publicKey}`);
   }
   quoteTokenAssociatedAddress = tokenAccount.pubkey;
-  client = await JitoClient.getInstance();
-  client.onBundleResult(
-    async (bundleResult) => {
-      const bundlePacket = bundleIdProcessQueue.find((x) => x.bundleId === bundleResult.bundleId);
-      if (bundlePacket !== undefined) {
-        console.log('result:', bundleResult);
-        logger.info('Res');
-        console.log(
-          bundleResult.rejected?.simulationFailure?.msg?.endsWith('Blockhash not found]') &&
-            bundlePacket.failAction !== undefined,
-          bundleResult.rejected?.simulationFailure?.msg?.endsWith('Blockhash not found]'),
-          bundlePacket.failAction !== undefined,
-        );
-        if (
-          bundleResult.rejected?.simulationFailure?.msg?.endsWith('Blockhash not found]') &&
-          bundlePacket.failAction !== undefined
-        ) {
-          await new Promise((resolve) => setTimeout(resolve, 3000));
-          bundlePacket.failAction();
-          await new Promise((resolve) => setTimeout(resolve, 3000));
-          bundlePacket.failAction();
-          await new Promise((resolve) => setTimeout(resolve, 3000));
-          bundlePacket.failAction();
-          return;
-        }
-        bundleIdProcessQueue = bundleIdProcessQueue.filter((item) => item.bundleId !== bundlePacket.bundleId);
-        return bundleResult.bundleId;
-      }
-    },
-    (e) => {
-      logger.warn('Error');
-      console.error(e);
-      // if (retry) retry();
-      // throw e;
-    },
-  );
   await listenToChanges();
 }
 
@@ -173,7 +107,7 @@ function setupLiquiditySocket() {
           const mint2 = inner[16];
           const isFirstMintSol = mint1.parsed.info.mint === 'So11111111111111111111111111111111111111112';
           const mintAddress = isFirstMintSol ? mint2.parsed.info.mint : mint1.parsed.info.mint;
-          logger.info(mintAddress);
+          logger.info('Mint ' + mintAddress);
           const mintAccount = await getMint(
             solanaConnection,
             new PublicKey(mintAddress),
@@ -181,12 +115,6 @@ function setupLiquiditySocket() {
           );
           if (mintAccount.freezeAuthority !== null) {
             logger.warn('Token can be frozen, skipping');
-            processingToken = false;
-            return;
-          }
-          const isBlockSuitable = await isNextAuctionBlockSoon();
-          if (!isBlockSuitable) {
-            logger.warn('Block is too far');
             processingToken = false;
             return;
           }
@@ -250,12 +178,41 @@ function setupLiquiditySocket() {
               new PublicKey(inner[inner.length - 13].parsed.info.account),
               sampleKeys,
             );
-            if (!packet) {
-              logger.warn('Leader too far');
-              processingToken = false;
-              return;
-            }
-            bundleIdProcessQueue.push({ bundleId: packet!, failAction: undefined });
+            solanaConnection
+              .confirmTransaction(packet as TransactionConfirmationStrategy, 'finalized')
+              .then(async (confirmation) => {
+                if (confirmation.value.err) {
+                  logger.warn('Send buy bundle but if failed');
+                  processingToken = false;
+                } else if (!foundTokenData && !bignumberInitialPrice && processingToken && !gotWalletToken) {
+                  logger.warn('Websocket took too long');
+                  const tokenAccounts = await getTokenAccounts(
+                    solanaConnection,
+                    wallet.publicKey,
+                    process.env.COMMITMENT as Commitment,
+                  );
+                  logger.info('Currentkey ' + currentTokenKey);
+                  const tokenAccount = tokenAccounts.find(
+                    (acc) => acc.accountInfo.mint.toString() === currentTokenKey,
+                  )!;
+                  if (!tokenAccount) {
+                    logger.info(`No token account found in wallet, but it succeeded`);
+                    return;
+                  }
+                  logger.info(`Selling bc didnt get token`);
+                  sellOnActionGeyser({
+                    ...tokenAccount.accountInfo,
+                    delegateOption: tokenAccount.accountInfo.delegateOption === 1 ? 1 : 0,
+                    isNativeOption: tokenAccount.accountInfo.isNativeOption === 1 ? 1 : 0,
+                    closeAuthorityOption: tokenAccount.accountInfo.closeAuthorityOption === 1 ? 1 : 0,
+                  });
+                }
+              })
+              .catch((e) => {
+                console.log(e);
+                logger.warn('TX hash expired, hopefully we didnt crash');
+                processingToken = false;
+              });
           } catch (e) {
             logger.warn('Buy failed');
             console.error(e);
@@ -263,7 +220,7 @@ function setupLiquiditySocket() {
             return;
           }
           logger.info('Listening to geyser Pair');
-          const request = {
+          lastRequest = {
             jsonrpc: '2.0',
             id: 420,
             method: 'transactionSubscribe',
@@ -282,13 +239,7 @@ function setupLiquiditySocket() {
               },
             ],
           };
-          wsPairs!.send(JSON.stringify(request));
-          const timeout = setTimeout(() => {
-            if (processingToken && !gotWalletToken) {
-              logger.warn('Send buy bundle but if failed');
-              processingToken = false;
-            }
-          }, 30000);
+          wsPairs!.send(JSON.stringify(lastRequest));
         }
       }
     } catch (e) {
@@ -298,14 +249,39 @@ function setupLiquiditySocket() {
   ws.on('error', function error(err) {
     console.error('WebSocket error:', err);
   });
-  ws.on('close', function close() {
+  ws.on('close', async function close() {
     console.log('WebSocket is closed');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    setupLiquiditySocket();
   });
 }
 
 function setupPairSocket() {
   wsPairs = new WebSocket(process.env.GEYSER_ENDPOINT!);
-  wsPairs.on('open', function open() {});
+  wsPairs.on('open', function open() {
+    if (lastRequest) {
+      lastRequest = {
+        jsonrpc: '2.0',
+        id: 420,
+        method: 'transactionSubscribe',
+        params: [
+          {
+            vote: false,
+            failed: false,
+            accountInclude: [currentTokenKey],
+          },
+          {
+            commitment: 'processed',
+            encoding: 'jsonParsed',
+            transactionDetails: 'full',
+            showRewards: false,
+            maxSupportedTransactionVersion: 1,
+          },
+        ],
+      };
+      wsPairs!.send(JSON.stringify(lastRequest));
+    }
+  });
   wsPairs.on('message', async function incoming(data) {
     const messageStr = data.toString();
     try {
@@ -335,26 +311,12 @@ function setupPairSocket() {
   wsPairs.on('error', function error(err) {
     console.error('WebSocket error:', err);
   });
-  wsPairs.on('close', function close() {
+  wsPairs.on('close', async function close() {
     console.log('WebSocket is closed');
+    // throw 'Websocket closed';
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    setupPairSocket();
   });
-}
-
-async function isNextAuctionBlockSoon() {
-  const j = await JitoClient.getInstance();
-  const b = await j.getNextScheduledLeader();
-
-  const currentBlock = b.currentSlot;
-  console.log(currentBlock);
-  for (const l in leaders) {
-    const leader = leaders[l];
-    const block = leader.slots.find((s) => s - currentBlock <= blocksMax && s - currentBlock > blocksMin);
-    if (block) {
-      console.log(block, l);
-      return true;
-    }
-  }
-  return false;
 }
 
 function getSwappedAmounts(instructionWithSwap: any) {
@@ -367,11 +329,18 @@ function getSwappedAmounts(instructionWithSwap: any) {
       const other = swapDataBuy.find(
         (x: any) => x.parsed.info.authority === '5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1',
       );
-      const price = BigNumber(sol.parsed.info.amount as string).div(other.parsed.info.amount as string);
       if (foundTokenData && bignumberInitialPrice) {
+        if (sol === undefined || other === undefined) {
+          logger.warn(`Geyser is broken, selling`);
+          sellOnActionGeyser(foundTokenData!);
+          return;
+        }
+        const price = BigNumber(sol.parsed.info.amount as string).div(other.parsed.info.amount as string);
         const percentageGain = price.minus(bignumberInitialPrice).div(bignumberInitialPrice).multipliedBy(100);
-        logger.info(percentageGain.toString());
         const percentageGainNumber = Number(percentageGain.toFixed(5));
+        if (percentageGainNumber < 0) logger.warn(percentageGain.toString());
+        else logger.info(percentageGain.toString());
+
         if (percentageGainNumber > 100) {
           currentSuddenPriceIncrease++;
         } else currentSuddenPriceIncrease = 0;
@@ -381,8 +350,8 @@ function getSwappedAmounts(instructionWithSwap: any) {
           return;
         }
         if (percentageGainNumber >= takeProfitPercents) {
-          if (percentageGainNumber > 100) {
-            if (currentSuddenPriceIncrease >= 8) {
+          if (percentageGainNumber > 200) {
+            if (currentSuddenPriceIncrease >= 6) {
               logger.info(`Selling at TAKEPROFIT, increase ${percentageGain}, addr ${foundTokenData!.mint.toString()}`);
               sellOnActionGeyser(foundTokenData!);
               return;
@@ -406,44 +375,38 @@ function getSwappedAmounts(instructionWithSwap: any) {
 async function sellOnActionGeyser(account: RawAccount) {
   bignumberInitialPrice = undefined;
   foundTokenData = undefined;
-  // gotWalletToken = false;
-  // processingToken = false;
-  const packet = await sellJito(
-    account.mint,
-    account.amount,
-    existingTokenAccountsExtended,
-    quoteTokenAssociatedAddress,
-  );
-  if (packet !== undefined) {
-    bundleIdProcessQueue.push({
-      bundleId: packet,
-      failAction: async () => {
-        const packet = await sellJito(
-          account!.mint,
-          account!.amount,
-          existingTokenAccountsExtended,
-          quoteTokenAssociatedAddress,
-        );
-        bundleIdProcessQueue.push({ bundleId: packet!, failAction: undefined });
-      },
-    });
+  await sell(account.mint, account.amount, existingTokenAccountsExtended, quoteTokenAssociatedAddress);
+  gotWalletToken = false;
+  processingToken = false;
+  currentTokenSwaps++;
+  if (currentTokenSwaps > 5) {
+    exit();
   }
 }
 
-export async function processGeyserLiquidity(id: PublicKey, poolState: LiquidityStateV4) {
+export async function processGeyserLiquidity(
+  id: PublicKey,
+  poolState: LiquidityStateV4,
+): Promise<TransactionConfirmationStrategy> {
   const poolSize = new TokenAmount(quoteToken, poolState.swapQuoteInAmount, true);
   logger.info(
     `Processing pool: ${poolState.baseMint.toString()} with ${poolSize.toFixed()} ${quoteToken.symbol} in liquidity`,
   );
-  const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash('confirmed');
-  const packet = await buyJito(
+  const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash({
+    commitment: 'finalized',
+  });
+  const signature = await buy(
     id,
     poolState,
     existingTokenAccountsExtended,
     quoteTokenAssociatedAddress,
     recentBlockhashForSwap.blockhash,
   );
-  return packet;
+  return {
+    signature: signature!,
+    lastValidBlockHeight: recentBlockhashForSwap.lastValidBlockHeight,
+    blockhash: recentBlockhashForSwap.blockhash,
+  };
 }
 
 export async function processOpenBookMarket(updatedAccountInfo: KeyedAccountInfo) {
@@ -456,7 +419,6 @@ export async function processOpenBookMarket(updatedAccountInfo: KeyedAccountInfo
     }
     const token = saveTokenAccount(accountData.baseMint, accountData);
     existingTokenAccountsExtended.set(accountData.baseMint.toString(), token);
-    // logger.info(accountData.baseMint.toString());
   } catch (e) {
     logger.debug(e);
   }
@@ -490,11 +452,6 @@ async function listenToChanges() {
       if (accountData.mint.toString() === quoteToken.mint.toString()) {
         const walletBalance = new TokenAmount(Token.WSOL, accountData.amount, true);
         logger.info('WSOL amount change ' + walletBalance.toFixed(4));
-        if (gotWalletToken) {
-          // gotWalletToken = false;
-          // processing = false;
-          // price = 0;
-        }
         return;
       }
       if (updatedAccountInfo.accountId.equals(quoteTokenAssociatedAddress)) {
@@ -516,7 +473,7 @@ async function listenToChanges() {
       bignumberInitialPrice = solAmountBn.div(BigNumber(accountData.amount.toString()));
       console.log(accountData.mint);
     },
-    process.env.COMMITMENT as Commitment,
+    'processed' as Commitment,
     [
       {
         dataSize: 165,
