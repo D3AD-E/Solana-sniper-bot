@@ -263,7 +263,7 @@ export async function buy(
     payerKey: wallet.publicKey,
     recentBlockhash: hash,
     instructions: [
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 421197 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 821197 }),
       ComputeBudgetProgram.setComputeUnitLimit({ units: 101337 }),
       createAssociatedTokenAccountIdempotentInstruction(
         wallet.publicKey,

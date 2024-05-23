@@ -18,6 +18,7 @@ import BigNumber from 'bignumber.js';
 import WebSocket from 'ws';
 import { exit } from 'process';
 import { sendMessage } from './telegramBot';
+import { getTokenPrice } from './birdEye';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
@@ -37,6 +38,7 @@ let gotWalletToken = false;
 
 let lastRequest: any | undefined = undefined;
 let foundTokenData: RawAccount | undefined = undefined;
+let birdeyePrice: number | undefined = undefined;
 let timeToSellTimeoutGeyser: Date | undefined = undefined;
 let currentSuddenPriceIncrease = 0;
 let currentSuddenPriceDecrease = 0;
@@ -242,7 +244,10 @@ function setupLiquiditySocket() {
         }
       }
     } catch (e) {
+      console.log(messageStr);
+
       console.error('Failed to parse JSON:', e);
+      setupLiquiditySocket();
     }
   });
   ws.on('error', function error(err) {
@@ -304,7 +309,10 @@ function setupPairSocket() {
         getSwappedAmounts(instructionWithSwapBuy2);
       }
     } catch (e) {
+      console.log(messageStr);
       console.error('Failed to parse JSON:', e);
+      if (foundTokenData) sellOnActionGeyser(foundTokenData);
+      setupPairSocket();
     }
   });
   wsPairs.on('error', function error(err) {
@@ -318,9 +326,9 @@ function setupPairSocket() {
   });
 }
 
-function getSwappedAmounts(instructionWithSwap: any) {
+async function getSwappedAmounts(instructionWithSwap: any) {
   const suddenGainThreshold = 200;
-  const suddenLossThreshold = -90;
+  const suddenLossThreshold = -80;
   const swapDataBuy = instructionWithSwap.instructions?.filter((x: any) => x.parsed?.info.amount !== undefined);
   if (swapDataBuy !== undefined) {
     const sol = swapDataBuy.find(
@@ -330,16 +338,36 @@ function getSwappedAmounts(instructionWithSwap: any) {
       const other = swapDataBuy.find(
         (x: any) => x.parsed.info.authority === '5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1',
       );
-      if (foundTokenData && bignumberInitialPrice) {
+      if (foundTokenData) {
         if (sol === undefined || other === undefined) {
           logger.warn(`Geyser is broken, selling`);
           sellOnActionGeyser(foundTokenData!);
           return;
         }
         const price = BigNumber(sol.parsed.info.amount as string).div(other.parsed.info.amount as string);
+        const tokenPrice = await getTokenPrice(currentTokenKey);
+        if (birdeyePrice === undefined) {
+          birdeyePrice = tokenPrice;
+        }
+        if (!bignumberInitialPrice) {
+          bignumberInitialPrice = price;
+          return;
+        }
+        let birdPercentage = undefined;
+        if (tokenPrice && birdeyePrice !== undefined)
+          birdPercentage = ((tokenPrice - birdeyePrice) / birdeyePrice) * 100;
+        console.log(birdPercentage);
         const percentageGain = price.minus(bignumberInitialPrice).div(bignumberInitialPrice).multipliedBy(100);
-        const percentageGainNumber = Number(percentageGain.toFixed(5));
-        if (percentageGainNumber < 0) logger.warn(percentageGain.toString());
+        let percentageGainNumber = Number(percentageGain.toFixed(5));
+        if (
+          birdPercentage !== undefined &&
+          birdPercentage !== 0 &&
+          (percentageGainNumber > 100 || percentageGainNumber < -50)
+        )
+          percentageGainNumber =
+            Math.abs(birdPercentage) > Math.abs(percentageGainNumber) ? percentageGainNumber : birdPercentage;
+
+        if (Number(percentageGain.toFixed(5)) < 0) logger.warn(percentageGain.toString());
         else logger.info(percentageGain.toString());
 
         if (percentageGainNumber > suddenGainThreshold) {
@@ -350,32 +378,41 @@ function getSwappedAmounts(instructionWithSwap: any) {
         } else currentSuddenPriceDecrease = 0;
         if (percentageGainNumber <= stopLossPrecents) {
           if (percentageGainNumber < suddenLossThreshold) {
-            if (currentSuddenPriceDecrease >= 6) {
-              logger.info(`Selling at LOSS, loss ${percentageGain}, addr ${foundTokenData!.mint.toString()}`);
-              sellOnActionGeyser(foundTokenData!);
+            if (currentSuddenPriceDecrease >= 8) {
+              if (!foundTokenData) return;
+              logger.info(`Selling at LOSS, loss ${percentageGainNumber}, addr ${foundTokenData!.mint.toString()}`);
+              await sellOnActionGeyser(foundTokenData!);
               return;
             } else return;
           }
-          logger.warn(`Selling at LOSS, loss ${percentageGain}%, addr ${foundTokenData!.mint.toString()}`);
-          sellOnActionGeyser(foundTokenData!);
+          if (!foundTokenData) return;
+          logger.warn(`Selling at LOSS, loss ${percentageGainNumber}%, addr ${foundTokenData!.mint.toString()}`);
+          await sellOnActionGeyser(foundTokenData!);
           return;
         }
         if (percentageGainNumber >= takeProfitPercents) {
           if (percentageGainNumber > suddenGainThreshold) {
-            if (currentSuddenPriceIncrease >= 6) {
-              logger.info(`Selling at TAKEPROFIT, increase ${percentageGain}, addr ${foundTokenData!.mint.toString()}`);
-              sellOnActionGeyser(foundTokenData!);
+            if (currentSuddenPriceIncrease >= 8) {
+              if (!foundTokenData) return;
+              logger.info(
+                `Selling at TAKEPROFIT, increase ${percentageGainNumber}, addr ${foundTokenData!.mint.toString()}`,
+              );
+              await sellOnActionGeyser(foundTokenData!);
               return;
             } else return;
           }
-          logger.info(`Selling at TAKEPROFIT, increase ${percentageGain}%, addr ${foundTokenData!.mint.toString()}`);
-          sellOnActionGeyser(foundTokenData!);
+          if (!foundTokenData) return;
+          logger.info(
+            `Selling at TAKEPROFIT, increase ${percentageGainNumber}%, addr ${foundTokenData!.mint.toString()}`,
+          );
+          await sellOnActionGeyser(foundTokenData!);
 
           return;
         }
         if (new Date() >= timeToSellTimeoutGeyser!) {
+          if (!foundTokenData) return;
           logger.info(`Selling at TIMEOUT, change ${percentageGain}%, addr ${foundTokenData!.mint.toString()}`);
-          sellOnActionGeyser(foundTokenData!);
+          await sellOnActionGeyser(foundTokenData!);
           return;
         }
       }
@@ -386,13 +423,13 @@ function getSwappedAmounts(instructionWithSwap: any) {
 async function sellOnActionGeyser(account: RawAccount) {
   bignumberInitialPrice = undefined;
   foundTokenData = undefined;
+  birdeyePrice = undefined;
   await sell(account.mint, account.amount, existingTokenAccountsExtended, quoteTokenAssociatedAddress);
   gotWalletToken = false;
   processingToken = false;
   currentTokenSwaps++;
-  if (currentTokenSwaps > 10) {
+  if (currentTokenSwaps > 3) {
     exit();
-    //todo fix geyser price sometimes being too high/too low
   }
 }
 
@@ -481,9 +518,9 @@ async function listenToChanges() {
       timeToSellTimeoutGeyser = new Date();
       timeToSellTimeoutGeyser.setTime(timeToSellTimeoutGeyser.getTime() + timoutSec * 1000);
       foundTokenData = accountData;
-      const solAmount = Number(process.env.SWAP_SOL_AMOUNT!);
-      const solAmountBn = BigNumber(solAmount).multipliedBy('1000000000');
-      bignumberInitialPrice = solAmountBn.div(BigNumber(accountData.amount.toString()));
+      // const solAmount = Number(process.env.SWAP_SOL_AMOUNT!);
+      // const solAmountBn = BigNumber(solAmount).multipliedBy('1000000000');
+      // bignumberInitialPrice = solAmountBn.div(BigNumber(accountData.amount.toString()));
       console.log(accountData.mint);
     },
     'processed' as Commitment,
