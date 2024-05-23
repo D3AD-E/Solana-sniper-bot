@@ -287,9 +287,11 @@ function setupPairSocket() {
     }
   });
   wsPairs.on('message', async function incoming(data) {
+    if (!foundTokenData) return;
     const messageStr = data.toString();
     try {
       var jData = JSON.parse(messageStr);
+      console.log(jData?.params?.result?.transaction?.transaction?.signatures);
       const instructionWithSwapSell = jData?.params?.result?.transaction?.meta?.innerInstructions[0];
       if (instructionWithSwapSell !== undefined) {
         getSwappedAmounts(instructionWithSwapSell);
@@ -328,7 +330,7 @@ function setupPairSocket() {
 
 async function getSwappedAmounts(instructionWithSwap: any) {
   const suddenGainThreshold = 200;
-  const suddenLossThreshold = -80;
+  const suddenLossThreshold = -50;
   const swapDataBuy = instructionWithSwap.instructions?.filter((x: any) => x.parsed?.info.amount !== undefined);
   if (swapDataBuy !== undefined) {
     const sol = swapDataBuy.find(
@@ -344,28 +346,25 @@ async function getSwappedAmounts(instructionWithSwap: any) {
           sellOnActionGeyser(foundTokenData!);
           return;
         }
-        const price = BigNumber(sol.parsed.info.amount as string).div(other.parsed.info.amount as string);
-        const tokenPrice = await getTokenPrice(currentTokenKey);
-        if (birdeyePrice === undefined) {
-          birdeyePrice = tokenPrice;
+        if (new Date() >= timeToSellTimeoutGeyser!) {
+          if (!foundTokenData) return;
+          logger.info(`Selling at TIMEOUT, change addr ${foundTokenData!.mint.toString()}`);
+          await sellOnActionGeyser(foundTokenData!);
+          return;
         }
+        let price = BigNumber(sol.parsed.info.amount as string).div(other.parsed.info.amount as string);
+        const isSolSwapped = price.gt(1);
+        if (isSolSwapped) price = BigNumber(other.parsed.info.amount as string).div(sol.parsed.info.amount as string);
         if (!bignumberInitialPrice) {
           bignumberInitialPrice = price;
           return;
         }
-        let birdPercentage = undefined;
-        if (tokenPrice && birdeyePrice !== undefined)
-          birdPercentage = ((tokenPrice - birdeyePrice) / birdeyePrice) * 100;
-        console.log(birdPercentage);
+        // const actualSolAmount = isSolSwapped
+        //   ? BigNumber(other.parsed.info.amount as string)
+        //   : BigNumber(sol.parsed.info.amount as string);
+        // if (actualSolAmount.isLessThan(100000)) return;
         const percentageGain = price.minus(bignumberInitialPrice).div(bignumberInitialPrice).multipliedBy(100);
         let percentageGainNumber = Number(percentageGain.toFixed(5));
-        if (
-          birdPercentage !== undefined &&
-          birdPercentage !== 0 &&
-          (percentageGainNumber > 100 || percentageGainNumber < -50)
-        )
-          percentageGainNumber =
-            Math.abs(birdPercentage) > Math.abs(percentageGainNumber) ? percentageGainNumber : birdPercentage;
 
         if (Number(percentageGain.toFixed(5)) < 0) logger.warn(percentageGain.toString());
         else logger.info(percentageGain.toString());
@@ -376,9 +375,10 @@ async function getSwappedAmounts(instructionWithSwap: any) {
         if (percentageGainNumber < suddenLossThreshold) {
           currentSuddenPriceDecrease++;
         } else currentSuddenPriceDecrease = 0;
+
         if (percentageGainNumber <= stopLossPrecents) {
           if (percentageGainNumber < suddenLossThreshold) {
-            if (currentSuddenPriceDecrease >= 8) {
+            if (currentSuddenPriceDecrease >= 2) {
               if (!foundTokenData) return;
               logger.info(`Selling at LOSS, loss ${percentageGainNumber}, addr ${foundTokenData!.mint.toString()}`);
               await sellOnActionGeyser(foundTokenData!);
@@ -392,7 +392,7 @@ async function getSwappedAmounts(instructionWithSwap: any) {
         }
         if (percentageGainNumber >= takeProfitPercents) {
           if (percentageGainNumber > suddenGainThreshold) {
-            if (currentSuddenPriceIncrease >= 8) {
+            if (currentSuddenPriceIncrease >= 2) {
               if (!foundTokenData) return;
               logger.info(
                 `Selling at TAKEPROFIT, increase ${percentageGainNumber}, addr ${foundTokenData!.mint.toString()}`,
@@ -409,12 +409,6 @@ async function getSwappedAmounts(instructionWithSwap: any) {
 
           return;
         }
-        if (new Date() >= timeToSellTimeoutGeyser!) {
-          if (!foundTokenData) return;
-          logger.info(`Selling at TIMEOUT, change ${percentageGain}%, addr ${foundTokenData!.mint.toString()}`);
-          await sellOnActionGeyser(foundTokenData!);
-          return;
-        }
       }
     }
   }
@@ -425,10 +419,13 @@ async function sellOnActionGeyser(account: RawAccount) {
   foundTokenData = undefined;
   birdeyePrice = undefined;
   await sell(account.mint, account.amount, existingTokenAccountsExtended, quoteTokenAssociatedAddress);
+  lastRequest = undefined;
+  wsPairs?.close();
+  await new Promise((resolve) => setTimeout(resolve, 1000));
   gotWalletToken = false;
   processingToken = false;
   currentTokenSwaps++;
-  if (currentTokenSwaps > 3) {
+  if (currentTokenSwaps > 1) {
     exit();
   }
 }
@@ -462,7 +459,7 @@ export async function processOpenBookMarket(updatedAccountInfo: KeyedAccountInfo
   let accountData: MarketStateV3 | undefined;
   try {
     accountData = MARKET_STATE_LAYOUT_V3.decode(updatedAccountInfo.accountInfo.data);
-
+    if (existingTokenAccountsExtended.size > 2000) existingTokenAccountsExtended.clear();
     if (existingTokenAccountsExtended.has(accountData.baseMint.toString())) {
       return;
     }
@@ -479,6 +476,7 @@ async function listenToChanges() {
       const key = updatedAccountInfo.accountId.toString();
       const existing = existingOpenBookMarkets.has(key);
       if (!existing) {
+        if (existingOpenBookMarkets.size > 2000) existingOpenBookMarkets.clear();
         existingOpenBookMarkets.add(key);
         const _ = processOpenBookMarket(updatedAccountInfo);
       }
@@ -518,9 +516,6 @@ async function listenToChanges() {
       timeToSellTimeoutGeyser = new Date();
       timeToSellTimeoutGeyser.setTime(timeToSellTimeoutGeyser.getTime() + timoutSec * 1000);
       foundTokenData = accountData;
-      // const solAmount = Number(process.env.SWAP_SOL_AMOUNT!);
-      // const solAmountBn = BigNumber(solAmount).multipliedBy('1000000000');
-      // bignumberInitialPrice = solAmountBn.div(BigNumber(accountData.amount.toString()));
       console.log(accountData.mint);
     },
     'processed' as Commitment,

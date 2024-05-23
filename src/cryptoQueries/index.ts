@@ -452,7 +452,7 @@ export async function sell(
     payerKey: wallet.publicKey,
     recentBlockhash: recentBlockhashForSwap.blockhash,
     instructions: [
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 421197 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 821197 }),
       ComputeBudgetProgram.setComputeUnitLimit({ units: 101337 }),
       ...innerTransaction.instructions,
       createCloseAccountInstruction(tokenAccount.address, wallet.publicKey, wallet.publicKey),
