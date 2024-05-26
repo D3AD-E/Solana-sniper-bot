@@ -45,6 +45,7 @@ let swapAmount: TokenAmount;
 let quoteTokenAssociatedAddress: PublicKey;
 let liquidityPoolKeys: LiquidityPoolKeys[] = [];
 export default async function listen(): Promise<void> {
+  await regeneratePoolKeys();
   logger.info(`Wallet Address: ${wallet.publicKey}`);
   swapAmount = new TokenAmount(Token.WSOL, process.env.SWAP_SOL_AMOUNT, false);
 
@@ -126,6 +127,15 @@ async function monitorDexTools() {
         logger.warn('Only raydium pairs are supported');
         continue;
       }
+      const mintAccount = await getMint(
+        solanaConnection,
+        new PublicKey(tokenInfo.tokenAddress),
+        process.env.COMMITMENT as Commitment,
+      );
+      if (mintAccount.freezeAuthority !== null) {
+        logger.warn('Token can be frozen, skipping');
+        continue;
+      }
       logger.info(
         `Got new token info ${tokenInfo.tokenAddress} ${tokenInfo.pairAddress}, price ${tokenInfo.initialPrice}`,
       );
@@ -133,17 +143,17 @@ async function monitorDexTools() {
         `ℹTrying to buy a token ${token.symbol} ${tokenInfo.initialPrice}$ ${tokenInfo.tokenAddress} ${tokenInfo.pairAddress} ${token.url}`,
       );
       const poolKeys = await getPoolKeysToWSOL(new PublicKey(tokenInfo.tokenAddress), tokenInfo.pairAddress);
-      await createAccount(tokenInfo.tokenAddress, poolKeys, quoteToken);
+      // await createAccount(tokenInfo.tokenAddress, poolKeys, quoteToken);
 
-      selectedTokenAccount = await getSelectedAccount(tokenInfo.tokenAddress);
+      // selectedTokenAccount = await getSelectedAccount(tokenInfo.tokenAddress);
 
-      const shouldBuyToken = await shouldBuy(tokenInfo.tokenAddress);
-      if (!shouldBuyToken) {
-        logger.info(`Skipping token`);
-        sendMessage(`Skipping token`);
-        await closeAccount(selectedTokenAccount.pubkey);
-        continue;
-      }
+      // const shouldBuyToken = await shouldBuy(tokenInfo.tokenAddress);
+      // if (!shouldBuyToken) {
+      //   logger.info(`Skipping token`);
+      //   sendMessage(`Skipping token`);
+      //   await closeAccount(selectedTokenAccount.pubkey);
+      //   continue;
+      // }
 
       const txId = await buyToken(tokenInfo.tokenAddress, poolKeys!);
       if (txId === undefined) {
@@ -151,7 +161,7 @@ async function monitorDexTools() {
         sendMessage(
           `Failed to buy a token ${token.symbol} ${tokenInfo.initialPrice}$ ${tokenInfo.tokenAddress} ${tokenInfo.pairAddress}`,
         );
-        await closeAccount(selectedTokenAccount.pubkey);
+        // await closeAccount(selectedTokenAccount.pubkey);
         continue;
       }
       await new Promise((resolve) => setTimeout(resolve, 200));

@@ -263,7 +263,7 @@ export async function buy(
     payerKey: wallet.publicKey,
     recentBlockhash: hash,
     instructions: [
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 821197 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 101197 }),
       ComputeBudgetProgram.setComputeUnitLimit({ units: 101337 }),
       createAssociatedTokenAccountIdempotentInstruction(
         wallet.publicKey,
@@ -452,7 +452,7 @@ export async function sell(
     payerKey: wallet.publicKey,
     recentBlockhash: recentBlockhashForSwap.blockhash,
     instructions: [
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 821197 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 101197 }),
       ComputeBudgetProgram.setComputeUnitLimit({ units: 101337 }),
       ...innerTransaction.instructions,
       createCloseAccountInstruction(tokenAccount.address, wallet.publicKey, wallet.publicKey),

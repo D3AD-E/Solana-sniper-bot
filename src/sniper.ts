@@ -40,6 +40,7 @@ let lastRequest: any | undefined = undefined;
 let foundTokenData: RawAccount | undefined = undefined;
 let birdeyePrice: number | undefined = undefined;
 let timeToSellTimeoutGeyser: Date | undefined = undefined;
+let sentBuyTime: Date | undefined = undefined;
 let currentSuddenPriceIncrease = 0;
 let currentSuddenPriceDecrease = 0;
 let currentTokenSwaps = 0;
@@ -182,12 +183,15 @@ function setupLiquiditySocket() {
               new PublicKey(inner[inner.length - 13].parsed.info.account),
               sampleKeys,
             );
+            sentBuyTime = new Date();
             solanaConnection
               .confirmTransaction(packet as TransactionConfirmationStrategy, 'finalized')
               .then(async (confirmation) => {
                 if (confirmation.value.err) {
-                  logger.warn('Send buy bundle but if failed');
+                  logger.warn('Sent buy bundle but it failed');
                   processingToken = false;
+                  lastRequest = undefined;
+                  wsPairs?.close();
                 } else if (!foundTokenData && !bignumberInitialPrice && processingToken && !gotWalletToken) {
                   logger.warn('Websocket took too long');
                   const tokenAccounts = await getTokenAccounts(solanaConnection, wallet.publicKey, 'processed');
@@ -254,7 +258,7 @@ function setupLiquiditySocket() {
     console.error('WebSocket error:', err);
   });
   ws.on('close', async function close() {
-    console.log('WebSocket is closed');
+    logger.warn('WebSocket is closed liquidity');
     await new Promise((resolve) => setTimeout(resolve, 200));
     setupLiquiditySocket();
   });
@@ -321,7 +325,8 @@ function setupPairSocket() {
     console.error('WebSocket error:', err);
   });
   wsPairs.on('close', async function close() {
-    console.log('WebSocket is closed');
+    logger.warn('WebSocket is closed pair');
+
     // throw 'Websocket closed';
     await new Promise((resolve) => setTimeout(resolve, 200));
     setupPairSocket();
@@ -329,8 +334,6 @@ function setupPairSocket() {
 }
 
 async function getSwappedAmounts(instructionWithSwap: any) {
-  const suddenGainThreshold = 200;
-  const suddenLossThreshold = -50;
   const swapDataBuy = instructionWithSwap.instructions?.filter((x: any) => x.parsed?.info.amount !== undefined);
   if (swapDataBuy !== undefined) {
     const sol = swapDataBuy.find(
@@ -369,38 +372,38 @@ async function getSwappedAmounts(instructionWithSwap: any) {
         if (Number(percentageGain.toFixed(5)) < 0) logger.warn(percentageGain.toString());
         else logger.info(percentageGain.toString());
 
-        if (percentageGainNumber > suddenGainThreshold) {
-          currentSuddenPriceIncrease++;
-        } else currentSuddenPriceIncrease = 0;
-        if (percentageGainNumber < suddenLossThreshold) {
-          currentSuddenPriceDecrease++;
-        } else currentSuddenPriceDecrease = 0;
+        // if (percentageGainNumber > suddenGainThreshold) {
+        //   currentSuddenPriceIncrease++;
+        // } else currentSuddenPriceIncrease = 0;
+        // if (percentageGainNumber < suddenLossThreshold) {
+        //   currentSuddenPriceDecrease++;
+        // } else currentSuddenPriceDecrease = 0;
 
         if (percentageGainNumber <= stopLossPrecents) {
-          if (percentageGainNumber < suddenLossThreshold) {
-            if (currentSuddenPriceDecrease >= 2) {
-              if (!foundTokenData) return;
-              logger.info(`Selling at LOSS, loss ${percentageGainNumber}, addr ${foundTokenData!.mint.toString()}`);
-              await sellOnActionGeyser(foundTokenData!);
-              return;
-            } else return;
-          }
+          // if (percentageGainNumber < suddenLossThreshold) {
+          //   if (currentSuddenPriceDecrease >= 2) {
+          //     if (!foundTokenData) return;
+          //     logger.info(`Selling at LOSS, loss ${percentageGainNumber}, addr ${foundTokenData!.mint.toString()}`);
+          //     await sellOnActionGeyser(foundTokenData!);
+          //     return;
+          //   } else return;
+          // }
           if (!foundTokenData) return;
           logger.warn(`Selling at LOSS, loss ${percentageGainNumber}%, addr ${foundTokenData!.mint.toString()}`);
           await sellOnActionGeyser(foundTokenData!);
           return;
         }
         if (percentageGainNumber >= takeProfitPercents) {
-          if (percentageGainNumber > suddenGainThreshold) {
-            if (currentSuddenPriceIncrease >= 2) {
-              if (!foundTokenData) return;
-              logger.info(
-                `Selling at TAKEPROFIT, increase ${percentageGainNumber}, addr ${foundTokenData!.mint.toString()}`,
-              );
-              await sellOnActionGeyser(foundTokenData!);
-              return;
-            } else return;
-          }
+          // if (percentageGainNumber > suddenGainThreshold) {
+          //   if (currentSuddenPriceIncrease >= 2) {
+          //     if (!foundTokenData) return;
+          //     logger.info(
+          //       `Selling at TAKEPROFIT, increase ${percentageGainNumber}, addr ${foundTokenData!.mint.toString()}`,
+          //     );
+          //     await sellOnActionGeyser(foundTokenData!);
+          //     return;
+          //   } else return;
+          // }
           if (!foundTokenData) return;
           logger.info(
             `Selling at TAKEPROFIT, increase ${percentageGainNumber}%, addr ${foundTokenData!.mint.toString()}`,
@@ -425,7 +428,7 @@ async function sellOnActionGeyser(account: RawAccount) {
   gotWalletToken = false;
   processingToken = false;
   currentTokenSwaps++;
-  if (currentTokenSwaps > 1) {
+  if (currentTokenSwaps > 100) {
     exit();
   }
 }
@@ -513,10 +516,16 @@ async function listenToChanges() {
       if (gotWalletToken) return;
       gotWalletToken = true;
       logger.info(`Monitoring`);
+      console.log(accountData.mint);
+      foundTokenData = accountData;
+      const now = new Date();
+      if (now.getTime() - sentBuyTime!.getTime() > 15 * 1000) {
+        logger.warn('Buy took too long, selling');
+        await sellOnActionGeyser(foundTokenData!);
+        return;
+      }
       timeToSellTimeoutGeyser = new Date();
       timeToSellTimeoutGeyser.setTime(timeToSellTimeoutGeyser.getTime() + timoutSec * 1000);
-      foundTokenData = accountData;
-      console.log(accountData.mint);
     },
     'processed' as Commitment,
     [
