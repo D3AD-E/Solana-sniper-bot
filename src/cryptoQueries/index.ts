@@ -14,6 +14,8 @@ import {
   Connection,
   PublicKey,
   SystemProgram,
+  TransactionConfirmationStatus,
+  TransactionConfirmationStrategy,
   TransactionMessage,
   VersionedTransaction,
 } from '@solana/web3.js';
@@ -241,10 +243,12 @@ export async function buy(
     // it's possible that we didn't have time to fetch open book data
     const market = await getMinimalMarketV3(solanaConnection, accountData.marketId, 'processed');
     tokenAccount = saveTokenAccount(accountData.baseMint, market);
+    tokenAccount.poolKeys = createPoolKeys(accountId, accountData, tokenAccount.market!);
     existingTokenAccounts.set(accountData.baseMint.toString(), tokenAccount);
   }
 
   tokenAccount.poolKeys = createPoolKeys(accountId, accountData, tokenAccount.market!);
+  existingTokenAccounts.set(accountData.baseMint.toString(), tokenAccount);
   const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
     {
       poolKeys: tokenAccount.poolKeys,
@@ -414,7 +418,7 @@ export async function sell(
   amount: BigNumberish,
   existingTokenAccounts: Map<string, MinimalTokenAccountData>,
   quoteTokenAccountAddress: PublicKey,
-): Promise<string | undefined> {
+): Promise<TransactionConfirmationStrategy | undefined> {
   const tokenAccount = existingTokenAccounts.get(mint.toString());
 
   if (!tokenAccount) {
@@ -465,6 +469,11 @@ export async function sell(
     skipPreflight: true,
   });
   logger.info(signature);
+  return {
+    signature: signature!,
+    lastValidBlockHeight: recentBlockhashForSwap.lastValidBlockHeight,
+    blockhash: recentBlockhashForSwap.blockhash,
+  };
 }
 
 export async function getPoolKeys(base: PublicKey, quote: PublicKey) {

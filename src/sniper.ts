@@ -8,7 +8,14 @@ import {
   MarketStateV3,
 } from '@raydium-io/raydium-sdk';
 import { AccountLayout, RawAccount, getMint } from '@solana/spl-token';
-import { Commitment, KeyedAccountInfo, PublicKey, TransactionConfirmationStrategy } from '@solana/web3.js';
+import {
+  Commitment,
+  GetVersionedTransactionConfig,
+  KeyedAccountInfo,
+  PublicKey,
+  Transaction,
+  TransactionConfirmationStrategy,
+} from '@solana/web3.js';
 import { buy, getTokenAccounts, saveTokenAccount, sell } from './cryptoQueries';
 import logger from './utils/logger';
 import { solanaConnection, wallet } from './solana';
@@ -38,13 +45,14 @@ let gotWalletToken = false;
 
 let lastRequest: any | undefined = undefined;
 let foundTokenData: RawAccount | undefined = undefined;
-let birdeyePrice: number | undefined = undefined;
 let timeToSellTimeoutGeyser: Date | undefined = undefined;
 let sentBuyTime: Date | undefined = undefined;
-let currentSuddenPriceIncrease = 0;
-let currentSuddenPriceDecrease = 0;
 let currentTokenSwaps = 0;
-
+// const config: GetVersionedTransactionConfig = {
+//   maxSupportedTransactionVersion: 0,
+// };
+// let addLiquiditySlot = 0;
+// let shouldBlockBuy = false;
 export default async function snipe(): Promise<void> {
   setupPairSocket();
   setupLiquiditySocket();
@@ -123,6 +131,29 @@ function setupLiquiditySocket() {
             processingToken = false;
             return;
           }
+          logger.info('Listening to geyser Pair');
+          lastRequest = {
+            jsonrpc: '2.0',
+            id: 420,
+            method: 'transactionSubscribe',
+            params: [
+              {
+                vote: false,
+                failed: false,
+                accountInclude: [mintAddress],
+              },
+              {
+                commitment: 'processed',
+                encoding: 'jsonParsed',
+                transactionDetails: 'full',
+                showRewards: false,
+                maxSupportedTransactionVersion: 1,
+              },
+            ],
+          };
+          wsPairs!.send(JSON.stringify(lastRequest));
+          // console.log(jData?.params?.result?.transaction?.transaction?.signatures[0]);
+          // getSlot(jData);
           const sampleKeys = {
             status: undefined,
             owner: new PublicKey('So11111111111111111111111111111111111111112'),
@@ -183,6 +214,11 @@ function setupLiquiditySocket() {
               new PublicKey(inner[inner.length - 13].parsed.info.account),
               sampleKeys,
             );
+            // if (!packet) {
+            //   processingToken = false;
+            //   shouldBlockBuy = false;
+            //   return;
+            // }
             sentBuyTime = new Date();
             solanaConnection
               .confirmTransaction(packet as TransactionConfirmationStrategy, 'finalized')
@@ -224,27 +260,6 @@ function setupLiquiditySocket() {
             processingToken = false;
             return;
           }
-          logger.info('Listening to geyser Pair');
-          lastRequest = {
-            jsonrpc: '2.0',
-            id: 420,
-            method: 'transactionSubscribe',
-            params: [
-              {
-                vote: false,
-                failed: false,
-                accountInclude: [mintAddress],
-              },
-              {
-                commitment: 'processed',
-                encoding: 'jsonParsed',
-                transactionDetails: 'full',
-                showRewards: false,
-                maxSupportedTransactionVersion: 1,
-              },
-            ],
-          };
-          wsPairs!.send(JSON.stringify(lastRequest));
         }
       }
     } catch (e) {
@@ -263,6 +278,21 @@ function setupLiquiditySocket() {
     setupLiquiditySocket();
   });
 }
+
+// async function getSlot(jData: any) {
+//   const blockHash = jData!.params!.result!.transaction!.transaction!.message!.recentBlockhash;
+//   const block = await solanaConnection.getLatestBlockhash('confirmed');
+//   const t = await solanaConnection.confirmTransaction(
+//     {
+//       signature: jData!.params!.result!.transaction!.transaction!.signatures[0],
+//       blockhash: blockHash,
+//       lastValidBlockHeight: block.lastValidBlockHeight,
+//     },
+//     'confirmed',
+//   );
+//   console.log(t.context.slot);
+//   addLiquiditySlot = t.context.slot;
+// }
 
 function setupPairSocket() {
   wsPairs = new WebSocket(process.env.GEYSER_ENDPOINT!);
@@ -291,11 +321,27 @@ function setupPairSocket() {
     }
   });
   wsPairs.on('message', async function incoming(data) {
-    if (!foundTokenData) return;
     const messageStr = data.toString();
     try {
       var jData = JSON.parse(messageStr);
-      console.log(jData?.params?.result?.transaction?.transaction?.signatures);
+      // if (!shouldBlockBuy && new Date().getTime() < sentBuyTime!.getTime() + 2000) {
+      //   const blockHash = jData!.params!.result!.transaction!.transaction!.message!.recentBlockhash;
+      //   const block = await solanaConnection.getLatestBlockhash('confirmed');
+      //   const t = await solanaConnection.confirmTransaction(
+      //     {
+      //       signature: jData!.params!.result!.transaction!.transaction!.signatures[0],
+      //       blockhash: blockHash,
+      //       lastValidBlockHeight: block.lastValidBlockHeight,
+      //     },
+      //     'confirmed',
+      //   );
+      //   console.log(t.context.slot - addLiquiditySlot);
+      //   if (t.context.slot - addLiquiditySlot < 2) {
+      //     logger.warn('Slots too near');
+      //     shouldBlockBuy = true;
+      //   }
+      // }
+
       const instructionWithSwapSell = jData?.params?.result?.transaction?.meta?.innerInstructions[0];
       if (instructionWithSwapSell !== undefined) {
         getSwappedAmounts(instructionWithSwapSell);
@@ -334,6 +380,7 @@ function setupPairSocket() {
 }
 
 async function getSwappedAmounts(instructionWithSwap: any) {
+  if (!foundTokenData) return;
   const swapDataBuy = instructionWithSwap.instructions?.filter((x: any) => x.parsed?.info.amount !== undefined);
   if (swapDataBuy !== undefined) {
     const sol = swapDataBuy.find(
@@ -362,48 +409,20 @@ async function getSwappedAmounts(instructionWithSwap: any) {
           bignumberInitialPrice = price;
           return;
         }
-        // const actualSolAmount = isSolSwapped
-        //   ? BigNumber(other.parsed.info.amount as string)
-        //   : BigNumber(sol.parsed.info.amount as string);
-        // if (actualSolAmount.isLessThan(100000)) return;
+
         const percentageGain = price.minus(bignumberInitialPrice).div(bignumberInitialPrice).multipliedBy(100);
         let percentageGainNumber = Number(percentageGain.toFixed(5));
 
         if (Number(percentageGain.toFixed(5)) < 0) logger.warn(percentageGain.toString());
         else logger.info(percentageGain.toString());
 
-        // if (percentageGainNumber > suddenGainThreshold) {
-        //   currentSuddenPriceIncrease++;
-        // } else currentSuddenPriceIncrease = 0;
-        // if (percentageGainNumber < suddenLossThreshold) {
-        //   currentSuddenPriceDecrease++;
-        // } else currentSuddenPriceDecrease = 0;
-
         if (percentageGainNumber <= stopLossPrecents) {
-          // if (percentageGainNumber < suddenLossThreshold) {
-          //   if (currentSuddenPriceDecrease >= 2) {
-          //     if (!foundTokenData) return;
-          //     logger.info(`Selling at LOSS, loss ${percentageGainNumber}, addr ${foundTokenData!.mint.toString()}`);
-          //     await sellOnActionGeyser(foundTokenData!);
-          //     return;
-          //   } else return;
-          // }
           if (!foundTokenData) return;
           logger.warn(`Selling at LOSS, loss ${percentageGainNumber}%, addr ${foundTokenData!.mint.toString()}`);
           await sellOnActionGeyser(foundTokenData!);
           return;
         }
         if (percentageGainNumber >= takeProfitPercents) {
-          // if (percentageGainNumber > suddenGainThreshold) {
-          //   if (currentSuddenPriceIncrease >= 2) {
-          //     if (!foundTokenData) return;
-          //     logger.info(
-          //       `Selling at TAKEPROFIT, increase ${percentageGainNumber}, addr ${foundTokenData!.mint.toString()}`,
-          //     );
-          //     await sellOnActionGeyser(foundTokenData!);
-          //     return;
-          //   } else return;
-          // }
           if (!foundTokenData) return;
           logger.info(
             `Selling at TAKEPROFIT, increase ${percentageGainNumber}%, addr ${foundTokenData!.mint.toString()}`,
@@ -420,15 +439,51 @@ async function getSwappedAmounts(instructionWithSwap: any) {
 async function sellOnActionGeyser(account: RawAccount) {
   bignumberInitialPrice = undefined;
   foundTokenData = undefined;
-  birdeyePrice = undefined;
-  await sell(account.mint, account.amount, existingTokenAccountsExtended, quoteTokenAssociatedAddress);
+  const signature = await sell(
+    account.mint,
+    account.amount,
+    existingTokenAccountsExtended,
+    quoteTokenAssociatedAddress,
+  );
+  if (signature) {
+    solanaConnection
+      .confirmTransaction(signature as TransactionConfirmationStrategy, 'finalized')
+      .then(async (confirmation) => {
+        if (confirmation.value.err) {
+          logger.warn('Sent sell but it failed');
+          const signature = await sell(
+            account.mint,
+            account.amount,
+            existingTokenAccountsExtended,
+            quoteTokenAssociatedAddress,
+          );
+          clearAfterSell();
+        } else {
+          logger.info('Sell success');
+          clearAfterSell();
+        }
+      })
+      .catch(async (e) => {
+        console.log(e);
+        logger.warn('Sell TX hash expired, hopefully we didnt crash');
+        const signature = await sell(
+          account.mint,
+          account.amount,
+          existingTokenAccountsExtended,
+          quoteTokenAssociatedAddress,
+        );
+        clearAfterSell();
+      });
+  }
+}
+
+function clearAfterSell() {
   lastRequest = undefined;
   wsPairs?.close();
-  await new Promise((resolve) => setTimeout(resolve, 1000));
   gotWalletToken = false;
   processingToken = false;
   currentTokenSwaps++;
-  if (currentTokenSwaps > 100) {
+  if (currentTokenSwaps > 4) {
     exit();
   }
 }
@@ -444,6 +499,10 @@ export async function processGeyserLiquidity(
   const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash({
     commitment: 'finalized',
   });
+  // if (shouldBlockBuy) {
+  //   logger.warn('Buy blocked');
+  //   return undefined;
+  // }
   const signature = await buy(
     id,
     poolState,
@@ -462,7 +521,6 @@ export async function processOpenBookMarket(updatedAccountInfo: KeyedAccountInfo
   let accountData: MarketStateV3 | undefined;
   try {
     accountData = MARKET_STATE_LAYOUT_V3.decode(updatedAccountInfo.accountInfo.data);
-    if (existingTokenAccountsExtended.size > 2000) existingTokenAccountsExtended.clear();
     if (existingTokenAccountsExtended.has(accountData.baseMint.toString())) {
       return;
     }
@@ -473,28 +531,28 @@ export async function processOpenBookMarket(updatedAccountInfo: KeyedAccountInfo
   }
 }
 async function listenToChanges() {
-  const openBookSubscriptionId = solanaConnection.onProgramAccountChange(
-    OPENBOOK_PROGRAM_ID,
-    async (updatedAccountInfo) => {
-      const key = updatedAccountInfo.accountId.toString();
-      const existing = existingOpenBookMarkets.has(key);
-      if (!existing) {
-        if (existingOpenBookMarkets.size > 2000) existingOpenBookMarkets.clear();
-        existingOpenBookMarkets.add(key);
-        const _ = processOpenBookMarket(updatedAccountInfo);
-      }
-    },
-    'singleGossip' as Commitment,
-    [
-      { dataSize: MARKET_STATE_LAYOUT_V3.span },
-      {
-        memcmp: {
-          offset: MARKET_STATE_LAYOUT_V3.offsetOf('quoteMint'),
-          bytes: quoteToken.mint.toBase58(),
-        },
-      },
-    ],
-  );
+  // const openBookSubscriptionId = solanaConnection.onProgramAccountChange(
+  //   OPENBOOK_PROGRAM_ID,
+  //   async (updatedAccountInfo) => {
+  //     const key = updatedAccountInfo.accountId.toString();
+  //     const existing = existingOpenBookMarkets.has(key);
+  //     if (!existing) {
+  //       if (existingOpenBookMarkets.size > 2000) existingOpenBookMarkets.clear();
+  //       existingOpenBookMarkets.add(key);
+  //       const _ = processOpenBookMarket(updatedAccountInfo);
+  //     }
+  //   },
+  //   'singleGossip' as Commitment,
+  //   [
+  //     { dataSize: MARKET_STATE_LAYOUT_V3.span },
+  //     {
+  //       memcmp: {
+  //         offset: MARKET_STATE_LAYOUT_V3.offsetOf('quoteMint'),
+  //         bytes: quoteToken.mint.toBase58(),
+  //       },
+  //     },
+  //   ],
+  // );
   const walletSubscriptionId = solanaConnection.onProgramAccountChange(
     TOKEN_PROGRAM_ID,
     async (updatedAccountInfo) => {
@@ -517,9 +575,10 @@ async function listenToChanges() {
       gotWalletToken = true;
       logger.info(`Monitoring`);
       console.log(accountData.mint);
+      bignumberInitialPrice = new BigNumber(accountData.amount.toString()).div(process.env.SWAP_SOL_AMOUNT!);
       foundTokenData = accountData;
       const now = new Date();
-      if (now.getTime() - sentBuyTime!.getTime() > 15 * 1000) {
+      if (now.getTime() - sentBuyTime!.getTime() > 20 * 1000) {
         logger.warn('Buy took too long, selling');
         await sellOnActionGeyser(foundTokenData!);
         return;
