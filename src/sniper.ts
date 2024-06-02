@@ -95,7 +95,7 @@ function setupLiquiditySocket() {
           ],
         },
         {
-          commitment: 'singleGossip',
+          commitment: 'processed',
           encoding: 'jsonParsed',
           transactionDetails: 'full',
           showRewards: false,
@@ -252,12 +252,16 @@ function setupLiquiditySocket() {
               .catch((e) => {
                 console.log(e);
                 logger.warn('TX hash expired, hopefully we didnt crash');
+                lastRequest = undefined;
+                wsPairs?.close();
                 processingToken = false;
               });
           } catch (e) {
             logger.warn('Buy failed');
             console.error(e);
             processingToken = false;
+            lastRequest = undefined;
+            wsPairs?.close();
             return;
           }
         }
@@ -451,9 +455,17 @@ async function sellOnActionGeyser(account: RawAccount) {
       .then(async (confirmation) => {
         if (confirmation.value.err) {
           logger.warn('Sent sell but it failed');
+          existingTokenAccounts = await getTokenAccounts(
+            solanaConnection,
+            wallet.publicKey,
+            process.env.COMMITMENT as Commitment,
+          );
+          const tokenAccount = existingTokenAccounts.find(
+            (acc) => acc.accountInfo.mint.toString() === account.mint.toString(),
+          )!;
           const signature = await sell(
             account.mint,
-            account.amount,
+            tokenAccount.accountInfo.amount,
             existingTokenAccountsExtended,
             quoteTokenAssociatedAddress,
           );
@@ -483,7 +495,7 @@ function clearAfterSell() {
   gotWalletToken = false;
   processingToken = false;
   currentTokenSwaps++;
-  if (currentTokenSwaps > 4) {
+  if (currentTokenSwaps > 0) {
     exit();
   }
 }
@@ -499,10 +511,6 @@ export async function processGeyserLiquidity(
   const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash({
     commitment: 'finalized',
   });
-  // if (shouldBlockBuy) {
-  //   logger.warn('Buy blocked');
-  //   return undefined;
-  // }
   const signature = await buy(
     id,
     poolState,
@@ -575,7 +583,6 @@ async function listenToChanges() {
       gotWalletToken = true;
       logger.info(`Monitoring`);
       console.log(accountData.mint);
-      bignumberInitialPrice = new BigNumber(accountData.amount.toString()).div(process.env.SWAP_SOL_AMOUNT!);
       foundTokenData = accountData;
       const now = new Date();
       if (now.getTime() - sentBuyTime!.getTime() > 20 * 1000) {
