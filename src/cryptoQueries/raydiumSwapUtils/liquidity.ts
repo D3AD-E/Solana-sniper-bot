@@ -23,6 +23,7 @@ import logger from '../../utils/logger';
 export const MINIMAL_MARKET_STATE_LAYOUT_V3 = struct([publicKey('eventQueue'), publicKey('bids'), publicKey('asks')]);
 export type MinimalMarketStateLayoutV3 = typeof MINIMAL_MARKET_STATE_LAYOUT_V3;
 export type MinimalMarketLayoutV3 = GetStructureSchema<MinimalMarketStateLayoutV3>;
+import { Market as SeMarket, OpenOrders } from '@project-serum/serum';
 
 export async function loadPoolKeys() {
   try {
@@ -130,6 +131,7 @@ export function createPoolKeys(
   id: PublicKey,
   accountData: LiquidityStateV4,
   minimalMarketLayoutV3: MinimalMarketLayoutV3,
+  market: SeMarket,
 ): LiquidityPoolKeys {
   return {
     id,
@@ -155,8 +157,14 @@ export function createPoolKeys(
       programId: accountData.marketProgramId,
       marketId: accountData.marketId,
     }).publicKey,
-    marketBaseVault: accountData.baseVault,
-    marketQuoteVault: accountData.quoteVault,
+    marketBaseVault:
+      market.decoded.quoteMint.toString() === 'So11111111111111111111111111111111111111112'
+        ? market.decoded.baseVault
+        : market.decoded.quoteVault,
+    marketQuoteVault:
+      market.decoded.quoteMint.toString() === 'So11111111111111111111111111111111111111112'
+        ? market.decoded.quoteVault
+        : market.decoded.baseVault,
     marketBids: minimalMarketLayoutV3.bids,
     marketAsks: minimalMarketLayoutV3.asks,
     marketEventQueue: minimalMarketLayoutV3.eventQueue,

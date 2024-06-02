@@ -26,6 +26,7 @@ import WebSocket from 'ws';
 import { exit } from 'process';
 import { sendMessage } from './telegramBot';
 import { getTokenPrice } from './birdEye';
+import { Market, OpenOrders } from '@project-serum/serum';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
@@ -48,11 +49,6 @@ let foundTokenData: RawAccount | undefined = undefined;
 let timeToSellTimeoutGeyser: Date | undefined = undefined;
 let sentBuyTime: Date | undefined = undefined;
 let currentTokenSwaps = 0;
-// const config: GetVersionedTransactionConfig = {
-//   maxSupportedTransactionVersion: 0,
-// };
-// let addLiquiditySlot = 0;
-// let shouldBlockBuy = false;
 export default async function snipe(): Promise<void> {
   setupPairSocket();
   setupLiquiditySocket();
@@ -525,19 +521,19 @@ export async function processGeyserLiquidity(
   };
 }
 
-export async function processOpenBookMarket(updatedAccountInfo: KeyedAccountInfo) {
-  let accountData: MarketStateV3 | undefined;
-  try {
-    accountData = MARKET_STATE_LAYOUT_V3.decode(updatedAccountInfo.accountInfo.data);
-    if (existingTokenAccountsExtended.has(accountData.baseMint.toString())) {
-      return;
-    }
-    const token = saveTokenAccount(accountData.baseMint, accountData);
-    existingTokenAccountsExtended.set(accountData.baseMint.toString(), token);
-  } catch (e) {
-    logger.debug(e);
-  }
-}
+// export async function processOpenBookMarket(updatedAccountInfo: KeyedAccountInfo) {
+//   let accountData: MarketStateV3 | undefined;
+//   try {
+//     accountData = MARKET_STATE_LAYOUT_V3.decode(updatedAccountInfo.accountInfo.data);
+//     if (existingTokenAccountsExtended.has(accountData.baseMint.toString())) {
+//       return;
+//     }
+//     const token = saveTokenAccount(accountData.baseMint, accountData);
+//     existingTokenAccountsExtended.set(accountData.baseMint.toString(), token);
+//   } catch (e) {
+//     logger.debug(e);
+//   }
+// }
 async function listenToChanges() {
   // const openBookSubscriptionId = solanaConnection.onProgramAccountChange(
   //   OPENBOOK_PROGRAM_ID,

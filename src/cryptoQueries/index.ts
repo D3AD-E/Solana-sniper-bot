@@ -7,6 +7,7 @@ import {
   Spl,
   Token,
   TokenAmount,
+  Market as RMarket,
 } from '@raydium-io/raydium-sdk';
 import {
   Commitment,
@@ -22,7 +23,6 @@ import {
 import {
   Liquidity,
   LiquidityPoolKeys,
-  Market,
   TokenAccount,
   SPL_ACCOUNT_LAYOUT,
   LiquidityStateV4,
@@ -40,6 +40,7 @@ import { solanaConnection, wallet } from '../solana';
 import { MinimalMarketLayoutV3, calcAmountOut, createPoolKeys, getMinimalMarketV3 } from './raydiumSwapUtils/liquidity';
 import { sendBundles } from '../jito/bundles';
 import { getRandomAccount } from '../jito/constants';
+import { Market, OpenOrders } from '@project-serum/serum';
 
 const tipAmount = Number(process.env.JITO_TIP!);
 
@@ -205,15 +206,15 @@ export async function preformSwap(
   return await confirmTransaction(transaction, recentBlockhashForSwap);
 }
 
-export function saveTokenAccount(mint: PublicKey, accountData: MinimalMarketLayoutV3) {
+export function saveTokenAccount(mint: PublicKey, accountData: Market) {
   const ata = getAssociatedTokenAddressSync(mint, wallet.publicKey);
   const tokenAccount = <MinimalTokenAccountData>{
     address: ata,
     mint: mint,
     market: <MinimalMarketLayoutV3>{
-      bids: accountData.bids,
-      asks: accountData.asks,
-      eventQueue: accountData.eventQueue,
+      bids: accountData.decoded.bids,
+      asks: accountData.decoded.asks,
+      eventQueue: accountData.decoded.eventQueue,
     },
   };
   return tokenAccount;
@@ -237,18 +238,31 @@ export async function buy(
   hash: string,
 ) {
   const quoteAmount = new TokenAmount(Token.WSOL, Number(process.env.SWAP_SOL_AMOUNT), false);
-  let tokenAccount = existingTokenAccounts.get(accountData.baseMint.toString());
-
-  if (!tokenAccount) {
-    // it's possible that we didn't have time to fetch open book data
-    const market = await getMinimalMarketV3(solanaConnection, accountData.marketId, 'processed');
-    tokenAccount = saveTokenAccount(accountData.baseMint, market);
-    tokenAccount.poolKeys = createPoolKeys(accountId, accountData, tokenAccount.market!);
-    existingTokenAccounts.set(accountData.baseMint.toString(), tokenAccount);
+  console.log(accountData.marketId, accountData.marketProgramId);
+  //sometimes mart find fails
+  const maxRetries = 10;
+  let market = undefined;
+  for (let retry = 0; retry < maxRetries; retry += 1) {
+    try {
+      market = await Market.load(
+        solanaConnection,
+        accountData.marketId,
+        {
+          skipPreflight: true,
+          commitment: 'processed',
+        },
+        accountData.marketProgramId,
+      );
+      if (market) break;
+    } catch (e) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
   }
-
-  tokenAccount.poolKeys = createPoolKeys(accountId, accountData, tokenAccount.market!);
+  if (!market) throw 'Market not found';
+  const tokenAccount = saveTokenAccount(accountData.baseMint, market);
+  tokenAccount.poolKeys = createPoolKeys(accountId, accountData, tokenAccount.market!, market);
   existingTokenAccounts.set(accountData.baseMint.toString(), tokenAccount);
+
   const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
     {
       poolKeys: tokenAccount.poolKeys,
@@ -297,20 +311,19 @@ export async function buyJito(
   hash: string,
 ): Promise<string | undefined> {
   const quoteAmount = new TokenAmount(Token.WSOL, Number(process.env.SWAP_SOL_AMOUNT), false);
-  let tokenAccount = existingTokenAccounts.get(accountData.baseMint.toString());
+  const market = await Market.load(
+    solanaConnection,
+    accountData.marketId,
+    {
+      skipPreflight: true,
+      commitment: 'processed',
+    },
+    accountData.marketProgramId,
+  );
+  const tokenAccount = saveTokenAccount(accountData.baseMint, market);
+  tokenAccount.poolKeys = createPoolKeys(accountId, accountData, tokenAccount.market!, market);
+  existingTokenAccounts.set(accountData.baseMint.toString(), tokenAccount);
 
-  if (!tokenAccount) {
-    // it's possible that we didn't have time to fetch open book data
-    const market = await getMinimalMarketV3(
-      solanaConnection,
-      accountData.marketId,
-      process.env.COMMITMENT as Commitment,
-    );
-    tokenAccount = saveTokenAccount(accountData.baseMint, market);
-    existingTokenAccounts.set(accountData.baseMint.toString(), tokenAccount);
-  }
-
-  tokenAccount.poolKeys = createPoolKeys(accountId, accountData, tokenAccount.market!);
   const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
     {
       poolKeys: tokenAccount.poolKeys,
@@ -517,7 +530,7 @@ export async function formatAmmKeysById(id: string, connection: Connection): Pro
     marketVersion: 3,
     marketProgramId: info.marketProgramId,
     marketId: info.marketId,
-    marketAuthority: Market.getAssociatedAuthority({ programId: info.marketProgramId, marketId: info.marketId })
+    marketAuthority: RMarket.getAssociatedAuthority({ programId: info.marketProgramId, marketId: info.marketId })
       .publicKey,
     marketBaseVault: marketInfo.baseVault,
     marketQuoteVault: marketInfo.quoteVault,
