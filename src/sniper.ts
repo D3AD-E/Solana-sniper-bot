@@ -229,13 +229,16 @@ function setupLiquiditySocket() {
                     logger.info(`No token account found in wallet, but it succeeded`);
                     return;
                   }
-                  logger.info(`Selling bc didnt get token`);
-                  sellOnActionGeyser({
-                    ...tokenAccount.accountInfo,
-                    delegateOption: tokenAccount.accountInfo.delegateOption === 1 ? 1 : 0,
-                    isNativeOption: tokenAccount.accountInfo.isNativeOption === 1 ? 1 : 0,
-                    closeAuthorityOption: tokenAccount.accountInfo.closeAuthorityOption === 1 ? 1 : 0,
-                  });
+                  logger.warn(`Selling bc didnt get token`);
+                  sellOnActionGeyser(
+                    {
+                      ...tokenAccount.accountInfo,
+                      delegateOption: tokenAccount.accountInfo.delegateOption === 1 ? 1 : 0,
+                      isNativeOption: tokenAccount.accountInfo.isNativeOption === 1 ? 1 : 0,
+                      closeAuthorityOption: tokenAccount.accountInfo.closeAuthorityOption === 1 ? 1 : 0,
+                    },
+                    true,
+                  );
                 }
               })
               .catch((e) => {
@@ -338,7 +341,7 @@ function setupPairSocket() {
     } catch (e) {
       console.log(messageStr);
       console.error('Failed to parse JSON:', e);
-      if (foundTokenData) sellOnActionGeyser(foundTokenData);
+      if (foundTokenData) sellOnActionGeyser(foundTokenData, true);
       setupPairSocket();
     }
   });
@@ -368,13 +371,13 @@ async function getSwappedAmounts(instructionWithSwap: any) {
       if (foundTokenData) {
         if (sol === undefined || other === undefined) {
           logger.warn(`Geyser is broken, selling`);
-          sellOnActionGeyser(foundTokenData!);
+          sellOnActionGeyser(foundTokenData!, true);
           return;
         }
         if (new Date() >= timeToSellTimeoutGeyser!) {
           if (!foundTokenData) return;
           logger.info(`Selling at TIMEOUT, change addr ${foundTokenData!.mint.toString()}`);
-          await sellOnActionGeyser(foundTokenData!);
+          await sellOnActionGeyser(foundTokenData!, false);
           return;
         }
         let price = BigNumber(sol.parsed.info.amount as string).div(other.parsed.info.amount as string);
@@ -394,7 +397,7 @@ async function getSwappedAmounts(instructionWithSwap: any) {
         if (percentageGainNumber <= stopLossPrecents) {
           if (!foundTokenData) return;
           logger.warn(`Selling at LOSS, loss ${percentageGainNumber}%, addr ${foundTokenData!.mint.toString()}`);
-          await sellOnActionGeyser(foundTokenData!);
+          await sellOnActionGeyser(foundTokenData!, false);
           return;
         }
         if (percentageGainNumber >= takeProfitPercents) {
@@ -402,7 +405,7 @@ async function getSwappedAmounts(instructionWithSwap: any) {
           logger.info(
             `Selling at TAKEPROFIT, increase ${percentageGainNumber}%, addr ${foundTokenData!.mint.toString()}`,
           );
-          await sellOnActionGeyser(foundTokenData!);
+          await sellOnActionGeyser(foundTokenData!, false);
 
           return;
         }
@@ -411,9 +414,24 @@ async function getSwappedAmounts(instructionWithSwap: any) {
   }
 }
 
-async function sellOnActionGeyser(account: RawAccount) {
+async function sellOnActionGeyser(account: RawAccount, multisell: boolean) {
   bignumberInitialPrice = undefined;
   foundTokenData = undefined;
+
+  if (multisell) {
+    logger.info('Multisell');
+    for (let i = 0; i < 5; i += 1) {
+      const signature = await sell(
+        account.mint,
+        account.amount,
+        existingTokenAccountsExtended,
+        quoteTokenAssociatedAddress,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    clearAfterSell();
+    return;
+  }
   const signature = await sell(
     account.mint,
     account.amount,
@@ -466,7 +484,7 @@ function clearAfterSell() {
   gotWalletToken = false;
   processingToken = false;
   currentTokenSwaps++;
-  if (currentTokenSwaps > 10) {
+  if (currentTokenSwaps > 0) {
     exit();
   }
 }
@@ -523,7 +541,7 @@ async function listenToChanges() {
       const now = new Date();
       if (now.getTime() - sentBuyTime!.getTime() > 20 * 1000) {
         logger.warn('Buy took too long, selling');
-        await sellOnActionGeyser(foundTokenData!);
+        await sellOnActionGeyser(foundTokenData!, true);
         return;
       }
       timeToSellTimeoutGeyser = new Date();
