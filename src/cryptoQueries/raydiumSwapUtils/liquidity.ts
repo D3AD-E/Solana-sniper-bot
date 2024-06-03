@@ -157,14 +157,8 @@ export function createPoolKeys(
       programId: accountData.marketProgramId,
       marketId: accountData.marketId,
     }).publicKey,
-    marketBaseVault:
-      market.decoded.quoteMint.toString() === 'So11111111111111111111111111111111111111112'
-        ? market.decoded.baseVault
-        : market.decoded.quoteVault,
-    marketQuoteVault:
-      market.decoded.quoteMint.toString() === 'So11111111111111111111111111111111111111112'
-        ? market.decoded.quoteVault
-        : market.decoded.baseVault,
+    marketBaseVault: market.decoded.baseVault,
+    marketQuoteVault: market.decoded.quoteVault,
     marketBids: minimalMarketLayoutV3.bids,
     marketAsks: minimalMarketLayoutV3.asks,
     marketEventQueue: minimalMarketLayoutV3.eventQueue,

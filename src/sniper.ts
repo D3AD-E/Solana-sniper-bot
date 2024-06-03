@@ -148,8 +148,6 @@ function setupLiquiditySocket() {
             ],
           };
           wsPairs!.send(JSON.stringify(lastRequest));
-          // console.log(jData?.params?.result?.transaction?.transaction?.signatures[0]);
-          // getSlot(jData);
           const sampleKeys = {
             status: undefined,
             owner: new PublicKey('So11111111111111111111111111111111111111112'),
@@ -210,11 +208,6 @@ function setupLiquiditySocket() {
               new PublicKey(inner[inner.length - 13].parsed.info.account),
               sampleKeys,
             );
-            // if (!packet) {
-            //   processingToken = false;
-            //   shouldBlockBuy = false;
-            //   return;
-            // }
             sentBuyTime = new Date();
             solanaConnection
               .confirmTransaction(packet as TransactionConfirmationStrategy, 'finalized')
@@ -324,24 +317,6 @@ function setupPairSocket() {
     const messageStr = data.toString();
     try {
       var jData = JSON.parse(messageStr);
-      // if (!shouldBlockBuy && new Date().getTime() < sentBuyTime!.getTime() + 2000) {
-      //   const blockHash = jData!.params!.result!.transaction!.transaction!.message!.recentBlockhash;
-      //   const block = await solanaConnection.getLatestBlockhash('confirmed');
-      //   const t = await solanaConnection.confirmTransaction(
-      //     {
-      //       signature: jData!.params!.result!.transaction!.transaction!.signatures[0],
-      //       blockhash: blockHash,
-      //       lastValidBlockHeight: block.lastValidBlockHeight,
-      //     },
-      //     'confirmed',
-      //   );
-      //   console.log(t.context.slot - addLiquiditySlot);
-      //   if (t.context.slot - addLiquiditySlot < 2) {
-      //     logger.warn('Slots too near');
-      //     shouldBlockBuy = true;
-      //   }
-      // }
-
       const instructionWithSwapSell = jData?.params?.result?.transaction?.meta?.innerInstructions[0];
       if (instructionWithSwapSell !== undefined) {
         getSwappedAmounts(instructionWithSwapSell);
@@ -521,42 +496,7 @@ export async function processGeyserLiquidity(
   };
 }
 
-// export async function processOpenBookMarket(updatedAccountInfo: KeyedAccountInfo) {
-//   let accountData: MarketStateV3 | undefined;
-//   try {
-//     accountData = MARKET_STATE_LAYOUT_V3.decode(updatedAccountInfo.accountInfo.data);
-//     if (existingTokenAccountsExtended.has(accountData.baseMint.toString())) {
-//       return;
-//     }
-//     const token = saveTokenAccount(accountData.baseMint, accountData);
-//     existingTokenAccountsExtended.set(accountData.baseMint.toString(), token);
-//   } catch (e) {
-//     logger.debug(e);
-//   }
-// }
 async function listenToChanges() {
-  // const openBookSubscriptionId = solanaConnection.onProgramAccountChange(
-  //   OPENBOOK_PROGRAM_ID,
-  //   async (updatedAccountInfo) => {
-  //     const key = updatedAccountInfo.accountId.toString();
-  //     const existing = existingOpenBookMarkets.has(key);
-  //     if (!existing) {
-  //       if (existingOpenBookMarkets.size > 2000) existingOpenBookMarkets.clear();
-  //       existingOpenBookMarkets.add(key);
-  //       const _ = processOpenBookMarket(updatedAccountInfo);
-  //     }
-  //   },
-  //   'singleGossip' as Commitment,
-  //   [
-  //     { dataSize: MARKET_STATE_LAYOUT_V3.span },
-  //     {
-  //       memcmp: {
-  //         offset: MARKET_STATE_LAYOUT_V3.offsetOf('quoteMint'),
-  //         bytes: quoteToken.mint.toBase58(),
-  //       },
-  //     },
-  //   ],
-  // );
   const walletSubscriptionId = solanaConnection.onProgramAccountChange(
     TOKEN_PROGRAM_ID,
     async (updatedAccountInfo) => {

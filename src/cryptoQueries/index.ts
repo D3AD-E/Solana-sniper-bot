@@ -240,7 +240,7 @@ export async function buy(
   const quoteAmount = new TokenAmount(Token.WSOL, Number(process.env.SWAP_SOL_AMOUNT), false);
   console.log(accountData.marketId, accountData.marketProgramId);
   //sometimes mart find fails
-  const maxRetries = 10;
+  const maxRetries = 40;
   let market = undefined;
   for (let retry = 0; retry < maxRetries; retry += 1) {
     try {
@@ -255,10 +255,11 @@ export async function buy(
       );
       if (market) break;
     } catch (e) {
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
   }
   if (!market) throw 'Market not found';
+
   const tokenAccount = saveTokenAccount(accountData.baseMint, market);
   tokenAccount.poolKeys = createPoolKeys(accountId, accountData, tokenAccount.market!, market);
   existingTokenAccounts.set(accountData.baseMint.toString(), tokenAccount);
