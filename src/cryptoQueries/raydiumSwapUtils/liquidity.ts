@@ -126,7 +126,7 @@ export async function getMinimalMarketV3(
 
 export const RAYDIUM_LIQUIDITY_PROGRAM_ID_V4 = MAINNET_PROGRAM_ID.AmmV4;
 export const OPENBOOK_PROGRAM_ID = MAINNET_PROGRAM_ID.OPENBOOK_MARKET;
-
+//TODO SOMETIMES STILL FAILS BC marketBaseVault AND marketQuoteVault SWAPPED
 export function createPoolKeys(
   id: PublicKey,
   accountData: LiquidityStateV4,
@@ -157,8 +157,14 @@ export function createPoolKeys(
       programId: accountData.marketProgramId,
       marketId: accountData.marketId,
     }).publicKey,
-    marketBaseVault: market.decoded.baseVault,
-    marketQuoteVault: market.decoded.quoteVault,
+    marketBaseVault:
+      market.decoded.quoteMint.toString() === 'So11111111111111111111111111111111111111112'
+        ? market.decoded.baseVault
+        : market.decoded.quoteVault,
+    marketQuoteVault:
+      market.decoded.quoteMint.toString() === 'So11111111111111111111111111111111111111112'
+        ? market.decoded.quoteVault
+        : market.decoded.baseVault,
     marketBids: minimalMarketLayoutV3.bids,
     marketAsks: minimalMarketLayoutV3.asks,
     marketEventQueue: minimalMarketLayoutV3.eventQueue,

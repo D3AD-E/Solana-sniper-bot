@@ -466,7 +466,7 @@ function clearAfterSell() {
   gotWalletToken = false;
   processingToken = false;
   currentTokenSwaps++;
-  if (currentTokenSwaps > 0) {
+  if (currentTokenSwaps > 10) {
     exit();
   }
 }
