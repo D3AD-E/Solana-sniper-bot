@@ -41,6 +41,7 @@ import { MinimalMarketLayoutV3, calcAmountOut, createPoolKeys, getMinimalMarketV
 import { sendBundles } from '../jito/bundles';
 import { getRandomAccount } from '../jito/constants';
 import { Market, OpenOrders } from '@project-serum/serum';
+import { DEFAULT_TRANSACTION_COMMITMENT } from '../constants';
 
 const tipAmount = Number(process.env.JITO_TIP!);
 
@@ -235,9 +236,12 @@ export async function buy(
   accountData: LiquidityStateV4,
   existingTokenAccounts: Map<string, MinimalTokenAccountData>,
   quoteTokenAccountAddress: PublicKey,
-  hash: string,
+  lamports: number,
 ) {
   const quoteAmount = new TokenAmount(Token.WSOL, Number(process.env.SWAP_SOL_AMOUNT), false);
+  const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash({
+    commitment: DEFAULT_TRANSACTION_COMMITMENT,
+  });
   console.log(accountData.marketId, accountData.marketProgramId);
   //sometimes mart find fails
   const maxRetries = 40;
@@ -280,9 +284,9 @@ export async function buy(
 
   const messageV0 = new TransactionMessage({
     payerKey: wallet.publicKey,
-    recentBlockhash: hash,
+    recentBlockhash: recentBlockhashForSwap.blockhash,
     instructions: [
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1200010 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: lamports }),
       ComputeBudgetProgram.setComputeUnitLimit({ units: 101337 }),
       createAssociatedTokenAccountIdempotentInstruction(
         wallet.publicKey,
@@ -301,7 +305,11 @@ export async function buy(
     skipPreflight: true,
   });
   logger.info(signature);
-  return signature;
+  return {
+    signature: signature!,
+    lastValidBlockHeight: recentBlockhashForSwap.lastValidBlockHeight,
+    blockhash: recentBlockhashForSwap.blockhash,
+  };
 }
 
 export async function buyJito(
@@ -449,7 +457,7 @@ export async function sell(
     return undefined;
   }
   const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash({
-    commitment: 'finalized',
+    commitment: DEFAULT_TRANSACTION_COMMITMENT,
   });
 
   const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(

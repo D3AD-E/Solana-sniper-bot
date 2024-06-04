@@ -28,6 +28,7 @@ import { sendMessage } from './telegramBot';
 import { getTokenPrice } from './birdEye';
 import { Market, OpenOrders } from '@project-serum/serum';
 import { helius } from './helius';
+import { DEFAULT_TRANSACTION_COMMITMENT } from './constants';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
@@ -50,10 +51,12 @@ let foundTokenData: RawAccount | undefined = undefined;
 let timeToSellTimeoutGeyser: Date | undefined = undefined;
 let sentBuyTime: Date | undefined = undefined;
 let currentTokenSwaps = 0;
-let currentLamports = 0;
+const maxLamports = 1500010;
+let currentLamports = maxLamports;
 export default async function snipe(): Promise<void> {
   setupPairSocket();
   setupLiquiditySocket();
+  await updateLamports();
   logger.info(`Wallet Address: ${wallet.publicKey}`);
   swapAmount = new TokenAmount(Token.WSOL, process.env.SWAP_SOL_AMOUNT, false);
   logger.info(`Swap sol amount: ${swapAmount.toFixed()} ${quoteToken.symbol}`);
@@ -69,11 +72,20 @@ export default async function snipe(): Promise<void> {
     throw new Error(`No ${quoteToken.symbol} token account found in wallet: ${wallet.publicKey}`);
   }
   quoteTokenAssociatedAddress = tokenAccount.pubkey;
+  setInterval(updateLamports, 15000);
   await listenToChanges();
 }
 
-async function updateLamprots() {
-  const prices = await helius.rpc.getPriorityFeeEstimate();
+async function updateLamports() {
+  const prices = await helius.rpc.getPriorityFeeEstimate({
+    accountKeys: ['675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8'],
+    options: { includeAllPriorityFeeLevels: true },
+  });
+  if (prices.priorityFeeLevels?.high === undefined || maxLamports < prices.priorityFeeLevels?.high) {
+    currentLamports = maxLamports;
+  } else {
+    currentLamports = prices.priorityFeeLevels?.high + 5000;
+  }
 }
 
 function setupLiquiditySocket() {
@@ -216,7 +228,7 @@ function setupLiquiditySocket() {
             );
             sentBuyTime = new Date();
             solanaConnection
-              .confirmTransaction(packet as TransactionConfirmationStrategy, 'finalized')
+              .confirmTransaction(packet as TransactionConfirmationStrategy, DEFAULT_TRANSACTION_COMMITMENT)
               .then(async (confirmation) => {
                 if (confirmation.value.err) {
                   logger.warn('Sent buy bundle but it failed');
@@ -426,7 +438,7 @@ async function sellOnActionGeyser(account: RawAccount, multisell: boolean) {
 
   if (multisell) {
     logger.info('Multisell');
-    for (let i = 0; i < 5; i += 1) {
+    for (let i = 0; i < 3; i += 1) {
       const signature = await sell(
         account.mint,
         account.amount,
@@ -446,7 +458,7 @@ async function sellOnActionGeyser(account: RawAccount, multisell: boolean) {
   );
   if (signature) {
     solanaConnection
-      .confirmTransaction(signature as TransactionConfirmationStrategy, 'finalized')
+      .confirmTransaction(signature as TransactionConfirmationStrategy, DEFAULT_TRANSACTION_COMMITMENT)
       .then(async (confirmation) => {
         if (confirmation.value.err) {
           logger.warn('Sent sell but it failed');
@@ -503,21 +515,9 @@ export async function processGeyserLiquidity(
   logger.info(
     `Processing pool: ${poolState.baseMint.toString()} with ${poolSize.toFixed()} ${quoteToken.symbol} in liquidity`,
   );
-  const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash({
-    commitment: 'finalized',
-  });
-  const signature = await buy(
-    id,
-    poolState,
-    existingTokenAccountsExtended,
-    quoteTokenAssociatedAddress,
-    recentBlockhashForSwap.blockhash,
-  );
-  return {
-    signature: signature!,
-    lastValidBlockHeight: recentBlockhashForSwap.lastValidBlockHeight,
-    blockhash: recentBlockhashForSwap.blockhash,
-  };
+
+  const packet = await buy(id, poolState, existingTokenAccountsExtended, quoteTokenAssociatedAddress, currentLamports);
+  return packet;
 }
 
 async function listenToChanges() {
