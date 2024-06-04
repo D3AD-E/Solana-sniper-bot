@@ -27,6 +27,7 @@ import { exit } from 'process';
 import { sendMessage } from './telegramBot';
 import { getTokenPrice } from './birdEye';
 import { Market, OpenOrders } from '@project-serum/serum';
+import { helius } from './helius';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
@@ -49,6 +50,7 @@ let foundTokenData: RawAccount | undefined = undefined;
 let timeToSellTimeoutGeyser: Date | undefined = undefined;
 let sentBuyTime: Date | undefined = undefined;
 let currentTokenSwaps = 0;
+let currentLamports = 0;
 export default async function snipe(): Promise<void> {
   setupPairSocket();
   setupLiquiditySocket();
@@ -68,6 +70,10 @@ export default async function snipe(): Promise<void> {
   }
   quoteTokenAssociatedAddress = tokenAccount.pubkey;
   await listenToChanges();
+}
+
+async function updateLamprots() {
+  const prices = await helius.rpc.getPriorityFeeEstimate();
 }
 
 function setupLiquiditySocket() {
