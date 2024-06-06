@@ -126,12 +126,12 @@ export async function getMinimalMarketV3(
 
 export const RAYDIUM_LIQUIDITY_PROGRAM_ID_V4 = MAINNET_PROGRAM_ID.AmmV4;
 export const OPENBOOK_PROGRAM_ID = MAINNET_PROGRAM_ID.OPENBOOK_MARKET;
-//TODO SOMETIMES STILL FAILS BC marketBaseVault AND marketQuoteVault SWAPPED
+//TODO Raydium Liquidity Pool V4: SwapBaseIn(Program Error: "InvalidStatus")
 export function createPoolKeys(
   id: PublicKey,
   accountData: LiquidityStateV4,
   minimalMarketLayoutV3: MinimalMarketLayoutV3,
-  market: SeMarket,
+  market: MinimalMarketLayoutV3,
 ): LiquidityPoolKeys {
   return {
     id,
@@ -157,14 +157,16 @@ export function createPoolKeys(
       programId: accountData.marketProgramId,
       marketId: accountData.marketId,
     }).publicKey,
-    marketBaseVault:
-      market.decoded.quoteMint.toString() === 'So11111111111111111111111111111111111111112'
-        ? market.decoded.baseVault
-        : market.decoded.quoteVault,
-    marketQuoteVault:
-      market.decoded.quoteMint.toString() === 'So11111111111111111111111111111111111111112'
-        ? market.decoded.quoteVault
-        : market.decoded.baseVault,
+    marketBaseVault: accountData.baseVault,
+    marketQuoteVault: accountData.quoteVault,
+    // marketBaseVault:
+    //   market.quoteMint.toString() === 'So11111111111111111111111111111111111111112'
+    //     ? market.decoded.baseVault
+    //     : market.decoded.quoteVault,
+    // marketQuoteVault:
+    //   market.decoded.quoteMint.toString() === 'So11111111111111111111111111111111111111112'
+    //     ? market.decoded.quoteVault
+    //     : market.decoded.baseVault,
     marketBids: minimalMarketLayoutV3.bids,
     marketAsks: minimalMarketLayoutV3.asks,
     marketEventQueue: minimalMarketLayoutV3.eventQueue,

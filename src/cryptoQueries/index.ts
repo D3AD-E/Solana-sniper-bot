@@ -42,6 +42,7 @@ import { sendBundles } from '../jito/bundles';
 import { getRandomAccount } from '../jito/constants';
 import { Market, OpenOrders } from '@project-serum/serum';
 import { DEFAULT_TRANSACTION_COMMITMENT } from '../constants';
+import { Block } from '../listener.types';
 
 const tipAmount = Number(process.env.JITO_TIP!);
 
@@ -207,15 +208,15 @@ export async function preformSwap(
   return await confirmTransaction(transaction, recentBlockhashForSwap);
 }
 
-export function saveTokenAccount(mint: PublicKey, accountData: Market) {
+export function saveTokenAccount(mint: PublicKey, accountData: MinimalMarketLayoutV3) {
   const ata = getAssociatedTokenAddressSync(mint, wallet.publicKey);
   const tokenAccount = <MinimalTokenAccountData>{
     address: ata,
     mint: mint,
     market: <MinimalMarketLayoutV3>{
-      bids: accountData.decoded.bids,
-      asks: accountData.decoded.asks,
-      eventQueue: accountData.decoded.eventQueue,
+      bids: accountData.bids,
+      asks: accountData.asks,
+      eventQueue: accountData.eventQueue,
     },
   };
   return tokenAccount;
@@ -237,36 +238,38 @@ export async function buy(
   existingTokenAccounts: Map<string, MinimalTokenAccountData>,
   quoteTokenAccountAddress: PublicKey,
   lamports: number,
+  mint: PublicKey,
+  block: Block,
 ) {
   const quoteAmount = new TokenAmount(Token.WSOL, Number(process.env.SWAP_SOL_AMOUNT), false);
-  const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash({
-    commitment: DEFAULT_TRANSACTION_COMMITMENT,
-  });
+  const market = await getMinimalMarketV3(solanaConnection, accountData.marketId, 'processed');
   console.log(accountData.marketId, accountData.marketProgramId);
   //sometimes mart find fails
-  const maxRetries = 40;
-  let market = undefined;
-  for (let retry = 0; retry < maxRetries; retry += 1) {
-    try {
-      market = await Market.load(
-        solanaConnection,
-        accountData.marketId,
-        {
-          skipPreflight: true,
-          commitment: 'processed',
-        },
-        accountData.marketProgramId,
-      );
-      if (market) break;
-    } catch (e) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-  }
-  if (!market) throw 'Market not found';
-
-  const tokenAccount = saveTokenAccount(accountData.baseMint, market);
+  // const maxRetries = 40;
+  // let market = undefined;
+  // for (let retry = 0; retry < maxRetries; retry += 1) {
+  //   try {
+  //     market = await Market.load(
+  //       solanaConnection,
+  //       accountData.marketId,
+  //       {
+  //         skipPreflight: true,
+  //         commitment: 'processed',
+  //       },
+  //       accountData.marketProgramId,
+  //     );
+  //     console.log(market);
+  //     if (market) break;
+  //   } catch (e) {
+  //     console.log(e);
+  //     await new Promise((resolve) => setTimeout(resolve, 500));
+  //   }
+  // }
+  // if (!market) throw 'Market not found';
+  logger.info(`Got market`);
+  const tokenAccount = saveTokenAccount(mint, market);
   tokenAccount.poolKeys = createPoolKeys(accountId, accountData, tokenAccount.market!, market);
-  existingTokenAccounts.set(accountData.baseMint.toString(), tokenAccount);
+  existingTokenAccounts.set(mint.toString(), tokenAccount);
 
   const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
     {
@@ -284,7 +287,7 @@ export async function buy(
 
   const messageV0 = new TransactionMessage({
     payerKey: wallet.publicKey,
-    recentBlockhash: recentBlockhashForSwap.blockhash,
+    recentBlockhash: block.blockhash,
     instructions: [
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: lamports }),
       ComputeBudgetProgram.setComputeUnitLimit({ units: 101337 }),
@@ -307,134 +310,134 @@ export async function buy(
   logger.info(signature);
   return {
     signature: signature!,
-    lastValidBlockHeight: recentBlockhashForSwap.lastValidBlockHeight,
-    blockhash: recentBlockhashForSwap.blockhash,
+    lastValidBlockHeight: block.lastValidBlockHeight,
+    blockhash: block.blockhash,
   };
 }
 
-export async function buyJito(
-  accountId: PublicKey,
-  accountData: LiquidityStateV4,
-  existingTokenAccounts: Map<string, MinimalTokenAccountData>,
-  quoteTokenAccountAddress: PublicKey,
-  hash: string,
-): Promise<string | undefined> {
-  const quoteAmount = new TokenAmount(Token.WSOL, Number(process.env.SWAP_SOL_AMOUNT), false);
-  const market = await Market.load(
-    solanaConnection,
-    accountData.marketId,
-    {
-      skipPreflight: true,
-      commitment: 'processed',
-    },
-    accountData.marketProgramId,
-  );
-  const tokenAccount = saveTokenAccount(accountData.baseMint, market);
-  tokenAccount.poolKeys = createPoolKeys(accountId, accountData, tokenAccount.market!, market);
-  existingTokenAccounts.set(accountData.baseMint.toString(), tokenAccount);
+// export async function buyJito(
+//   accountId: PublicKey,
+//   accountData: LiquidityStateV4,
+//   existingTokenAccounts: Map<string, MinimalTokenAccountData>,
+//   quoteTokenAccountAddress: PublicKey,
+//   hash: string,
+// ): Promise<string | undefined> {
+//   const quoteAmount = new TokenAmount(Token.WSOL, Number(process.env.SWAP_SOL_AMOUNT), false);
+//   const market = await Market.load(
+//     solanaConnection,
+//     accountData.marketId,
+//     {
+//       skipPreflight: true,
+//       commitment: 'processed',
+//     },
+//     accountData.marketProgramId,
+//   );
+//   const tokenAccount = saveTokenAccount(accountData.baseMint, market);
+//   tokenAccount.poolKeys = createPoolKeys(accountId, accountData, tokenAccount.market!, market);
+//   existingTokenAccounts.set(accountData.baseMint.toString(), tokenAccount);
 
-  const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
-    {
-      poolKeys: tokenAccount.poolKeys,
-      userKeys: {
-        tokenAccountIn: quoteTokenAccountAddress,
-        tokenAccountOut: tokenAccount.address,
-        owner: wallet.publicKey,
-      },
-      amountIn: quoteAmount.raw,
-      minAmountOut: 0,
-    },
-    tokenAccount.poolKeys.version,
-  );
-  const tipAccount = getRandomAccount();
+//   const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
+//     {
+//       poolKeys: tokenAccount.poolKeys,
+//       userKeys: {
+//         tokenAccountIn: quoteTokenAccountAddress,
+//         tokenAccountOut: tokenAccount.address,
+//         owner: wallet.publicKey,
+//       },
+//       amountIn: quoteAmount.raw,
+//       minAmountOut: 0,
+//     },
+//     tokenAccount.poolKeys.version,
+//   );
+//   const tipAccount = getRandomAccount();
 
-  const tipInstruction = SystemProgram.transfer({
-    fromPubkey: wallet.publicKey,
-    toPubkey: tipAccount,
-    lamports: tipAmount,
-  });
+//   const tipInstruction = SystemProgram.transfer({
+//     fromPubkey: wallet.publicKey,
+//     toPubkey: tipAccount,
+//     lamports: tipAmount,
+//   });
 
-  const messageV0 = new TransactionMessage({
-    payerKey: wallet.publicKey,
-    recentBlockhash: hash,
-    instructions: [
-      // ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 421197 }),
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 999900 }),
-      createAssociatedTokenAccountIdempotentInstruction(
-        wallet.publicKey,
-        tokenAccount.address,
-        wallet.publicKey,
-        accountData.baseMint,
-      ),
-      ...innerTransaction.instructions,
-      tipInstruction,
-    ],
-  }).compileToV0Message();
-  const transaction = new VersionedTransaction(messageV0);
+//   const messageV0 = new TransactionMessage({
+//     payerKey: wallet.publicKey,
+//     recentBlockhash: hash,
+//     instructions: [
+//       // ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 421197 }),
+//       ComputeBudgetProgram.setComputeUnitLimit({ units: 999900 }),
+//       createAssociatedTokenAccountIdempotentInstruction(
+//         wallet.publicKey,
+//         tokenAccount.address,
+//         wallet.publicKey,
+//         accountData.baseMint,
+//       ),
+//       ...innerTransaction.instructions,
+//       tipInstruction,
+//     ],
+//   }).compileToV0Message();
+//   const transaction = new VersionedTransaction(messageV0);
 
-  return await confirmTransactionJito(transaction, hash);
-}
+//   return await confirmTransactionJito(transaction, hash);
+// }
 
-export async function sellJito(
-  mint: PublicKey,
-  amount: BigNumberish,
-  existingTokenAccounts: Map<string, MinimalTokenAccountData>,
-  quoteTokenAccountAddress: PublicKey,
-): Promise<string | undefined> {
-  const tokenAccount = existingTokenAccounts.get(mint.toString());
+// export async function sellJito(
+//   mint: PublicKey,
+//   amount: BigNumberish,
+//   existingTokenAccounts: Map<string, MinimalTokenAccountData>,
+//   quoteTokenAccountAddress: PublicKey,
+// ): Promise<string | undefined> {
+//   const tokenAccount = existingTokenAccounts.get(mint.toString());
 
-  if (!tokenAccount) {
-    return undefined;
-  }
+//   if (!tokenAccount) {
+//     return undefined;
+//   }
 
-  if (!tokenAccount.poolKeys) {
-    logger.warn('No pool keys found');
-    return undefined;
-  }
+//   if (!tokenAccount.poolKeys) {
+//     logger.warn('No pool keys found');
+//     return undefined;
+//   }
 
-  if (amount === 0) {
-    logger.warn(`Empty balance, can't sell`);
-    return undefined;
-  }
-  const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash('confirmed');
+//   if (amount === 0) {
+//     logger.warn(`Empty balance, can't sell`);
+//     return undefined;
+//   }
+//   const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash('confirmed');
 
-  const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
-    {
-      poolKeys: tokenAccount.poolKeys!,
-      userKeys: {
-        tokenAccountOut: quoteTokenAccountAddress,
-        tokenAccountIn: tokenAccount.address,
-        owner: wallet.publicKey,
-      },
-      amountIn: amount,
-      minAmountOut: 0,
-    },
-    tokenAccount.poolKeys!.version,
-  );
+//   const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
+//     {
+//       poolKeys: tokenAccount.poolKeys!,
+//       userKeys: {
+//         tokenAccountOut: quoteTokenAccountAddress,
+//         tokenAccountIn: tokenAccount.address,
+//         owner: wallet.publicKey,
+//       },
+//       amountIn: amount,
+//       minAmountOut: 0,
+//     },
+//     tokenAccount.poolKeys!.version,
+//   );
 
-  const tipAccount = getRandomAccount();
+//   const tipAccount = getRandomAccount();
 
-  const tipInstruction = SystemProgram.transfer({
-    fromPubkey: wallet.publicKey,
-    toPubkey: tipAccount,
-    lamports: tipAmount,
-  });
+//   const tipInstruction = SystemProgram.transfer({
+//     fromPubkey: wallet.publicKey,
+//     toPubkey: tipAccount,
+//     lamports: tipAmount,
+//   });
 
-  const messageV0 = new TransactionMessage({
-    payerKey: wallet.publicKey,
-    recentBlockhash: recentBlockhashForSwap.blockhash,
-    instructions: [
-      // ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 421197 }),
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 999900 }),
-      ...innerTransaction.instructions,
-      createCloseAccountInstruction(tokenAccount.address, wallet.publicKey, wallet.publicKey),
-      tipInstruction,
-    ],
-  }).compileToV0Message();
-  const transaction = new VersionedTransaction(messageV0);
-  return await confirmTransactionJito(transaction, recentBlockhashForSwap.blockhash);
-}
-
+//   const messageV0 = new TransactionMessage({
+//     payerKey: wallet.publicKey,
+//     recentBlockhash: recentBlockhashForSwap.blockhash,
+//     instructions: [
+//       // ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 421197 }),
+//       ComputeBudgetProgram.setComputeUnitLimit({ units: 999900 }),
+//       ...innerTransaction.instructions,
+//       createCloseAccountInstruction(tokenAccount.address, wallet.publicKey, wallet.publicKey),
+//       tipInstruction,
+//     ],
+//   }).compileToV0Message();
+//   const transaction = new VersionedTransaction(messageV0);
+//   return await confirmTransactionJito(transaction, recentBlockhashForSwap.blockhash);
+// }
+//lastValidBlock
 export async function sell(
   mint: PublicKey,
   amount: BigNumberish,

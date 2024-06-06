@@ -10,3 +10,8 @@ export type BundlePacket = {
   bundleId: string;
   failAction: any;
 };
+
+export type Block = {
+  blockhash: string;
+  lastValidBlockHeight: number;
+};
