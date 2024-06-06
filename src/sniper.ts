@@ -59,7 +59,7 @@ export default async function snipe(): Promise<void> {
   setInterval(storeRecentBlockhashes, 500);
   await new Promise((resolve) => setTimeout(resolve, 140000));
   logger.info('Started listening');
-  // skipped https://www.dextools.io/app/en/solana/pair-explorer/HLBmAcU65tm999f3WrshSdeFgAbZNxEGrqD6DzAdR1iF?t=1717674277533 ???
+  // skipped https://www.dextools.io/app/en/solana/pair-explorer/HLBmAcU65tm999f3WrshSdeFgAbZNxEGrqD6DzAdR1iF?t=1717674277533 because of jitotip, not sure if want to fix
   setupPairSocket();
   setupLiquiditySocket();
   await updateLamports();
@@ -88,7 +88,6 @@ async function getFinalizedBlockheight(): Promise<number> {
   for (let i = 0; i < 5; i += 1) {
     try {
       block = (await solanaConnection.getBlock(currentSlot - 2, {
-        //sometimes fails
         transactionDetails: 'none',
         maxSupportedTransactionVersion: 0,
       })) as any;
@@ -177,7 +176,7 @@ function setupLiquiditySocket() {
           const mintAddress = isFirstMintSol ? mint2.parsed.info.mint : mint1.parsed.info.mint;
           logger.info('Mint ' + mintAddress);
           let mintAccount = undefined;
-          for (let i = 0; i < 5; i += 1) {
+          for (let i = 0; i < 10; i += 1) {
             try {
               mintAccount = await getMint(
                 solanaConnection,
@@ -186,10 +185,10 @@ function setupLiquiditySocket() {
               );
               if (mintAccount) break;
             } catch (e) {
-              await new Promise((resolve) => setTimeout(resolve, 200));
+              await new Promise((resolve) => setTimeout(resolve, 250));
             }
           }
-          if (!mintAccount) throw 'Failed to get mint';
+          if (!mintAccount) throw 'Failed to get mint ';
 
           if (mintAccount.freezeAuthority !== null) {
             logger.warn('Token can be frozen, skipping');
@@ -307,15 +306,12 @@ function setupLiquiditySocket() {
                       return;
                     }
                     logger.warn(`Selling bc didnt get token`);
-                    sellOnActionGeyser(
-                      {
-                        ...tokenAccount.accountInfo,
-                        delegateOption: tokenAccount.accountInfo.delegateOption === 1 ? 1 : 0,
-                        isNativeOption: tokenAccount.accountInfo.isNativeOption === 1 ? 1 : 0,
-                        closeAuthorityOption: tokenAccount.accountInfo.closeAuthorityOption === 1 ? 1 : 0,
-                      },
-                      true,
-                    );
+                    sellOnActionGeyser({
+                      ...tokenAccount.accountInfo,
+                      delegateOption: tokenAccount.accountInfo.delegateOption === 1 ? 1 : 0,
+                      isNativeOption: tokenAccount.accountInfo.isNativeOption === 1 ? 1 : 0,
+                      closeAuthorityOption: tokenAccount.accountInfo.closeAuthorityOption === 1 ? 1 : 0,
+                    });
                   }
                 }
               })
@@ -404,7 +400,7 @@ function setupPairSocket() {
     } catch (e) {
       console.log(messageStr);
       console.error('Failed to parse JSON:', e);
-      if (foundTokenData) sellOnActionGeyser(foundTokenData, true);
+      if (foundTokenData) sellOnActionGeyser(foundTokenData);
       setupPairSocket();
     }
   });
@@ -434,13 +430,13 @@ async function getSwappedAmounts(instructionWithSwap: any) {
       if (foundTokenData) {
         if (sol === undefined || other === undefined) {
           logger.warn(`Geyser is broken, selling`);
-          sellOnActionGeyser(foundTokenData!, true);
+          sellOnActionGeyser(foundTokenData!);
           return;
         }
         if (new Date() >= timeToSellTimeoutGeyser!) {
           if (!foundTokenData) return;
           logger.info(`Selling at TIMEOUT, change addr ${foundTokenData!.mint.toString()}`);
-          await sellOnActionGeyser(foundTokenData!, false);
+          await sellOnActionGeyser(foundTokenData!);
           return;
         }
         let price = BigNumber(sol.parsed.info.amount as string).div(other.parsed.info.amount as string);
@@ -460,7 +456,7 @@ async function getSwappedAmounts(instructionWithSwap: any) {
         if (percentageGainNumber <= stopLossPrecents) {
           if (!foundTokenData) return;
           logger.warn(`Selling at LOSS, loss ${percentageGainNumber}%, addr ${foundTokenData!.mint.toString()}`);
-          await sellOnActionGeyser(foundTokenData!, false);
+          await sellOnActionGeyser(foundTokenData!);
           return;
         }
         if (percentageGainNumber >= takeProfitPercents) {
@@ -468,7 +464,7 @@ async function getSwappedAmounts(instructionWithSwap: any) {
           logger.info(
             `Selling at TAKEPROFIT, increase ${percentageGainNumber}%, addr ${foundTokenData!.mint.toString()}`,
           );
-          await sellOnActionGeyser(foundTokenData!, false);
+          await sellOnActionGeyser(foundTokenData!);
 
           return;
         }
@@ -477,24 +473,9 @@ async function getSwappedAmounts(instructionWithSwap: any) {
   }
 }
 
-async function sellOnActionGeyser(account: RawAccount, multisell: boolean) {
+async function sellOnActionGeyser(account: RawAccount) {
   bignumberInitialPrice = undefined;
   foundTokenData = undefined;
-
-  // if (multisell) {
-  //   logger.info('Multisell');
-  //   for (let i = 0; i < 2; i += 1) {
-  //     const signature = await sell(
-  //       account.mint,
-  //       account.amount,
-  //       existingTokenAccountsExtended,
-  //       quoteTokenAssociatedAddress,
-  //     );
-  //     await new Promise((resolve) => setTimeout(resolve, 1000));
-  //   }
-  //   clearAfterSell();
-  //   return;
-  // }
   const signature = await sell(
     account.mint,
     account.amount,
@@ -547,7 +528,7 @@ function clearAfterSell() {
   gotWalletToken = false;
   processingToken = false;
   currentTokenSwaps++;
-  if (currentTokenSwaps > 10) {
+  if (currentTokenSwaps > 30) {
     exit();
   }
 }
@@ -583,7 +564,7 @@ async function listenToChanges() {
       if (accountData.mint.toString() === quoteToken.mint.toString()) {
         const walletBalance = new TokenAmount(Token.WSOL, accountData.amount, true);
         logger.info('WSOL amount change ' + walletBalance.toFixed(4));
-        sendMessage(`💸WSOL change ${walletBalance.toFixed(4)}`);
+        sendMessage(`💸WSOL change ${walletBalance.toFixed(4)} ${currentTokenKey}`);
         return;
       }
       if (updatedAccountInfo.accountId.equals(quoteTokenAssociatedAddress)) {
@@ -602,7 +583,7 @@ async function listenToChanges() {
       const now = new Date();
       if (now.getTime() - sentBuyTime!.getTime() > 20 * 1000) {
         logger.warn('Buy took too long, selling');
-        await sellOnActionGeyser(foundTokenData!, true);
+        await sellOnActionGeyser(foundTokenData!);
         return;
       }
       timeToSellTimeoutGeyser = new Date();
