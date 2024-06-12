@@ -162,6 +162,10 @@ function setupLiquiditySocket() {
             logger.warn('Token can be frozen, skipping');
             return;
           }
+          if (!workerPool!.areThereFreeWorkers()) {
+            logger.warn('No workers available');
+            return;
+          }
           logger.info('Listening to geyser Pair');
           const lastRequest = {
             jsonrpc: '2.0',

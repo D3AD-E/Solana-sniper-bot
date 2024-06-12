@@ -21,7 +21,10 @@ export class WorkerPool {
 
   private createWorkers() {
     for (let i = 0; i < this.numWorkers; i++) {
-      const worker = new Worker('./src/workers/worker.ts', { execArgv: ['--require', 'ts-node/register'] });
+      const worker = new Worker('./src/workers/worker.ts', {
+        execArgv: ['--require', 'ts-node/register'],
+        workerData: process.env,
+      });
       worker?.on('message', (message: ParentMessage) => {
         if (message.result === WorkerResult.SellSuccess) {
           this.freeWorker(message.data.token);
@@ -41,6 +44,8 @@ export class WorkerPool {
       this.freeWorkers.push(worker);
     }
   }
+
+  public areThereFreeWorkers = () => this.freeWorkers.length > 0;
 
   public gotToken(token: string, lastRequest: any) {
     if (this.freeWorkers.length > 0) {

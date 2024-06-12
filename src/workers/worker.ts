@@ -1,4 +1,4 @@
-import { parentPort } from 'worker_threads';
+import { parentPort, workerData } from 'worker_threads';
 import WebSocket from 'ws';
 import logger from '../utils/logger';
 import { RawAccount } from '@solana/spl-token';
@@ -18,13 +18,13 @@ let bignumberInitialPrice: BigNumber | undefined = undefined;
 let timeToSellTimeoutGeyser: Date | undefined = undefined;
 let minimalAccount: MinimalTokenAccountData | undefined = undefined;
 
-const stopLossPrecents = Number(process.env.STOP_LOSS_PERCENTS!) * -1;
-const takeProfitPercents = Number(process.env.TAKE_PROFIT_PERCENTS!);
+const stopLossPrecents = Number(workerData.STOP_LOSS_PERCENTS!) * -1;
+const takeProfitPercents = Number(workerData.TAKE_PROFIT_PERCENTS!);
 let quoteTokenAssociatedAddress: PublicKey;
 let sentBuyTime: Date | undefined = undefined;
 
 function setupPairSocket() {
-  wsPairs = new WebSocket(process.env.GEYSER_ENDPOINT!);
+  wsPairs = new WebSocket(workerData.GEYSER_ENDPOINT!);
   wsPairs.on('open', function open() {
     if (lastRequest) {
       lastRequest = {
@@ -179,7 +179,7 @@ async function sellOnActionGeyser(account: RawAccount) {
           const existingTokenAccounts = await getTokenAccounts(
             solanaConnection,
             wallet.publicKey,
-            process.env.COMMITMENT as Commitment,
+            workerData.COMMITMENT as Commitment,
           );
           const tokenAccount = existingTokenAccounts.find(
             (acc) => acc.accountInfo.mint.toString() === account.mint.toString(),
