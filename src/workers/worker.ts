@@ -203,24 +203,24 @@ async function sellOnActionGeyser(account: RawAccount) {
 // to worker
 parentPort?.on('message', (message: WorkerMessage) => {
   if (message.action === WorkerAction.Setup) {
-    quoteTokenAssociatedAddress = message.data.quoteTokenAssociatedAddress;
+    quoteTokenAssociatedAddress = message.data!.quoteTokenAssociatedAddress!;
     setupPairSocket();
   } else if (message.action === WorkerAction.GetToken) {
-    (currentTokenKey = message.data.token), (lastRequest = message.data.lastRequest);
+    (currentTokenKey = message.data!.token!), (lastRequest = message.data!.lastRequest!);
     sentBuyTime = new Date();
     if (wsPairs?.readyState === wsPairs?.OPEN) wsPairs!.send(JSON.stringify(lastRequest));
   } else if (message.action === WorkerAction.ForceSell) {
-    sellOnActionGeyser(message.data.accountData!);
+    sellOnActionGeyser(message.data!.accountData!);
   } else if (message.action === WorkerAction.GotWalletToken) {
     const now = new Date();
     if (now.getTime() - sentBuyTime!.getTime() > 20 * 1000) {
       logger.warn('Buy took too long, selling');
-      sellOnActionGeyser(message.data.foundTokenData);
+      sellOnActionGeyser(message.data!.foundTokenData!);
       return;
     }
-    timeToSellTimeoutGeyser = message.data.timeToSellTimeoutGeyser;
-    foundTokenData = message.data.foundTokenData;
+    timeToSellTimeoutGeyser = message.data!.timeToSellTimeoutGeyser!;
+    foundTokenData = message.data!.foundTokenData!;
   } else if (message.action === WorkerAction.AddTokenAccount) {
-    minimalAccount = message.data.tokenAccount;
+    minimalAccount = message.data!.tokenAccount!;
   }
 });

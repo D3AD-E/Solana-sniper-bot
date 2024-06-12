@@ -1,8 +1,8 @@
 import { PublicKey } from '@solana/web3.js';
 import { ParentMessage, WorkerAction, WorkerMessage, WorkerResult } from './worker.types';
 import { RawAccount } from '@solana/spl-token';
-import { TokenAccount } from '@raydium-io/raydium-sdk';
 import { MinimalTokenAccountData } from '../cryptoQueries/cryptoQueries.types';
+import { Worker } from 'worker_threads';
 
 export class WorkerPool {
   private numWorkers: number;
@@ -21,19 +21,15 @@ export class WorkerPool {
 
   private createWorkers() {
     for (let i = 0; i < this.numWorkers; i++) {
-      const worker = new Worker('./worker.ts');
-      worker.onmessage = (event) => {
-        const message = event.data as ParentMessage;
+      const worker = new Worker('./src/workers/worker.ts', { execArgv: ['--require', 'ts-node/register'] });
+      worker?.on('message', (message: ParentMessage) => {
         if (message.result === WorkerResult.SellSuccess) {
           this.freeWorker(message.data.token);
         }
-      };
-      worker.onerror = (event) => {
-        console.log(event);
-      };
-      worker.onmessageerror = (event) => {
-        console.log(event);
-      };
+      });
+      worker?.on('error', (message: any) => {
+        console.log(message);
+      });
       const setupMessage: WorkerMessage = {
         action: WorkerAction.Setup,
         data: {

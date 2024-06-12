@@ -37,7 +37,7 @@ export default async function snipe(): Promise<void> {
     throw new Error(`No ${quoteToken.symbol} token account found in wallet: ${wallet.publicKey}`);
   }
   quoteTokenAssociatedAddress = tokenAccount.pubkey;
-  workerPool = new WorkerPool(10, quoteTokenAssociatedAddress);
+  workerPool = new WorkerPool(1, quoteTokenAssociatedAddress);
   setInterval(storeRecentBlockhashes, 500);
   await new Promise((resolve) => setTimeout(resolve, 140000));
   logger.info('Started listening');

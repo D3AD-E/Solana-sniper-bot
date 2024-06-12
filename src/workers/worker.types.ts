@@ -1,3 +1,7 @@
+import { RawAccount } from '@solana/spl-token';
+import { MinimalTokenAccountData } from '../cryptoQueries/cryptoQueries.types';
+import { PublicKey } from '@solana/web3.js';
+
 export interface Task {
   action: string;
   token: string;
@@ -11,7 +15,15 @@ export interface TaskQueueItem {
 
 export interface WorkerMessage {
   action: WorkerAction;
-  data?: any;
+  data?: {
+    tokenAccount?: MinimalTokenAccountData;
+    foundTokenData?: RawAccount;
+    timeToSellTimeoutGeyser?: Date;
+    accountData?: RawAccount;
+    token?: string;
+    lastRequest?: any;
+    quoteTokenAssociatedAddress?: PublicKey;
+  };
 }
 
 export interface ParentMessage {
