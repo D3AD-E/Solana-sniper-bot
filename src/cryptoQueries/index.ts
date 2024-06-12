@@ -242,28 +242,6 @@ export async function buy(
 ) {
   const quoteAmount = new TokenAmount(Token.WSOL, Number(process.env.SWAP_SOL_AMOUNT), false);
   const market = await getMinimalMarketV3(solanaConnection, accountData.marketId, 'processed');
-  //sometimes mart find fails
-  // const maxRetries = 40;
-  // let market = undefined;
-  // for (let retry = 0; retry < maxRetries; retry += 1) {
-  //   try {
-  //     market = await Market.load(
-  //       solanaConnection,
-  //       accountData.marketId,
-  //       {
-  //         skipPreflight: true,
-  //         commitment: 'processed',
-  //       },
-  //       accountData.marketProgramId,
-  //     );
-  //     console.log(market);
-  //     if (market) break;
-  //   } catch (e) {
-  //     console.log(e);
-  //     await new Promise((resolve) => setTimeout(resolve, 500));
-  //   }
-  // }
-  // if (!market) throw 'Market not found';
   logger.info(`Got market`);
   const tokenAccount = saveTokenAccount(mint, market);
   tokenAccount.poolKeys = createPoolKeys(accountId, accountData, tokenAccount.market!, market);
@@ -281,7 +259,6 @@ export async function buy(
     },
     tokenAccount.poolKeys.version,
   );
-
   const messageV0 = new TransactionMessage({
     payerKey: wallet.publicKey,
     recentBlockhash: block.blockhash,
