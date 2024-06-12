@@ -7,7 +7,7 @@ import BigNumber from 'bignumber.js';
 import { sell, getTokenAccounts } from '../cryptoQueries';
 import { solanaConnection, wallet } from '../solana';
 import { MinimalTokenAccountData } from '../cryptoQueries/cryptoQueries.types';
-import { WorkerAction, WorkerMessage } from './worker.types';
+import { ParentMessage, WorkerAction, WorkerMessage, WorkerResult } from './worker.types';
 
 let wsPairs: WebSocket | undefined = undefined;
 
@@ -16,11 +16,12 @@ let currentTokenKey = '';
 let foundTokenData: RawAccount | undefined = undefined;
 let bignumberInitialPrice: BigNumber | undefined = undefined;
 let timeToSellTimeoutGeyser: Date | undefined = undefined;
-const existingTokenAccountsExtended: Map<string, MinimalTokenAccountData> = new Map<string, MinimalTokenAccountData>();
+let minimalAccount: MinimalTokenAccountData | undefined = undefined;
 
 const stopLossPrecents = Number(process.env.STOP_LOSS_PERCENTS!) * -1;
 const takeProfitPercents = Number(process.env.TAKE_PROFIT_PERCENTS!);
 let quoteTokenAssociatedAddress: PublicKey;
+let sentBuyTime: Date | undefined = undefined;
 
 function setupPairSocket() {
   wsPairs = new WebSocket(process.env.GEYSER_ENDPOINT!);
@@ -149,17 +150,26 @@ async function getSwappedAmounts(instructionWithSwap: any) {
 function clearAfterSell() {
   lastRequest = undefined;
   wsPairs?.close();
+
+  currentTokenKey = '';
+  foundTokenData = undefined;
+  bignumberInitialPrice = undefined;
+  timeToSellTimeoutGeyser = undefined;
+  minimalAccount = undefined;
+  sentBuyTime = undefined;
+  const message: ParentMessage = {
+    result: WorkerResult.SellSuccess,
+    data: {
+      token: currentTokenKey,
+    },
+  };
+  parentPort!.postMessage(message);
 }
 
 async function sellOnActionGeyser(account: RawAccount) {
   bignumberInitialPrice = undefined;
   foundTokenData = undefined;
-  const signature = await sell(
-    account.mint,
-    account.amount,
-    existingTokenAccountsExtended,
-    quoteTokenAssociatedAddress,
-  );
+  const signature = await sell(account.amount, minimalAccount!, quoteTokenAssociatedAddress);
   if (signature) {
     solanaConnection
       .confirmTransaction(signature as TransactionConfirmationStrategy, 'finalized')
@@ -174,12 +184,7 @@ async function sellOnActionGeyser(account: RawAccount) {
           const tokenAccount = existingTokenAccounts.find(
             (acc) => acc.accountInfo.mint.toString() === account.mint.toString(),
           )!;
-          const signature = await sell(
-            account.mint,
-            tokenAccount.accountInfo.amount,
-            existingTokenAccountsExtended,
-            quoteTokenAssociatedAddress,
-          );
+          const signature = await sell(tokenAccount.accountInfo.amount, minimalAccount!, quoteTokenAssociatedAddress);
           clearAfterSell();
         } else {
           logger.info('Sell success');
@@ -189,12 +194,7 @@ async function sellOnActionGeyser(account: RawAccount) {
       .catch(async (e) => {
         console.log(e);
         logger.warn('Sell TX hash expired, hopefully we didnt crash');
-        const signature = await sell(
-          account.mint,
-          account.amount,
-          existingTokenAccountsExtended,
-          quoteTokenAssociatedAddress,
-        );
+        const signature = await sell(account.amount, minimalAccount!, quoteTokenAssociatedAddress);
         clearAfterSell();
       });
   }
@@ -205,7 +205,22 @@ parentPort?.on('message', (message: WorkerMessage) => {
   if (message.action === WorkerAction.Setup) {
     quoteTokenAssociatedAddress = message.data.quoteTokenAssociatedAddress;
     setupPairSocket();
+  } else if (message.action === WorkerAction.GetToken) {
+    (currentTokenKey = message.data.token), (lastRequest = message.data.lastRequest);
+    sentBuyTime = new Date();
+    if (wsPairs?.readyState === wsPairs?.OPEN) wsPairs!.send(JSON.stringify(lastRequest));
+  } else if (message.action === WorkerAction.ForceSell) {
+    sellOnActionGeyser(message.data.accountData!);
+  } else if (message.action === WorkerAction.GotWalletToken) {
+    const now = new Date();
+    if (now.getTime() - sentBuyTime!.getTime() > 20 * 1000) {
+      logger.warn('Buy took too long, selling');
+      sellOnActionGeyser(message.data.foundTokenData);
+      return;
+    }
+    timeToSellTimeoutGeyser = message.data.timeToSellTimeoutGeyser;
+    foundTokenData = message.data.foundTokenData;
+  } else if (message.action === WorkerAction.AddTokenAccount) {
+    minimalAccount = message.data.tokenAccount;
   }
-  // to parent
-  // parentPort.postMessage(result);
 });

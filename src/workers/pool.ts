@@ -1,7 +1,10 @@
 import { PublicKey } from '@solana/web3.js';
-import { WorkerAction, WorkerMessage } from './worker.types';
+import { ParentMessage, WorkerAction, WorkerMessage, WorkerResult } from './worker.types';
+import { RawAccount } from '@solana/spl-token';
+import { TokenAccount } from '@raydium-io/raydium-sdk';
+import { MinimalTokenAccountData } from '../cryptoQueries/cryptoQueries.types';
 
-class WorkerPool {
+export class WorkerPool {
   private numWorkers: number;
   private workers: Worker[];
   private freeWorkers: Worker[];
@@ -20,7 +23,10 @@ class WorkerPool {
     for (let i = 0; i < this.numWorkers; i++) {
       const worker = new Worker('./worker.ts');
       worker.onmessage = (event) => {
-        console.log(event);
+        const message = event.data as ParentMessage;
+        if (message.result === WorkerResult.SellSuccess) {
+          this.freeWorker(message.data.token);
+        }
       };
       worker.onerror = (event) => {
         console.log(event);
@@ -40,17 +46,63 @@ class WorkerPool {
     }
   }
 
-  private runTask(worker: Worker, task: Task, resolve: (value: unknown) => void, reject: (reason?: any) => void) {
-    worker.onmessage = (event) => {
-      //from worker
-    };
-    worker.postMessage(task); //to worker
+  public gotToken(token: string, lastRequest: any) {
+    if (this.freeWorkers.length > 0) {
+      const worker = this.freeWorkers.pop()!;
+      this.takenWorkers.set(token, worker);
+      const tokenGotMessage: WorkerMessage = {
+        action: WorkerAction.GetToken,
+        data: {
+          token,
+          lastRequest,
+        },
+      };
+      worker.postMessage(tokenGotMessage);
+    } else throw 'No free workers';
+  }
 
-    return new Promise((resolve, reject) => {
-      if (this.freeWorkers.length > 0) {
-        const worker = this.freeWorkers.pop()!;
-        this.runTask(worker, task, resolve, reject);
-      }
-    });
+  public doesTokenExist(token: string) {
+    return this.takenWorkers.has(token);
+  }
+
+  public freeWorker(token: string) {
+    if (!this.takenWorkers.has(token)) return;
+    const worker = this.takenWorkers.get(token);
+    this.freeWorkers.push(worker!);
+    this.takenWorkers.delete(token);
+  }
+
+  public forceSell(token: string, accountData: RawAccount) {
+    if (!this.takenWorkers.has(token)) return;
+    const worker = this.takenWorkers.get(token);
+    const forceSellMessage: WorkerMessage = {
+      action: WorkerAction.ForceSell,
+      data: {
+        accountData,
+      },
+    };
+    worker!.postMessage(forceSellMessage);
+  }
+
+  public gotWalletToken(token: string, timeToSellTimeoutGeyser: Date, foundTokenData: RawAccount) {
+    const worker = this.takenWorkers.get(token);
+    const tokenGotMessage: WorkerMessage = {
+      action: WorkerAction.GotWalletToken,
+      data: {
+        timeToSellTimeoutGeyser,
+        foundTokenData,
+      },
+    };
+    worker!.postMessage(tokenGotMessage);
+  }
+  public addTokenAccount(token: string, tokenAccount: MinimalTokenAccountData) {
+    const worker = this.takenWorkers.get(token);
+    const tokenGotMessage: WorkerMessage = {
+      action: WorkerAction.AddTokenAccount,
+      data: {
+        tokenAccount,
+      },
+    };
+    worker!.postMessage(tokenGotMessage);
   }
 }

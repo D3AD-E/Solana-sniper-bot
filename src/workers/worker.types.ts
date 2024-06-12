@@ -11,9 +11,22 @@ export interface TaskQueueItem {
 
 export interface WorkerMessage {
   action: WorkerAction;
-  data: any;
+  data?: any;
+}
+
+export interface ParentMessage {
+  result: WorkerResult;
+  data?: any;
 }
 
 export enum WorkerAction {
   Setup,
+  GetToken,
+  GotWalletToken,
+  ForceSell,
+  AddTokenAccount,
+}
+
+export enum WorkerResult {
+  SellSuccess,
 }

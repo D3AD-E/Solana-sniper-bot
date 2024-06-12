@@ -1,73 +1,30 @@
-import {
-  TokenAmount,
-  Token,
-  TokenAccount,
-  MARKET_STATE_LAYOUT_V3,
-  TOKEN_PROGRAM_ID,
-  LiquidityStateV4,
-  MarketStateV3,
-} from '@raydium-io/raydium-sdk';
-import { AccountLayout, RawAccount, getMint } from '@solana/spl-token';
-import {
-  Commitment,
-  GetVersionedTransactionConfig,
-  KeyedAccountInfo,
-  PublicKey,
-  Transaction,
-  TransactionConfirmationStrategy,
-} from '@solana/web3.js';
-import { buy, getTokenAccounts, saveTokenAccount, sell } from './cryptoQueries';
+import { TokenAmount, Token, TokenAccount, TOKEN_PROGRAM_ID, LiquidityStateV4 } from '@raydium-io/raydium-sdk';
+import { AccountLayout, getMint } from '@solana/spl-token';
+import { Commitment, PublicKey, TransactionConfirmationStrategy } from '@solana/web3.js';
+import { buy, getTokenAccounts } from './cryptoQueries';
 import logger from './utils/logger';
 import { solanaConnection, wallet } from './solana';
-import { OPENBOOK_PROGRAM_ID, RAYDIUM_LIQUIDITY_PROGRAM_ID_V4 } from './cryptoQueries/raydiumSwapUtils/liquidity';
-import { MinimalTokenAccountData } from './cryptoQueries/cryptoQueries.types';
-import BigNumber from 'bignumber.js';
+import { RAYDIUM_LIQUIDITY_PROGRAM_ID_V4 } from './cryptoQueries/raydiumSwapUtils/liquidity';
 import WebSocket from 'ws';
-import { exit } from 'process';
 import { sendMessage } from './telegramBot';
-import { getTokenPrice } from './birdEye';
-import { Market, OpenOrders } from '@project-serum/serum';
 import { helius } from './helius';
-import { DEFAULT_TRANSACTION_COMMITMENT } from './constants';
 import { Block } from './listener.types';
 import { isNumberInRange } from './utils/mathUtils';
+import { WorkerPool } from './workers/pool';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
 let swapAmount: TokenAmount;
 let quoteTokenAssociatedAddress: PublicKey;
-const existingTokenAccountsExtended: Map<string, MinimalTokenAccountData> = new Map<string, MinimalTokenAccountData>();
-let currentTokenKey = '';
-let bignumberInitialPrice: BigNumber | undefined = undefined;
-let wsPairs: WebSocket | undefined = undefined;
 let ws: WebSocket | undefined = undefined;
-const stopLossPrecents = Number(process.env.STOP_LOSS_PERCENTS!) * -1;
-const takeProfitPercents = Number(process.env.TAKE_PROFIT_PERCENTS!);
 const timoutSec = Number(process.env.SELL_TIMEOUT_SEC!);
-let processingToken = false;
-let gotWalletToken = false;
 
-let lastRequest: any | undefined = undefined;
-let foundTokenData: RawAccount | undefined = undefined;
-let timeToSellTimeoutGeyser: Date | undefined = undefined;
-let sentBuyTime: Date | undefined = undefined;
-let currentTokenSwaps = 0;
 const maxLamports = 1200010;
 let currentLamports = maxLamports;
 let lastBlocks: Block[] = [];
+let processedTokens: string[] = [];
+let workerPool: WorkerPool | undefined = undefined;
 export default async function snipe(): Promise<void> {
-  setInterval(storeRecentBlockhashes, 500);
-  await new Promise((resolve) => setTimeout(resolve, 140000));
-  logger.info('Started listening');
-  //https://solscan.io/tx/Kvu4Qd5RBjUDoX5yzUNNtd17Bhb78qTo93hqYgDEr8hb1ysTf9zGFDgvS1QTnz6ghY3f6Fo59GWYQSgkTJxo9Cd mintundefined
-  // skipped https://www.dextools.io/app/en/solana/pair-explorer/HLBmAcU65tm999f3WrshSdeFgAbZNxEGrqD6DzAdR1iF?t=1717674277533 because of jitotip, not sure if want to fix
-  setupPairSocket();
-  setupLiquiditySocket();
-  await updateLamports();
-  setInterval(updateLamports, 15000);
-  logger.info(`Wallet Address: ${wallet.publicKey}`);
-  swapAmount = new TokenAmount(Token.WSOL, process.env.SWAP_SOL_AMOUNT, false);
-  logger.info(`Swap sol amount: ${swapAmount.toFixed()} ${quoteToken.symbol}`);
   existingTokenAccounts = await getTokenAccounts(
     solanaConnection,
     wallet.publicKey,
@@ -80,6 +37,19 @@ export default async function snipe(): Promise<void> {
     throw new Error(`No ${quoteToken.symbol} token account found in wallet: ${wallet.publicKey}`);
   }
   quoteTokenAssociatedAddress = tokenAccount.pubkey;
+  workerPool = new WorkerPool(10, quoteTokenAssociatedAddress);
+  setInterval(storeRecentBlockhashes, 500);
+  await new Promise((resolve) => setTimeout(resolve, 140000));
+  logger.info('Started listening');
+  //https://solscan.io/tx/Kvu4Qd5RBjUDoX5yzUNNtd17Bhb78qTo93hqYgDEr8hb1ysTf9zGFDgvS1QTnz6ghY3f6Fo59GWYQSgkTJxo9Cd mintundefined
+  // skipped https://www.dextools.io/app/en/solana/pair-explorer/HLBmAcU65tm999f3WrshSdeFgAbZNxEGrqD6DzAdR1iF?t=1717674277533 because of jitotip, not sure if want to fix
+  setupLiquiditySocket();
+  await updateLamports();
+  setInterval(updateLamports, 15000);
+  logger.info(`Wallet Address: ${wallet.publicKey}`);
+  swapAmount = new TokenAmount(Token.WSOL, process.env.SWAP_SOL_AMOUNT, false);
+  logger.info(`Swap sol amount: ${swapAmount.toFixed()} ${quoteToken.symbol}`);
+
   await listenToChanges();
 }
 
@@ -161,7 +131,6 @@ function setupLiquiditySocket() {
     ws!.send(JSON.stringify(request));
   });
   ws.on('message', async function incoming(data) {
-    if (processingToken) return;
     const messageStr = data.toString();
     try {
       var jData = JSON.parse(messageStr);
@@ -169,8 +138,6 @@ function setupLiquiditySocket() {
       if (isntructions && isntructions.length === 1) {
         const inner = isntructions[0].instructions;
         if (inner[inner.length - 1]?.parsed?.type === 'mintTo') {
-          if (processingToken) return;
-          processingToken = true;
           const mint1 = inner[12];
           const mint2 = inner[16];
           const isFirstMintSol = mint1.parsed.info.mint === 'So11111111111111111111111111111111111111112';
@@ -193,11 +160,10 @@ function setupLiquiditySocket() {
 
           if (mintAccount.freezeAuthority !== null) {
             logger.warn('Token can be frozen, skipping');
-            processingToken = false;
             return;
           }
           logger.info('Listening to geyser Pair');
-          lastRequest = {
+          const lastRequest = {
             jsonrpc: '2.0',
             id: 420,
             method: 'transactionSubscribe',
@@ -216,7 +182,8 @@ function setupLiquiditySocket() {
               },
             ],
           };
-          if (wsPairs?.readyState === wsPairs?.OPEN) wsPairs!.send(JSON.stringify(lastRequest));
+          workerPool!.gotToken(mintAddress, lastRequest);
+
           const sampleKeys = {
             status: undefined,
             owner: new PublicKey('So11111111111111111111111111111111111111112'),
@@ -275,39 +242,32 @@ function setupLiquiditySocket() {
             lpReserve: undefined,
             padding: [],
           };
-          currentTokenKey = mintAddress;
           try {
             const packet = await processGeyserLiquidity(
               new PublicKey(inner[inner.length - 13].parsed.info.account),
               sampleKeys,
               new PublicKey(mintAddress),
             );
-            sentBuyTime = new Date();
             solanaConnection
               .confirmTransaction(packet as TransactionConfirmationStrategy, 'finalized')
               .then(async (confirmation) => {
                 if (confirmation.value.err) {
                   logger.warn('Sent buy bundle but it failed');
-                  processingToken = false;
-                  lastRequest = undefined;
-                  wsPairs?.close();
+                  workerPool!.freeWorker(mintAddress);
                 } else {
                   await new Promise((resolve) => setTimeout(resolve, 5000));
-
-                  if (!foundTokenData && !bignumberInitialPrice && processingToken && !gotWalletToken) {
+                  if (!processedTokens.some((t) => t === mintAddress)) {
                     logger.warn('Websocket took too long');
                     const tokenAccounts = await getTokenAccounts(solanaConnection, wallet.publicKey, 'processed');
                     await new Promise((resolve) => setTimeout(resolve, 500));
-                    logger.info('Currentkey ' + currentTokenKey);
-                    const tokenAccount = tokenAccounts.find(
-                      (acc) => acc.accountInfo.mint.toString() === currentTokenKey,
-                    )!;
+                    logger.info('Currentkey ' + mintAddress);
+                    const tokenAccount = tokenAccounts.find((acc) => acc.accountInfo.mint.toString() === mintAddress)!;
                     if (!tokenAccount) {
                       logger.info(`No token account found in wallet, but it succeeded`);
                       return;
                     }
                     logger.warn(`Selling bc didnt get token`);
-                    sellOnActionGeyser({
+                    workerPool!.forceSell(mintAddress, {
                       ...tokenAccount.accountInfo,
                       delegateOption: tokenAccount.accountInfo.delegateOption === 1 ? 1 : 0,
                       isNativeOption: tokenAccount.accountInfo.isNativeOption === 1 ? 1 : 0,
@@ -319,25 +279,19 @@ function setupLiquiditySocket() {
               .catch((e) => {
                 console.log(e);
                 logger.warn('TX hash expired, hopefully we didnt crash');
-                lastRequest = undefined;
-                wsPairs?.close();
-                processingToken = false;
+                workerPool!.freeWorker(mintAddress);
               });
           } catch (e) {
             logger.warn('Buy failed');
             console.error(e);
-            processingToken = false;
-            lastRequest = undefined;
-            wsPairs?.close();
+            workerPool!.freeWorker(mintAddress);
             return;
           }
         }
       }
     } catch (e) {
       console.log(messageStr);
-
       console.error('Failed to parse JSON:', e);
-      processingToken = false;
       setupLiquiditySocket();
     }
   });
@@ -345,195 +299,10 @@ function setupLiquiditySocket() {
     console.error('WebSocket error:', err);
   });
   ws.on('close', async function close() {
-    processingToken = false;
     logger.warn('WebSocket is closed liquidity');
     await new Promise((resolve) => setTimeout(resolve, 200));
     setupLiquiditySocket();
   });
-}
-
-function setupPairSocket() {
-  wsPairs = new WebSocket(process.env.GEYSER_ENDPOINT!);
-  wsPairs.on('open', function open() {
-    if (lastRequest) {
-      lastRequest = {
-        jsonrpc: '2.0',
-        id: 420,
-        method: 'transactionSubscribe',
-        params: [
-          {
-            vote: false,
-            failed: false,
-            accountInclude: [currentTokenKey],
-          },
-          {
-            commitment: 'processed',
-            encoding: 'jsonParsed',
-            transactionDetails: 'full',
-            showRewards: false,
-            maxSupportedTransactionVersion: 1,
-          },
-        ],
-      };
-      wsPairs!.send(JSON.stringify(lastRequest));
-    }
-  });
-  wsPairs.on('message', async function incoming(data) {
-    const messageStr = data.toString();
-    try {
-      var jData = JSON.parse(messageStr);
-      const instructionWithSwapSell = jData?.params?.result?.transaction?.meta?.innerInstructions[0];
-      if (instructionWithSwapSell !== undefined) {
-        getSwappedAmounts(instructionWithSwapSell);
-      }
-      const instructionWithSwapBuy =
-        jData?.params?.result?.transaction?.meta?.innerInstructions[
-          jData?.params?.result?.transaction?.meta?.innerInstructions.length - 1
-        ];
-      if (instructionWithSwapBuy !== undefined) {
-        getSwappedAmounts(instructionWithSwapBuy);
-      }
-      const instructionWithSwapBuy2 =
-        jData?.params?.result?.transaction?.meta?.innerInstructions[
-          jData?.params?.result?.transaction?.meta?.innerInstructions.length - 2
-        ];
-      if (instructionWithSwapBuy2 !== undefined) {
-        getSwappedAmounts(instructionWithSwapBuy2);
-      }
-    } catch (e) {
-      console.log(messageStr);
-      console.error('Failed to parse JSON:', e);
-      if (foundTokenData) sellOnActionGeyser(foundTokenData);
-      setupPairSocket();
-    }
-  });
-  wsPairs.on('error', function error(err) {
-    console.error('WebSocket error:', err);
-  });
-  wsPairs.on('close', async function close() {
-    logger.warn('WebSocket is closed pair');
-
-    // throw 'Websocket closed';
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    setupPairSocket();
-  });
-}
-
-async function getSwappedAmounts(instructionWithSwap: any) {
-  if (!foundTokenData) return;
-  const swapDataBuy = instructionWithSwap.instructions?.filter((x: any) => x.parsed?.info.amount !== undefined);
-  if (swapDataBuy !== undefined) {
-    const sol = swapDataBuy.find(
-      (x: any) => x.parsed.info.authority !== '5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1',
-    );
-    if (sol) {
-      const other = swapDataBuy.find(
-        (x: any) => x.parsed.info.authority === '5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1',
-      );
-      if (foundTokenData) {
-        if (sol === undefined || other === undefined) {
-          logger.warn(`Geyser is broken, selling`);
-          sellOnActionGeyser(foundTokenData!);
-          return;
-        }
-        if (new Date() >= timeToSellTimeoutGeyser!) {
-          if (!foundTokenData) return;
-          logger.info(`Selling at TIMEOUT, change addr ${foundTokenData!.mint.toString()}`);
-          await sellOnActionGeyser(foundTokenData!);
-          return;
-        }
-        let price = BigNumber(sol.parsed.info.amount as string).div(other.parsed.info.amount as string);
-        const isSolSwapped = price.gt(1);
-        if (isSolSwapped) price = BigNumber(other.parsed.info.amount as string).div(sol.parsed.info.amount as string);
-        if (!bignumberInitialPrice) {
-          bignumberInitialPrice = price;
-          return;
-        }
-
-        const percentageGain = price.minus(bignumberInitialPrice).div(bignumberInitialPrice).multipliedBy(100);
-        let percentageGainNumber = Number(percentageGain.toFixed(5));
-
-        if (Number(percentageGain.toFixed(5)) < 0) logger.warn(percentageGain.toString());
-        else logger.info(percentageGain.toString());
-
-        if (percentageGainNumber <= stopLossPrecents) {
-          if (!foundTokenData) return;
-          logger.warn(`Selling at LOSS, loss ${percentageGainNumber}%, addr ${foundTokenData!.mint.toString()}`);
-          await sellOnActionGeyser(foundTokenData!);
-          return;
-        }
-        if (percentageGainNumber >= takeProfitPercents) {
-          if (!foundTokenData) return;
-          logger.info(
-            `Selling at TAKEPROFIT, increase ${percentageGainNumber}%, addr ${foundTokenData!.mint.toString()}`,
-          );
-          await sellOnActionGeyser(foundTokenData!);
-
-          return;
-        }
-      }
-    }
-  }
-}
-
-async function sellOnActionGeyser(account: RawAccount) {
-  bignumberInitialPrice = undefined;
-  foundTokenData = undefined;
-  const signature = await sell(
-    account.mint,
-    account.amount,
-    existingTokenAccountsExtended,
-    quoteTokenAssociatedAddress,
-  );
-  if (signature) {
-    solanaConnection
-      .confirmTransaction(signature as TransactionConfirmationStrategy, 'finalized')
-      .then(async (confirmation) => {
-        if (confirmation.value.err) {
-          logger.warn('Sent sell but it failed');
-          existingTokenAccounts = await getTokenAccounts(
-            solanaConnection,
-            wallet.publicKey,
-            process.env.COMMITMENT as Commitment,
-          );
-          const tokenAccount = existingTokenAccounts.find(
-            (acc) => acc.accountInfo.mint.toString() === account.mint.toString(),
-          )!;
-          const signature = await sell(
-            account.mint,
-            tokenAccount.accountInfo.amount,
-            existingTokenAccountsExtended,
-            quoteTokenAssociatedAddress,
-          );
-          clearAfterSell();
-        } else {
-          logger.info('Sell success');
-          clearAfterSell();
-        }
-      })
-      .catch(async (e) => {
-        console.log(e);
-        logger.warn('Sell TX hash expired, hopefully we didnt crash');
-        const signature = await sell(
-          account.mint,
-          account.amount,
-          existingTokenAccountsExtended,
-          quoteTokenAssociatedAddress,
-        );
-        clearAfterSell();
-      });
-  }
-}
-
-function clearAfterSell() {
-  lastRequest = undefined;
-  wsPairs?.close();
-  gotWalletToken = false;
-  processingToken = false;
-  currentTokenSwaps++;
-  if (currentTokenSwaps > 0) {
-    exit();
-  }
 }
 
 export async function processGeyserLiquidity(
@@ -547,16 +316,13 @@ export async function processGeyserLiquidity(
   const block = await getBlockForBuy();
   logger.info(`Got block`);
 
-  const packet = await buy(
-    id,
-    poolState,
-    existingTokenAccountsExtended,
-    quoteTokenAssociatedAddress,
-    currentLamports,
-    mint,
-    block,
-  );
-  return packet;
+  const packet = await buy(id, poolState, quoteTokenAssociatedAddress, currentLamports, mint, block);
+  workerPool!.addTokenAccount(mint.toString(), packet.tokenAccount);
+  return {
+    signature: packet.signature,
+    blockhash: packet.blockhash,
+    lastValidBlockHeight: packet.lastValidBlockHeight,
+  };
 }
 
 async function listenToChanges() {
@@ -567,30 +333,22 @@ async function listenToChanges() {
       if (accountData.mint.toString() === quoteToken.mint.toString()) {
         const walletBalance = new TokenAmount(Token.WSOL, accountData.amount, true);
         logger.info('WSOL amount change ' + walletBalance.toFixed(4));
-        sendMessage(`💸WSOL change ${walletBalance.toFixed(4)} ${currentTokenKey}`);
+        sendMessage(`💸WSOL change ${walletBalance.toFixed(4)}`);
         return;
       }
       if (updatedAccountInfo.accountId.equals(quoteTokenAssociatedAddress)) {
         return;
       }
-      if (currentTokenKey !== accountData.mint.toString()) {
-        console.log(currentTokenKey, accountData.mint.toString());
+      if (!workerPool!.doesTokenExist(accountData.mint.toString())) {
         logger.warn('Got unknown token in wallet');
         return;
       }
-      if (gotWalletToken) return;
-      gotWalletToken = true;
       logger.info(`Monitoring`);
       console.log(accountData.mint);
-      foundTokenData = accountData;
-      const now = new Date();
-      if (now.getTime() - sentBuyTime!.getTime() > 20 * 1000) {
-        logger.warn('Buy took too long, selling');
-        await sellOnActionGeyser(foundTokenData!);
-        return;
-      }
-      timeToSellTimeoutGeyser = new Date();
+      processedTokens.push(accountData.mint.toString());
+      const timeToSellTimeoutGeyser = new Date();
       timeToSellTimeoutGeyser.setTime(timeToSellTimeoutGeyser.getTime() + timoutSec * 1000);
+      workerPool!.gotWalletToken(accountData.mint.toString(), timeToSellTimeoutGeyser, accountData);
     },
     'processed' as Commitment,
     [

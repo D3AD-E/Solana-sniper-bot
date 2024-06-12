@@ -235,7 +235,6 @@ export const toBuffer = (arr: Buffer | Uint8Array | Array<number>): Buffer => {
 export async function buy(
   accountId: PublicKey,
   accountData: LiquidityStateV4,
-  existingTokenAccounts: Map<string, MinimalTokenAccountData>,
   quoteTokenAccountAddress: PublicKey,
   lamports: number,
   mint: PublicKey,
@@ -268,7 +267,6 @@ export async function buy(
   logger.info(`Got market`);
   const tokenAccount = saveTokenAccount(mint, market);
   tokenAccount.poolKeys = createPoolKeys(accountId, accountData, tokenAccount.market!, market);
-  existingTokenAccounts.set(mint.toString(), tokenAccount);
 
   const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
     {
@@ -306,6 +304,7 @@ export async function buy(
     signature: signature!,
     lastValidBlockHeight: block.lastValidBlockHeight,
     blockhash: block.blockhash,
+    tokenAccount,
   };
 }
 
@@ -433,13 +432,10 @@ export async function buy(
 // }
 //lastValidBlock
 export async function sell(
-  mint: PublicKey,
   amount: BigNumberish,
-  existingTokenAccounts: Map<string, MinimalTokenAccountData>,
+  tokenAccount: MinimalTokenAccountData,
   quoteTokenAccountAddress: PublicKey,
 ): Promise<TransactionConfirmationStrategy | undefined> {
-  const tokenAccount = existingTokenAccounts.get(mint.toString());
-
   if (!tokenAccount) {
     return undefined;
   }
