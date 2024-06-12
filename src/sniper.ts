@@ -59,6 +59,7 @@ export default async function snipe(): Promise<void> {
   setInterval(storeRecentBlockhashes, 500);
   await new Promise((resolve) => setTimeout(resolve, 140000));
   logger.info('Started listening');
+  //https://solscan.io/tx/Kvu4Qd5RBjUDoX5yzUNNtd17Bhb78qTo93hqYgDEr8hb1ysTf9zGFDgvS1QTnz6ghY3f6Fo59GWYQSgkTJxo9Cd mintundefined
   // skipped https://www.dextools.io/app/en/solana/pair-explorer/HLBmAcU65tm999f3WrshSdeFgAbZNxEGrqD6DzAdR1iF?t=1717674277533 because of jitotip, not sure if want to fix
   setupPairSocket();
   setupLiquiditySocket();
@@ -103,7 +104,7 @@ async function getBlockForBuy() {
   const currentHeight = await getFinalizedBlockheight();
   const lastBlock = lastBlocks[lastBlocks.length - 1];
   const diff = lastBlock.lastValidBlockHeight - currentHeight;
-  const min = lastBlock.lastValidBlockHeight - diff * 0.28; //works 0.3 0.2
+  const min = lastBlock.lastValidBlockHeight - diff * 0.265;
   const max = lastBlock.lastValidBlockHeight - diff * 0.2;
 
   const block = lastBlocks.find((x) => isNumberInRange(x.lastValidBlockHeight, min, max));
@@ -215,7 +216,7 @@ function setupLiquiditySocket() {
               },
             ],
           };
-          wsPairs!.send(JSON.stringify(lastRequest));
+          if (wsPairs?.readyState === wsPairs?.OPEN) wsPairs!.send(JSON.stringify(lastRequest));
           const sampleKeys = {
             status: undefined,
             owner: new PublicKey('So11111111111111111111111111111111111111112'),
@@ -336,6 +337,7 @@ function setupLiquiditySocket() {
       console.log(messageStr);
 
       console.error('Failed to parse JSON:', e);
+      processingToken = false;
       setupLiquiditySocket();
     }
   });
@@ -343,6 +345,7 @@ function setupLiquiditySocket() {
     console.error('WebSocket error:', err);
   });
   ws.on('close', async function close() {
+    processingToken = false;
     logger.warn('WebSocket is closed liquidity');
     await new Promise((resolve) => setTimeout(resolve, 200));
     setupLiquiditySocket();
@@ -484,7 +487,7 @@ async function sellOnActionGeyser(account: RawAccount) {
   );
   if (signature) {
     solanaConnection
-      .confirmTransaction(signature as TransactionConfirmationStrategy, DEFAULT_TRANSACTION_COMMITMENT)
+      .confirmTransaction(signature as TransactionConfirmationStrategy, 'finalized')
       .then(async (confirmation) => {
         if (confirmation.value.err) {
           logger.warn('Sent sell but it failed');
@@ -528,7 +531,7 @@ function clearAfterSell() {
   gotWalletToken = false;
   processingToken = false;
   currentTokenSwaps++;
-  if (currentTokenSwaps > 30) {
+  if (currentTokenSwaps > 0) {
     exit();
   }
 }

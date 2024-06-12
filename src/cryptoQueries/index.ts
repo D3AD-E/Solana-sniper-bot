@@ -243,7 +243,6 @@ export async function buy(
 ) {
   const quoteAmount = new TokenAmount(Token.WSOL, Number(process.env.SWAP_SOL_AMOUNT), false);
   const market = await getMinimalMarketV3(solanaConnection, accountData.marketId, 'processed');
-  console.log(accountData.marketId, accountData.marketProgramId);
   //sometimes mart find fails
   // const maxRetries = 40;
   // let market = undefined;
@@ -291,12 +290,7 @@ export async function buy(
     instructions: [
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: lamports }),
       ComputeBudgetProgram.setComputeUnitLimit({ units: 101337 }),
-      createAssociatedTokenAccountIdempotentInstruction(
-        wallet.publicKey,
-        tokenAccount.address,
-        wallet.publicKey,
-        accountData.baseMint,
-      ),
+      createAssociatedTokenAccountIdempotentInstruction(wallet.publicKey, tokenAccount.address, wallet.publicKey, mint),
       ...innerTransaction.instructions,
     ],
   }).compileToV0Message();
@@ -460,7 +454,7 @@ export async function sell(
     return undefined;
   }
   const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash({
-    commitment: DEFAULT_TRANSACTION_COMMITMENT,
+    commitment: 'finalized',
   });
 
   const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(

@@ -113,15 +113,22 @@ export async function getMinimalMarketV3(
   marketId: PublicKey,
   commitment?: Commitment,
 ): Promise<MinimalMarketLayoutV3> {
-  const marketInfo = await connection.getAccountInfo(marketId, {
-    commitment,
-    dataSlice: {
-      offset: MARKET_STATE_LAYOUT_V3.offsetOf('eventQueue'),
-      length: 32 * 3,
-    },
-  });
-
-  return MINIMAL_MARKET_STATE_LAYOUT_V3.decode(marketInfo!.data);
+  let marketInfo = undefined;
+  for (let i = 0; i < 10; i += 1) {
+    try {
+      marketInfo = await connection.getAccountInfo(marketId, {
+        commitment,
+        dataSlice: {
+          offset: MARKET_STATE_LAYOUT_V3.offsetOf('eventQueue'),
+          length: 32 * 3,
+        },
+      });
+      return MINIMAL_MARKET_STATE_LAYOUT_V3.decode(marketInfo!.data);
+    } catch (e) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  throw 'Cannot get market';
 }
 
 export const RAYDIUM_LIQUIDITY_PROGRAM_ID_V4 = MAINNET_PROGRAM_ID.AmmV4;
