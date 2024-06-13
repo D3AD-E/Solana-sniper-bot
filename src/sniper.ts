@@ -11,6 +11,8 @@ import { helius } from './helius';
 import { Block } from './listener.types';
 import { isNumberInRange } from './utils/mathUtils';
 import { WorkerPool } from './workers/pool';
+import BigNumber from 'bignumber.js';
+import { BSON } from 'bson';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
@@ -38,7 +40,7 @@ export default async function snipe(): Promise<void> {
   }
   quoteTokenAssociatedAddress = tokenAccount.pubkey;
   workerPool = new WorkerPool(1, quoteTokenAssociatedAddress);
-  setInterval(storeRecentBlockhashes, 500);
+  setInterval(storeRecentBlockhashes, 700);
   await new Promise((resolve) => setTimeout(resolve, 140000));
   logger.info('Started listening');
   //https://solscan.io/tx/Kvu4Qd5RBjUDoX5yzUNNtd17Bhb78qTo93hqYgDEr8hb1ysTf9zGFDgvS1QTnz6ghY3f6Fo59GWYQSgkTJxo9Cd mintundefined
@@ -49,7 +51,6 @@ export default async function snipe(): Promise<void> {
   logger.info(`Wallet Address: ${wallet.publicKey}`);
   swapAmount = new TokenAmount(Token.WSOL, process.env.SWAP_SOL_AMOUNT, false);
   logger.info(`Swap sol amount: ${swapAmount.toFixed()} ${quoteToken.symbol}`);
-
   await listenToChanges();
 }
 
@@ -82,9 +83,14 @@ async function getBlockForBuy() {
 }
 
 async function storeRecentBlockhashes() {
-  const block = await solanaConnection.getLatestBlockhash('finalized');
-  if (lastBlocks.length > 500) lastBlocks.splice(0, 100);
-  lastBlocks.push(block);
+  try {
+    const block = await solanaConnection.getLatestBlockhash('finalized');
+    if (lastBlocks.length > 500) lastBlocks.splice(0, 100);
+    lastBlocks.push(block);
+  } catch (e) {
+    logger.warn('Fetch blockhash failed');
+    console.log(e);
+  }
 }
 
 async function updateLamports() {
@@ -144,7 +150,7 @@ function setupLiquiditySocket() {
           const mintAddress = isFirstMintSol ? mint2.parsed.info.mint : mint1.parsed.info.mint;
           logger.info('Mint ' + mintAddress);
           let mintAccount = undefined;
-          for (let i = 0; i < 10; i += 1) {
+          for (let i = 0; i < 20; i += 1) {
             try {
               mintAccount = await getMint(
                 solanaConnection,

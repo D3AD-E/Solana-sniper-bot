@@ -37,6 +37,7 @@ export enum WorkerAction {
   GotWalletToken,
   ForceSell,
   AddTokenAccount,
+  Test,
 }
 
 export enum WorkerResult {

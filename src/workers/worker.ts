@@ -8,6 +8,7 @@ import { sell, getTokenAccounts } from '../cryptoQueries';
 import { solanaConnection, wallet } from '../solana';
 import { MinimalTokenAccountData } from '../cryptoQueries/cryptoQueries.types';
 import { ParentMessage, WorkerAction, WorkerMessage, WorkerResult } from './worker.types';
+import { fromSerializable } from './converter';
 
 let wsPairs: WebSocket | undefined = undefined;
 
@@ -151,7 +152,6 @@ function clearAfterSell() {
   lastRequest = undefined;
   wsPairs?.close();
 
-  currentTokenKey = '';
   foundTokenData = undefined;
   bignumberInitialPrice = undefined;
   timeToSellTimeoutGeyser = undefined;
@@ -163,6 +163,7 @@ function clearAfterSell() {
       token: currentTokenKey,
     },
   };
+  currentTokenKey = '';
   parentPort!.postMessage(message);
 }
 
@@ -201,7 +202,8 @@ async function sellOnActionGeyser(account: RawAccount) {
 }
 
 // to worker
-parentPort?.on('message', (message: WorkerMessage) => {
+parentPort?.on('message', (data: string) => {
+  const message = fromSerializable(JSON.parse(data)) as WorkerMessage;
   if (message.action === WorkerAction.Setup) {
     quoteTokenAssociatedAddress = message.data!.quoteTokenAssociatedAddress!;
     setupPairSocket();
@@ -222,5 +224,7 @@ parentPort?.on('message', (message: WorkerMessage) => {
     foundTokenData = message.data!.foundTokenData!;
   } else if (message.action === WorkerAction.AddTokenAccount) {
     minimalAccount = message.data!.tokenAccount!;
+  } else if (message.action === WorkerAction.Test) {
+    clearAfterSell();
   }
 });

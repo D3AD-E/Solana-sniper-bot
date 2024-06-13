@@ -3,6 +3,7 @@ import { ParentMessage, WorkerAction, WorkerMessage, WorkerResult } from './work
 import { RawAccount } from '@solana/spl-token';
 import { MinimalTokenAccountData } from '../cryptoQueries/cryptoQueries.types';
 import { Worker } from 'worker_threads';
+import { toSerializable } from './converter';
 
 export class WorkerPool {
   private numWorkers: number;
@@ -19,18 +20,23 @@ export class WorkerPool {
     this.createWorkers();
   }
 
+  private sendMessageToWorker(worker: Worker, message: WorkerMessage) {
+    worker.postMessage(JSON.stringify(toSerializable(message)));
+  }
+
   private createWorkers() {
     for (let i = 0; i < this.numWorkers; i++) {
       const worker = new Worker('./src/workers/worker.ts', {
         execArgv: ['--require', 'ts-node/register'],
         workerData: process.env,
       });
-      worker?.on('message', (message: ParentMessage) => {
+      worker.on('message', (message: ParentMessage) => {
+        console.log(message);
         if (message.result === WorkerResult.SellSuccess) {
           this.freeWorker(message.data.token);
         }
       });
-      worker?.on('error', (message: any) => {
+      worker.on('error', (message: any) => {
         console.log(message);
       });
       const setupMessage: WorkerMessage = {
@@ -39,7 +45,7 @@ export class WorkerPool {
           quoteTokenAssociatedAddress: this.quoteTokenAssociatedAddress,
         },
       };
-      worker.postMessage(setupMessage);
+      this.sendMessageToWorker(worker, setupMessage);
       this.workers.push(worker);
       this.freeWorkers.push(worker);
     }
@@ -58,7 +64,7 @@ export class WorkerPool {
           lastRequest,
         },
       };
-      worker.postMessage(tokenGotMessage);
+      this.sendMessageToWorker(worker, tokenGotMessage);
     } else throw 'No free workers';
   }
 
@@ -82,7 +88,16 @@ export class WorkerPool {
         accountData,
       },
     };
-    worker!.postMessage(forceSellMessage);
+    this.sendMessageToWorker(worker!, forceSellMessage);
+  }
+
+  public debug(token: string) {
+    if (!this.takenWorkers.has(token)) return;
+    const worker = this.takenWorkers.get(token);
+    const forceSellMessage: WorkerMessage = {
+      action: WorkerAction.Test,
+    };
+    this.sendMessageToWorker(worker!, forceSellMessage);
   }
 
   public gotWalletToken(token: string, timeToSellTimeoutGeyser: Date, foundTokenData: RawAccount) {
@@ -94,7 +109,7 @@ export class WorkerPool {
         foundTokenData,
       },
     };
-    worker!.postMessage(tokenGotMessage);
+    this.sendMessageToWorker(worker!, tokenGotMessage);
   }
   public addTokenAccount(token: string, tokenAccount: MinimalTokenAccountData) {
     const worker = this.takenWorkers.get(token);
@@ -104,6 +119,6 @@ export class WorkerPool {
         tokenAccount,
       },
     };
-    worker!.postMessage(tokenGotMessage);
+    this.sendMessageToWorker(worker!, tokenGotMessage);
   }
 }
