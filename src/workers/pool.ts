@@ -31,7 +31,6 @@ export class WorkerPool {
         workerData: process.env,
       });
       worker.on('message', (message: ParentMessage) => {
-        console.log(message);
         if (message.result === WorkerResult.SellSuccess) {
           this.freeWorker(message.data.token);
         }

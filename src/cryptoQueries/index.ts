@@ -413,7 +413,6 @@ export async function sell(
   tokenAccount: MinimalTokenAccountData,
   quoteTokenAccountAddress: PublicKey,
 ): Promise<TransactionConfirmationStrategy | undefined> {
-  console.log(tokenAccount);
   if (!tokenAccount) {
     return undefined;
   }
