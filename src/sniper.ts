@@ -11,8 +11,6 @@ import { helius } from './helius';
 import { Block } from './listener.types';
 import { isNumberInRange } from './utils/mathUtils';
 import { WorkerPool } from './workers/pool';
-import BigNumber from 'bignumber.js';
-import { BSON } from 'bson';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
@@ -39,7 +37,7 @@ export default async function snipe(): Promise<void> {
     throw new Error(`No ${quoteToken.symbol} token account found in wallet: ${wallet.publicKey}`);
   }
   quoteTokenAssociatedAddress = tokenAccount.pubkey;
-  workerPool = new WorkerPool(1, quoteTokenAssociatedAddress);
+  workerPool = new WorkerPool(2, quoteTokenAssociatedAddress);
   setInterval(storeRecentBlockhashes, 700);
   await new Promise((resolve) => setTimeout(resolve, 140000));
   logger.info('Started listening');
@@ -75,7 +73,7 @@ async function getBlockForBuy() {
   const currentHeight = await getFinalizedBlockheight();
   const lastBlock = lastBlocks[lastBlocks.length - 1];
   const diff = lastBlock.lastValidBlockHeight - currentHeight;
-  const min = lastBlock.lastValidBlockHeight - diff * 0.265;
+  const min = lastBlock.lastValidBlockHeight - diff * 0.28;
   const max = lastBlock.lastValidBlockHeight - diff * 0.2;
 
   const block = lastBlocks.find((x) => isNumberInRange(x.lastValidBlockHeight, min, max));
@@ -107,7 +105,7 @@ async function updateLamports() {
 
 function setupLiquiditySocket() {
   ws = new WebSocket(process.env.GEYSER_ENDPOINT!);
-  ws.on('open', function open() {
+  ws!.on('open', function open() {
     logger.info('Listening to geyser liquidity');
     const request = {
       jsonrpc: '2.0',
@@ -136,7 +134,7 @@ function setupLiquiditySocket() {
     };
     ws!.send(JSON.stringify(request));
   });
-  ws.on('message', async function incoming(data) {
+  ws!.on('message', async function incoming(data) {
     const messageStr = data.toString();
     try {
       var jData = JSON.parse(messageStr);
@@ -264,6 +262,7 @@ function setupLiquiditySocket() {
                 if (confirmation.value.err) {
                   logger.warn('Sent buy bundle but it failed');
                   workerPool!.freeWorker(mintAddress);
+                  ws?.close();
                 } else {
                   await new Promise((resolve) => setTimeout(resolve, 5000));
                   if (!processedTokens.some((t) => t === mintAddress)) {
@@ -290,25 +289,25 @@ function setupLiquiditySocket() {
                 console.log(e);
                 logger.warn('TX hash expired, hopefully we didnt crash');
                 workerPool!.freeWorker(mintAddress);
+                ws?.close();
               });
           } catch (e) {
             logger.warn('Buy failed');
             console.error(e);
             workerPool!.freeWorker(mintAddress);
-            return;
           }
         }
       }
     } catch (e) {
       console.log(messageStr);
       console.error('Failed to parse JSON:', e);
-      setupLiquiditySocket();
+      ws?.close();
     }
   });
-  ws.on('error', function error(err) {
+  ws!.on('error', function error(err) {
     console.error('WebSocket error:', err);
   });
-  ws.on('close', async function close() {
+  ws!.on('close', async function close() {
     logger.warn('WebSocket is closed liquidity');
     await new Promise((resolve) => setTimeout(resolve, 200));
     setupLiquiditySocket();
