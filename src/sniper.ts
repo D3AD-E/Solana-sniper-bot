@@ -11,6 +11,7 @@ import { helius } from './helius';
 import { Block } from './listener.types';
 import { isNumberInRange } from './utils/mathUtils';
 import { WorkerPool } from './workers/pool';
+import { envVarToBoolean } from './utils/envUtils';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
@@ -23,6 +24,8 @@ let currentLamports = maxLamports;
 let lastBlocks: Block[] = [];
 let processedTokens: string[] = [];
 let workerPool: WorkerPool | undefined = undefined;
+const enableProtection = envVarToBoolean(process.env.ENABLE_PROTECTION);
+const minPoolSize = 0.4;
 export default async function snipe(): Promise<void> {
   existingTokenAccounts = await getTokenAccounts(
     solanaConnection,
@@ -36,9 +39,14 @@ export default async function snipe(): Promise<void> {
     throw new Error(`No ${quoteToken.symbol} token account found in wallet: ${wallet.publicKey}`);
   }
   quoteTokenAssociatedAddress = tokenAccount.pubkey;
-  workerPool = new WorkerPool(2, quoteTokenAssociatedAddress);
-  setInterval(storeRecentBlockhashes, 700);
-  await new Promise((resolve) => setTimeout(resolve, 140000));
+  workerPool = new WorkerPool(Number(process.env.WORKER_AMOUNT!), quoteTokenAssociatedAddress);
+  if (enableProtection) {
+    setInterval(storeRecentBlockhashes, 700);
+    await new Promise((resolve) => setTimeout(resolve, 140000));
+  } else {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+
   logger.info('Started listening');
   //https://solscan.io/tx/Kvu4Qd5RBjUDoX5yzUNNtd17Bhb78qTo93hqYgDEr8hb1ysTf9zGFDgvS1QTnz6ghY3f6Fo59GWYQSgkTJxo9Cd mintundefined
   // skipped https://www.dextools.io/app/en/solana/pair-explorer/HLBmAcU65tm999f3WrshSdeFgAbZNxEGrqD6DzAdR1iF?t=1717674277533 because of jitotip, not sure if want to fix
@@ -320,8 +328,10 @@ export async function processGeyserLiquidity(
 ): Promise<TransactionConfirmationStrategy> {
   const poolSize = new TokenAmount(quoteToken, poolState.swapQuoteInAmount, true);
   logger.info(`Processing pool: ${mint.toString()} with ${poolSize.toFixed()} ${quoteToken.symbol} in liquidity`);
-  if (Number(poolSize.toFixed()) < 0.4) throw 'Pool too low';
-  const block = await getBlockForBuy();
+  if (Number(poolSize.toFixed()) < minPoolSize) throw 'Pool too low';
+  let block = undefined;
+  if (enableProtection) block = await getBlockForBuy();
+  else block = await solanaConnection.getLatestBlockhash('processed');
   logger.info(`Got block`);
 
   const packet = await buy(id, poolState, quoteTokenAssociatedAddress, currentLamports, mint, block);

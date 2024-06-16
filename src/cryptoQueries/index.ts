@@ -408,6 +408,35 @@ export async function buy(
 //   return await confirmTransactionJito(transaction, recentBlockhashForSwap.blockhash);
 // }
 //lastValidBlock
+
+export async function confirmTransactionInTimeframe(confimation: TransactionConfirmationStrategy, timeout = 30000) {
+  const checkConfirmation = async () => {
+    try {
+      const result = await solanaConnection.confirmTransaction(confimation, 'confirmed');
+      return result.value.err === null;
+    } catch (error) {
+      return false;
+    }
+  };
+
+  const waitTimeout = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const confirmed = await Promise.race([
+    checkConfirmation().then((result) => {
+      if (result) {
+        return true;
+      }
+      return false;
+    }),
+    waitTimeout(timeout).then(() => false),
+  ]);
+
+  if (!confirmed) {
+    console.log(`Transaction not confirmed within ${timeout / 1000} seconds, resending...`);
+  }
+  return confirmed;
+}
+
 export async function sell(
   amount: BigNumberish,
   tokenAccount: MinimalTokenAccountData,

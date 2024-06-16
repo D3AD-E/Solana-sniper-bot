@@ -4,7 +4,7 @@ import logger from '../utils/logger';
 import { RawAccount } from '@solana/spl-token';
 import { TransactionConfirmationStrategy, Commitment, PublicKey } from '@solana/web3.js';
 import BigNumber from 'bignumber.js';
-import { sell, getTokenAccounts } from '../cryptoQueries';
+import { sell, getTokenAccounts, confirmTransactionInTimeframe } from '../cryptoQueries';
 import { solanaConnection, wallet } from '../solana';
 import { MinimalTokenAccountData } from '../cryptoQueries/cryptoQueries.types';
 import { ParentMessage, WorkerAction, WorkerMessage, WorkerResult } from './worker.types';
@@ -171,35 +171,30 @@ function clearAfterSell() {
 async function sellOnActionGeyser(account: RawAccount) {
   bignumberInitialPrice = undefined;
   foundTokenData = undefined;
-  const signature = await sell(account.amount, minimalAccount!, quoteTokenAssociatedAddress);
-  if (signature) {
-    solanaConnection
-      .confirmTransaction(signature as TransactionConfirmationStrategy, 'processed')
-      .then(async (confirmation) => {
-        if (confirmation.value.err) {
-          logger.warn('Sent sell but it failed');
-          const existingTokenAccounts = await getTokenAccounts(
-            solanaConnection,
-            wallet.publicKey,
-            workerData.COMMITMENT as Commitment,
-          );
-          const tokenAccount = existingTokenAccounts.find(
-            (acc) => acc.accountInfo.mint.toString() === account.mint.toString(),
-          )!;
-          const signature = await sell(tokenAccount.accountInfo.amount, minimalAccount!, quoteTokenAssociatedAddress);
-          clearAfterSell();
-        } else {
-          logger.info('Sell success');
-          clearAfterSell();
-        }
-      })
-      .catch(async (e) => {
-        console.log(e);
-        logger.warn('Sell TX hash expired');
-        const signature = await sell(account.amount, minimalAccount!, quoteTokenAssociatedAddress);
-        clearAfterSell();
-      });
+  let confirmation = false;
+  let tries = 0;
+  while (!confirmation && tries < 2) {
+    const signature = await sell(account.amount, minimalAccount!, quoteTokenAssociatedAddress);
+    confirmation = await confirmTransactionInTimeframe(signature!);
+    if (!confirmation) {
+      logger.warn('Sent sell but it failed');
+      const existingTokenAccounts = await getTokenAccounts(
+        solanaConnection,
+        wallet.publicKey,
+        workerData.COMMITMENT as Commitment,
+      );
+      const tokenAccount = existingTokenAccounts.find(
+        (acc) => acc.accountInfo.mint.toString() === account.mint.toString(),
+      )!;
+      const signature = await sell(tokenAccount.accountInfo.amount, minimalAccount!, quoteTokenAssociatedAddress);
+      confirmation = await confirmTransactionInTimeframe(signature!);
+    } else {
+      logger.info('Sell success');
+      clearAfterSell();
+      return;
+    }
   }
+  clearAfterSell();
 }
 
 // to worker
