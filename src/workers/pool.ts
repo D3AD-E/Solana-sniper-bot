@@ -74,6 +74,10 @@ export class WorkerPool {
   public freeWorker(token: string) {
     if (!this.takenWorkers.has(token)) return;
     const worker = this.takenWorkers.get(token);
+    const msg: WorkerMessage = {
+      action: WorkerAction.Clear,
+    };
+    this.sendMessageToWorker(worker!, msg);
     this.freeWorkers.push(worker!);
     this.takenWorkers.delete(token);
   }
@@ -90,21 +94,11 @@ export class WorkerPool {
     this.sendMessageToWorker(worker!, forceSellMessage);
   }
 
-  public debug(token: string) {
-    if (!this.takenWorkers.has(token)) return;
-    const worker = this.takenWorkers.get(token);
-    const forceSellMessage: WorkerMessage = {
-      action: WorkerAction.Test,
-    };
-    this.sendMessageToWorker(worker!, forceSellMessage);
-  }
-
-  public gotWalletToken(token: string, timeToSellTimeoutGeyser: Date, foundTokenData: RawAccount) {
+  public gotWalletToken(token: string, foundTokenData: RawAccount) {
     const worker = this.takenWorkers.get(token);
     const tokenGotMessage: WorkerMessage = {
       action: WorkerAction.GotWalletToken,
       data: {
-        timeToSellTimeoutGeyser,
         foundTokenData,
       },
     };

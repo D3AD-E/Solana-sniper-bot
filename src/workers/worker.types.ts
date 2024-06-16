@@ -18,7 +18,6 @@ export interface WorkerMessage {
   data?: {
     tokenAccount?: MinimalTokenAccountData;
     foundTokenData?: RawAccount;
-    timeToSellTimeoutGeyser?: Date;
     accountData?: RawAccount;
     token?: string;
     lastRequest?: any;
@@ -37,7 +36,7 @@ export enum WorkerAction {
   GotWalletToken,
   ForceSell,
   AddTokenAccount,
-  Test,
+  Clear,
 }
 
 export enum WorkerResult {

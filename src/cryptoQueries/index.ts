@@ -427,7 +427,7 @@ export async function sell(
     return undefined;
   }
   const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash({
-    commitment: 'finalized',
+    commitment: 'processed',
   });
 
   const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(

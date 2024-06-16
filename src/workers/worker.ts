@@ -18,6 +18,7 @@ let foundTokenData: RawAccount | undefined = undefined;
 let bignumberInitialPrice: BigNumber | undefined = undefined;
 let timeToSellTimeoutGeyser: Date | undefined = undefined;
 let minimalAccount: MinimalTokenAccountData | undefined = undefined;
+const timeoutSec = Number(workerData.SELL_TIMEOUT_SEC!);
 
 const stopLossPrecents = Number(workerData.STOP_LOSS_PERCENTS!) * -1;
 const takeProfitPercents = Number(workerData.TAKE_PROFIT_PERCENTS!);
@@ -56,21 +57,21 @@ function setupPairSocket() {
       var jData = JSON.parse(messageStr);
       const instructionWithSwapSell = jData?.params?.result?.transaction?.meta?.innerInstructions[0];
       if (instructionWithSwapSell !== undefined) {
-        getSwappedAmounts(instructionWithSwapSell);
+        getSwappedAmounts(instructionWithSwapSell, jData?.params?.result?.transaction?.transaction?.signatures[0]);
       }
       const instructionWithSwapBuy =
         jData?.params?.result?.transaction?.meta?.innerInstructions[
           jData?.params?.result?.transaction?.meta?.innerInstructions.length - 1
         ];
       if (instructionWithSwapBuy !== undefined) {
-        getSwappedAmounts(instructionWithSwapBuy);
+        getSwappedAmounts(instructionWithSwapBuy, jData?.params?.result?.transaction?.transaction?.signatures[0]);
       }
       const instructionWithSwapBuy2 =
         jData?.params?.result?.transaction?.meta?.innerInstructions[
           jData?.params?.result?.transaction?.meta?.innerInstructions.length - 2
         ];
       if (instructionWithSwapBuy2 !== undefined) {
-        getSwappedAmounts(instructionWithSwapBuy2);
+        getSwappedAmounts(instructionWithSwapBuy2, jData?.params?.result?.transaction?.transaction?.signatures[0]);
       }
     } catch (e) {
       console.log(messageStr);
@@ -91,7 +92,7 @@ function setupPairSocket() {
   });
 }
 
-async function getSwappedAmounts(instructionWithSwap: any) {
+async function getSwappedAmounts(instructionWithSwap: any, signature: any) {
   if (!foundTokenData) return;
   const swapDataBuy = instructionWithSwap.instructions?.filter((x: any) => x.parsed?.info.amount !== undefined);
   if (swapDataBuy !== undefined) {
@@ -125,8 +126,8 @@ async function getSwappedAmounts(instructionWithSwap: any) {
         const percentageGain = price.minus(bignumberInitialPrice).div(bignumberInitialPrice).multipliedBy(100);
         let percentageGainNumber = Number(percentageGain.toFixed(5));
 
-        if (Number(percentageGain.toFixed(5)) < 0) logger.warn(percentageGain.toString());
-        else logger.info(percentageGain.toString());
+        if (Number(percentageGain.toFixed(5)) < 0) logger.warn(percentageGain.toString() + ' ' + signature.toString());
+        else logger.info(percentageGain.toString() + ' ' + signature.toString());
 
         if (percentageGainNumber <= stopLossPrecents) {
           if (!foundTokenData) return;
@@ -150,7 +151,7 @@ async function getSwappedAmounts(instructionWithSwap: any) {
 
 function clearAfterSell() {
   lastRequest = undefined;
-  wsPairs?.close();
+  if (wsPairs?.readyState === wsPairs?.OPEN) wsPairs?.close();
 
   foundTokenData = undefined;
   bignumberInitialPrice = undefined;
@@ -173,7 +174,7 @@ async function sellOnActionGeyser(account: RawAccount) {
   const signature = await sell(account.amount, minimalAccount!, quoteTokenAssociatedAddress);
   if (signature) {
     solanaConnection
-      .confirmTransaction(signature as TransactionConfirmationStrategy, 'finalized')
+      .confirmTransaction(signature as TransactionConfirmationStrategy, 'processed')
       .then(async (confirmation) => {
         if (confirmation.value.err) {
           logger.warn('Sent sell but it failed');
@@ -194,7 +195,7 @@ async function sellOnActionGeyser(account: RawAccount) {
       })
       .catch(async (e) => {
         console.log(e);
-        logger.warn('Sell TX hash expired, hopefully we didnt crash');
+        logger.warn('Sell TX hash expired');
         const signature = await sell(account.amount, minimalAccount!, quoteTokenAssociatedAddress);
         clearAfterSell();
       });
@@ -220,11 +221,13 @@ parentPort?.on('message', (data: string) => {
       sellOnActionGeyser(message.data!.foundTokenData!);
       return;
     }
-    timeToSellTimeoutGeyser = message.data!.timeToSellTimeoutGeyser!;
+    const date = new Date();
+    date.setTime(date.getTime() + timeoutSec * 1000);
+    timeToSellTimeoutGeyser = date;
     foundTokenData = message.data!.foundTokenData!;
   } else if (message.action === WorkerAction.AddTokenAccount) {
     minimalAccount = message.data!.tokenAccount!;
-  } else if (message.action === WorkerAction.Test) {
+  } else if (message.action === WorkerAction.Clear) {
     clearAfterSell();
   }
 });

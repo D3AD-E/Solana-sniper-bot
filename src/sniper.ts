@@ -17,7 +17,6 @@ const quoteToken = Token.WSOL;
 let swapAmount: TokenAmount;
 let quoteTokenAssociatedAddress: PublicKey;
 let ws: WebSocket | undefined = undefined;
-const timoutSec = Number(process.env.SELL_TIMEOUT_SEC!);
 
 const maxLamports = 1200010;
 let currentLamports = maxLamports;
@@ -53,10 +52,10 @@ export default async function snipe(): Promise<void> {
 }
 
 async function getFinalizedBlockheight(): Promise<number> {
-  const currentSlot = await solanaConnection.getSlot('finalized');
   let block = undefined;
   for (let i = 0; i < 5; i += 1) {
     try {
+      const currentSlot = await solanaConnection.getSlot('finalized');
       block = (await solanaConnection.getBlock(currentSlot - 2, {
         transactionDetails: 'none',
         maxSupportedTransactionVersion: 0,
@@ -287,7 +286,7 @@ function setupLiquiditySocket() {
               })
               .catch((e) => {
                 console.log(e);
-                logger.warn('TX hash expired, hopefully we didnt crash');
+                logger.warn('Buy TX hash expired');
                 workerPool!.freeWorker(mintAddress);
                 ws?.close();
               });
@@ -355,9 +354,7 @@ async function listenToChanges() {
       logger.info(`Monitoring`);
       console.log(accountData.mint);
       processedTokens.push(accountData.mint.toString());
-      const timeToSellTimeoutGeyser = new Date();
-      timeToSellTimeoutGeyser.setTime(timeToSellTimeoutGeyser.getTime() + timoutSec * 1000);
-      workerPool!.gotWalletToken(accountData.mint.toString(), timeToSellTimeoutGeyser, accountData);
+      workerPool!.gotWalletToken(accountData.mint.toString(), accountData);
     },
     'processed' as Commitment,
     [
