@@ -97,7 +97,7 @@ export async function createAccount(
     recentBlockhash: latestBlockhash.blockhash,
     instructions: [
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 421197 }),
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 101337 }),
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
       createAssociatedTokenAccountIdempotentInstruction(
         wallet.publicKey,
         ata,
@@ -154,7 +154,7 @@ export async function closeAccount(tokenAddress: PublicKey): Promise<string | un
     recentBlockhash: latestBlockhash.blockhash,
     instructions: [
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 421197 }),
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 101337 }),
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
       createCloseAccountInstruction(tokenAddress, wallet.publicKey, wallet.publicKey),
     ],
   }).compileToV0Message();
@@ -199,7 +199,7 @@ export async function preformSwap(
     recentBlockhash: recentBlockhashForSwap.blockhash,
     instructions: [
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 421197 }),
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 101337 }),
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
       ...innerTransaction.instructions,
     ],
   }).compileToV0Message();
@@ -242,7 +242,6 @@ export async function buy(
 ) {
   const quoteAmount = new TokenAmount(Token.WSOL, Number(process.env.SWAP_SOL_AMOUNT), false);
   const market = await getMinimalMarketV3(solanaConnection, accountData.marketId, 'processed');
-  logger.info(`Got market`);
   const tokenAccount = saveTokenAccount(mint, market);
   tokenAccount.poolKeys = createPoolKeys(accountId, accountData, tokenAccount.market!, market);
 
@@ -264,7 +263,7 @@ export async function buy(
     recentBlockhash: block.blockhash,
     instructions: [
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: lamports }),
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 101337 }),
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
       createAssociatedTokenAccountIdempotentInstruction(wallet.publicKey, tokenAccount.address, wallet.publicKey, mint),
       ...innerTransaction.instructions,
     ],
@@ -478,7 +477,7 @@ export async function sell(
     recentBlockhash: recentBlockhashForSwap.blockhash,
     instructions: [
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 201197 }),
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 101337 }),
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
       ...innerTransaction.instructions,
       createCloseAccountInstruction(tokenAccount.address, wallet.publicKey, wallet.publicKey),
     ],

@@ -9,7 +9,7 @@ const bot = new TelegramBot(process.env.BOT_TOKEN!, { polling: true });
 
 bot.on('message', (msg) => {
   console.log(msg?.text);
-  if (msg?.text === 'exit1') exit();
+  if (msg?.text === 'exit') exit();
 });
 
 export const sendMessage = (text: string) => {

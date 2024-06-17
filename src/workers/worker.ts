@@ -173,7 +173,7 @@ async function sellOnActionGeyser(account: RawAccount) {
   foundTokenData = undefined;
   let confirmation = false;
   let tries = 0;
-  while (!confirmation && tries < 2) {
+  while (!confirmation && tries < 5) {
     const signature = await sell(account.amount, minimalAccount!, quoteTokenAssociatedAddress);
     confirmation = await confirmTransactionInTimeframe(signature!);
     if (!confirmation) {
@@ -185,9 +185,15 @@ async function sellOnActionGeyser(account: RawAccount) {
       );
       const tokenAccount = existingTokenAccounts.find(
         (acc) => acc.accountInfo.mint.toString() === account.mint.toString(),
-      )!;
+      );
+      if (!tokenAccount) {
+        logger.info('Sell success');
+        clearAfterSell();
+        return;
+      }
       const signature = await sell(tokenAccount.accountInfo.amount, minimalAccount!, quoteTokenAssociatedAddress);
       confirmation = await confirmTransactionInTimeframe(signature!);
+      tries++;
     } else {
       logger.info('Sell success');
       clearAfterSell();

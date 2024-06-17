@@ -54,6 +54,7 @@ export class WorkerPool {
 
   public gotToken(token: string, lastRequest: any) {
     if (this.freeWorkers.length > 0) {
+      if (this.takenWorkers.has(token)) throw 'Token is already being processed';
       const worker = this.freeWorkers.pop()!;
       this.takenWorkers.set(token, worker);
       const tokenGotMessage: WorkerMessage = {

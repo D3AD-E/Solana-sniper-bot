@@ -25,7 +25,7 @@ let lastBlocks: Block[] = [];
 let processedTokens: string[] = [];
 let workerPool: WorkerPool | undefined = undefined;
 const enableProtection = envVarToBoolean(process.env.ENABLE_PROTECTION);
-const minPoolSize = 0.4;
+const minPoolSize = 8.1;
 export default async function snipe(): Promise<void> {
   existingTokenAccounts = await getTokenAccounts(
     solanaConnection,
@@ -332,7 +332,6 @@ export async function processGeyserLiquidity(
   let block = undefined;
   if (enableProtection) block = await getBlockForBuy();
   else block = await solanaConnection.getLatestBlockhash('processed');
-  logger.info(`Got block`);
 
   const packet = await buy(id, poolState, quoteTokenAssociatedAddress, currentLamports, mint, block);
   workerPool!.addTokenAccount(mint.toString(), packet.tokenAccount);
