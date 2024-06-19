@@ -51,6 +51,12 @@ export default async function snipe(): Promise<void> {
   //https://solscan.io/tx/Kvu4Qd5RBjUDoX5yzUNNtd17Bhb78qTo93hqYgDEr8hb1ysTf9zGFDgvS1QTnz6ghY3f6Fo59GWYQSgkTJxo9Cd mintundefined
   // skipped https://www.dextools.io/app/en/solana/pair-explorer/HLBmAcU65tm999f3WrshSdeFgAbZNxEGrqD6DzAdR1iF?t=1717674277533 because of jitotip, not sure if want to fix
   setupLiquiditySocket();
+  setInterval(
+    () => {
+      ws?.close();
+    },
+    10 * 60 * 1000,
+  ); // 10 minutes
   await updateLamports();
   setInterval(updateLamports, 15000);
   logger.info(`Wallet Address: ${wallet.publicKey}`);
