@@ -9,14 +9,13 @@ import { solanaConnection, wallet } from '../solana';
 import { MinimalTokenAccountData } from '../cryptoQueries/cryptoQueries.types';
 import { ParentMessage, WorkerAction, WorkerMessage, WorkerResult } from './worker.types';
 import { fromSerializable } from './converter';
-
+process.env = { ...process.env, ...workerData };
 let wsPairs: WebSocket | undefined = undefined;
 
 let lastRequest: any | undefined = undefined;
 let currentTokenKey = '';
 let foundTokenData: RawAccount | undefined = undefined;
 let bignumberInitialPrice: BigNumber | undefined = undefined;
-let timeToSellTimeoutGeyser: Date | undefined = undefined;
 let minimalAccount: MinimalTokenAccountData | undefined = undefined;
 const timeoutSec = Number(workerData.SELL_TIMEOUT_SEC!);
 
@@ -24,7 +23,7 @@ const stopLossPrecents = Number(workerData.STOP_LOSS_PERCENTS!) * -1;
 const takeProfitPercents = Number(workerData.TAKE_PROFIT_PERCENTS!);
 let quoteTokenAssociatedAddress: PublicKey;
 let sentBuyTime: Date | undefined = undefined;
-
+let timeoutId: NodeJS.Timeout | undefined = undefined;
 function setupPairSocket() {
   wsPairs = new WebSocket(workerData.GEYSER_ENDPOINT!);
   wsPairs.on('open', function open() {
@@ -109,12 +108,7 @@ async function getSwappedAmounts(instructionWithSwap: any, signature: any) {
           sellOnActionGeyser(foundTokenData!);
           return;
         }
-        if (new Date() >= timeToSellTimeoutGeyser!) {
-          if (!foundTokenData) return;
-          logger.info(`Selling at TIMEOUT, change addr ${foundTokenData!.mint.toString()}`);
-          await sellOnActionGeyser(foundTokenData!);
-          return;
-        }
+
         let price = BigNumber(sol.parsed.info.amount as string).div(other.parsed.info.amount as string);
         const isSolSwapped = price.gt(1);
         if (isSolSwapped) price = BigNumber(other.parsed.info.amount as string).div(sol.parsed.info.amount as string);
@@ -155,7 +149,6 @@ function clearAfterSell() {
 
   foundTokenData = undefined;
   bignumberInitialPrice = undefined;
-  timeToSellTimeoutGeyser = undefined;
   minimalAccount = undefined;
   sentBuyTime = undefined;
   const message: ParentMessage = {
@@ -169,12 +162,13 @@ function clearAfterSell() {
 }
 
 async function sellOnActionGeyser(account: RawAccount) {
+  if (timeoutId) clearTimeout(timeoutId);
   bignumberInitialPrice = undefined;
   foundTokenData = undefined;
   let confirmation = false;
   let tries = 0;
   while (!confirmation && tries < 5) {
-    const signature = await sell(account.amount, minimalAccount!, quoteTokenAssociatedAddress);
+    const signature = await sell(account.amount, minimalAccount!, quoteTokenAssociatedAddress, account.mint.toString());
     confirmation = await confirmTransactionInTimeframe(signature!);
     if (!confirmation) {
       logger.warn('Sent sell but it failed');
@@ -191,7 +185,12 @@ async function sellOnActionGeyser(account: RawAccount) {
         clearAfterSell();
         return;
       }
-      const signature = await sell(tokenAccount.accountInfo.amount, minimalAccount!, quoteTokenAssociatedAddress);
+      const signature = await sell(
+        tokenAccount.accountInfo.amount,
+        minimalAccount!,
+        quoteTokenAssociatedAddress,
+        account.mint.toString(),
+      );
       confirmation = await confirmTransactionInTimeframe(signature!);
       tries++;
     } else {
@@ -222,10 +221,14 @@ parentPort?.on('message', (data: string) => {
       sellOnActionGeyser(message.data!.foundTokenData!);
       return;
     }
-    const date = new Date();
-    date.setTime(date.getTime() + timeoutSec * 1000);
-    timeToSellTimeoutGeyser = date;
     foundTokenData = message.data!.foundTokenData!;
+    timeoutId = setTimeout(() => {
+      if (!foundTokenData) return;
+      timeoutId = undefined;
+      logger.info(`Selling at TIMEOUT, change addr ${foundTokenData!.mint.toString()}`);
+      sellOnActionGeyser(foundTokenData!);
+      return;
+    }, timeoutSec * 1000);
   } else if (message.action === WorkerAction.AddTokenAccount) {
     minimalAccount = message.data!.tokenAccount!;
   } else if (message.action === WorkerAction.Clear) {

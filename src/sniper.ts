@@ -4,7 +4,7 @@ import { Commitment, PublicKey, TransactionConfirmationStrategy } from '@solana/
 import { buy, getTokenAccounts } from './cryptoQueries';
 import logger from './utils/logger';
 import { solanaConnection, wallet } from './solana';
-import { RAYDIUM_LIQUIDITY_PROGRAM_ID_V4 } from './cryptoQueries/raydiumSwapUtils/liquidity';
+import { RAYDIUM_LIQUIDITY_PROGRAM_ID_V4, regeneratePoolKeys } from './cryptoQueries/raydiumSwapUtils/liquidity';
 import WebSocket from 'ws';
 import { sendMessage } from './telegramBot';
 import { helius } from './helius';
@@ -19,13 +19,13 @@ let swapAmount: TokenAmount;
 let quoteTokenAssociatedAddress: PublicKey;
 let ws: WebSocket | undefined = undefined;
 
-const maxLamports = 1200010;
+const maxLamports = 500000;
 let currentLamports = maxLamports;
 let lastBlocks: Block[] = [];
 let processedTokens: string[] = [];
 let workerPool: WorkerPool | undefined = undefined;
 const enableProtection = envVarToBoolean(process.env.ENABLE_PROTECTION);
-const minPoolSize = 8.1;
+const minPoolSize = 31;
 export default async function snipe(): Promise<void> {
   existingTokenAccounts = await getTokenAccounts(
     solanaConnection,
@@ -46,7 +46,6 @@ export default async function snipe(): Promise<void> {
   } else {
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
-
   logger.info('Started listening');
   //https://solscan.io/tx/Kvu4Qd5RBjUDoX5yzUNNtd17Bhb78qTo93hqYgDEr8hb1ysTf9zGFDgvS1QTnz6ghY3f6Fo59GWYQSgkTJxo9Cd mintundefined
   // skipped https://www.dextools.io/app/en/solana/pair-explorer/HLBmAcU65tm999f3WrshSdeFgAbZNxEGrqD6DzAdR1iF?t=1717674277533 because of jitotip, not sure if want to fix
@@ -57,8 +56,8 @@ export default async function snipe(): Promise<void> {
     },
     10 * 60 * 1000,
   ); // 10 minutes
-  await updateLamports();
-  setInterval(updateLamports, 15000);
+  // await updateLamports();
+  // setInterval(updateLamports, 15000);
   logger.info(`Wallet Address: ${wallet.publicKey}`);
   swapAmount = new TokenAmount(Token.WSOL, process.env.SWAP_SOL_AMOUNT, false);
   logger.info(`Swap sol amount: ${swapAmount.toFixed()} ${quoteToken.symbol}`);
@@ -104,17 +103,17 @@ async function storeRecentBlockhashes() {
   }
 }
 
-async function updateLamports() {
-  const prices = await helius.rpc.getPriorityFeeEstimate({
-    accountKeys: ['675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8'],
-    options: { includeAllPriorityFeeLevels: true },
-  });
-  if (prices.priorityFeeLevels?.high === undefined || maxLamports < prices.priorityFeeLevels?.high) {
-    currentLamports = maxLamports;
-  } else {
-    currentLamports = Math.floor(prices.priorityFeeLevels?.high + 10000);
-  }
-}
+// async function updateLamports() {
+//   const prices = await helius.rpc.getPriorityFeeEstimate({
+//     accountKeys: ['675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8'],
+//     options: { includeAllPriorityFeeLevels: true },
+//   });
+//   if (prices.priorityFeeLevels?.veryHigh === undefined || maxLamports < prices.priorityFeeLevels?.veryHigh) {
+//     currentLamports = maxLamports;
+//   } else {
+//     currentLamports = Math.floor(prices.priorityFeeLevels?.veryHigh); //todo remove
+//   }
+// }
 
 function setupLiquiditySocket() {
   ws = new WebSocket(process.env.GEYSER_ENDPOINT!);
@@ -137,7 +136,7 @@ function setupLiquiditySocket() {
           ],
         },
         {
-          commitment: 'processed',
+          commitment: 'singleGossip',
           encoding: 'jsonParsed',
           transactionDetails: 'full',
           showRewards: false,
@@ -174,7 +173,15 @@ function setupLiquiditySocket() {
             }
           }
           if (!mintAccount) throw 'Failed to get mint ';
-
+          if ((mintAddress as string).endsWith('pump')) {
+            logger.warn('Token pumpscam');
+            return;
+          }
+          const signatures = jData?.params?.result?.transaction?.transaction!.signatures;
+          if (signatures[0] === 'CGsqR7CTqTwbmAUTPnfg9Bj9GLJgkrUD9rhjh3vHEYvh') {
+            logger.warn('Moon scam');
+            return;
+          }
           if (mintAccount.freezeAuthority !== null) {
             logger.warn('Token can be frozen, skipping');
             return;
@@ -183,6 +190,25 @@ function setupLiquiditySocket() {
             logger.warn('No workers available');
             return;
           }
+          const poolSize = new TokenAmount(quoteToken, inner[30].parsed.info.amount, true);
+          logger.info(
+            `Processing pool: ${mintAddress.toString()} with ${poolSize.toFixed()} ${quoteToken.symbol} in liquidity`,
+          );
+          if (Number(poolSize.toFixed()) < minPoolSize) {
+            logger.warn('Price too low');
+            return;
+          }
+
+          // const recentSignatures = await solanaConnection.getSignaturesForAddress(
+          //   new PublicKey(mintAddress),
+          //   { limit: undefined },
+          //   'confirmed',
+          // );
+          // if (recentSignatures.length === 1000) {
+          //   logger.warn('Token was traded before');
+          //   return;
+          // }
+
           logger.info('Listening to geyser Pair');
           const lastRequest = {
             jsonrpc: '2.0',
@@ -332,9 +358,6 @@ export async function processGeyserLiquidity(
   poolState: LiquidityStateV4,
   mint: PublicKey,
 ): Promise<TransactionConfirmationStrategy> {
-  const poolSize = new TokenAmount(quoteToken, poolState.swapQuoteInAmount, true);
-  logger.info(`Processing pool: ${mint.toString()} with ${poolSize.toFixed()} ${quoteToken.symbol} in liquidity`);
-  if (Number(poolSize.toFixed()) < minPoolSize) throw 'Pool too low';
   let block = undefined;
   if (enableProtection) block = await getBlockForBuy();
   else block = await solanaConnection.getLatestBlockhash('processed');

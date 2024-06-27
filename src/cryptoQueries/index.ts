@@ -440,6 +440,7 @@ export async function sell(
   amount: BigNumberish,
   tokenAccount: MinimalTokenAccountData,
   quoteTokenAccountAddress: PublicKey,
+  mint: string,
 ): Promise<TransactionConfirmationStrategy | undefined> {
   if (!tokenAccount) {
     return undefined;
@@ -457,33 +458,58 @@ export async function sell(
   const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash({
     commitment: 'processed',
   });
-
-  const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
-    {
-      poolKeys: tokenAccount.poolKeys!,
-      userKeys: {
-        tokenAccountOut: quoteTokenAccountAddress,
-        tokenAccountIn: tokenAccount.address,
-        owner: wallet.publicKey,
+  let inner = undefined;
+  try {
+    const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
+      {
+        poolKeys: tokenAccount.poolKeys!,
+        userKeys: {
+          tokenAccountOut: quoteTokenAccountAddress,
+          tokenAccountIn: tokenAccount.address,
+          owner: wallet.publicKey,
+        },
+        amountIn: amount,
+        minAmountOut: 0,
       },
-      amountIn: amount,
-      minAmountOut: 0,
-    },
-    tokenAccount.poolKeys!.version,
-  );
+      tokenAccount.poolKeys!.version,
+    );
+    inner = innerTransaction;
+  } catch (e) {
+    const tokenAccounts = await getTokenAccounts(solanaConnection, wallet.publicKey, 'processed');
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const newToken = tokenAccounts.find((acc) => acc.accountInfo.mint.toString() === mint)!;
+    if (!newToken) {
+      logger.info(`No token account found in wallet, but it succeeded`);
+      throw 'Fail';
+    }
+    const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
+      {
+        poolKeys: tokenAccount.poolKeys!,
+        userKeys: {
+          tokenAccountOut: quoteTokenAccountAddress,
+          tokenAccountIn: tokenAccount.address,
+          owner: wallet.publicKey,
+        },
+        amountIn: newToken.accountInfo.amount,
+        minAmountOut: 0,
+      },
+      tokenAccount.poolKeys!.version,
+    );
+    inner = innerTransaction;
+  }
 
   const messageV0 = new TransactionMessage({
     payerKey: wallet.publicKey,
     recentBlockhash: recentBlockhashForSwap.blockhash,
     instructions: [
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 201197 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 500000 }),
       ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
-      ...innerTransaction.instructions,
+      ...inner.instructions,
       createCloseAccountInstruction(tokenAccount.address, wallet.publicKey, wallet.publicKey),
     ],
   }).compileToV0Message();
   const transaction = new VersionedTransaction(messageV0);
-  transaction.sign([wallet, ...innerTransaction.signers]);
+  transaction.sign([wallet, ...inner.signers]);
 
   const signature = await solanaConnection.sendRawTransaction(transaction.serialize(), {
     skipPreflight: true,
