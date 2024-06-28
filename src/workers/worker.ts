@@ -24,6 +24,10 @@ const takeProfitPercents = Number(workerData.TAKE_PROFIT_PERCENTS!);
 let quoteTokenAssociatedAddress: PublicKey;
 let sentBuyTime: Date | undefined = undefined;
 let timeoutId: NodeJS.Timeout | undefined = undefined;
+let incactivityTimeoutId: NodeJS.Timeout | undefined = undefined;
+let priceTimeoutId: NodeJS.Timeout | undefined = undefined;
+let percentageGainNumber: number | undefined = undefined;
+
 function setupPairSocket() {
   wsPairs = new WebSocket(workerData.GEYSER_ENDPOINT!);
   wsPairs.on('open', function open() {
@@ -108,6 +112,7 @@ async function getSwappedAmounts(instructionWithSwap: any, signature: any) {
           sellOnActionGeyser(foundTokenData!);
           return;
         }
+        if (incactivityTimeoutId) clearTimeout(incactivityTimeoutId);
 
         let price = BigNumber(sol.parsed.info.amount as string).div(other.parsed.info.amount as string);
         const isSolSwapped = price.gt(1);
@@ -118,7 +123,15 @@ async function getSwappedAmounts(instructionWithSwap: any, signature: any) {
         }
 
         const percentageGain = price.minus(bignumberInitialPrice).div(bignumberInitialPrice).multipliedBy(100);
-        let percentageGainNumber = Number(percentageGain.toFixed(5));
+        percentageGainNumber = Number(percentageGain.toFixed(5));
+
+        incactivityTimeoutId = setTimeout(() => {
+          if (!foundTokenData) return;
+          incactivityTimeoutId = undefined;
+          logger.info(`Selling at INACTIVITY, change addr ${foundTokenData!.mint.toString()}`);
+          sellOnActionGeyser(foundTokenData!);
+          return;
+        }, 15 * 1000);
 
         if (Number(percentageGain.toFixed(5)) < 0) logger.warn(percentageGain.toString() + ' ' + signature.toString());
         else logger.info(percentageGain.toString() + ' ' + signature.toString());
@@ -151,6 +164,7 @@ function clearAfterSell() {
   bignumberInitialPrice = undefined;
   minimalAccount = undefined;
   sentBuyTime = undefined;
+  percentageGainNumber = undefined;
   const message: ParentMessage = {
     result: WorkerResult.SellSuccess,
     data: {
@@ -163,6 +177,9 @@ function clearAfterSell() {
 
 async function sellOnActionGeyser(account: RawAccount) {
   if (timeoutId) clearTimeout(timeoutId);
+  if (priceTimeoutId) clearTimeout(priceTimeoutId);
+  if (incactivityTimeoutId) clearTimeout(incactivityTimeoutId);
+
   bignumberInitialPrice = undefined;
   foundTokenData = undefined;
   let confirmation = false;
@@ -229,6 +246,16 @@ parentPort?.on('message', (data: string) => {
       sellOnActionGeyser(foundTokenData!);
       return;
     }, timeoutSec * 1000);
+
+    priceTimeoutId = setTimeout(() => {
+      if (!foundTokenData) return;
+      if (percentageGainNumber && percentageGainNumber < 2) {
+        priceTimeoutId = undefined;
+        logger.info(`Selling at PRICETIMEOUT, change addr ${foundTokenData!.mint.toString()}`);
+        sellOnActionGeyser(foundTokenData!);
+      }
+      return;
+    }, 100 * 1000);
   } else if (message.action === WorkerAction.AddTokenAccount) {
     minimalAccount = message.data!.tokenAccount!;
   } else if (message.action === WorkerAction.Clear) {

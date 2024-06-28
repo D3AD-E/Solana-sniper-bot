@@ -178,8 +178,11 @@ function setupLiquiditySocket() {
             return;
           }
           const signatures = jData?.params?.result?.transaction?.transaction!.signatures;
-          if (signatures[0] === 'CGsqR7CTqTwbmAUTPnfg9Bj9GLJgkrUD9rhjh3vHEYvh') {
-            logger.warn('Moon scam');
+          if (
+            signatures[0] === 'CGsqR7CTqTwbmAUTPnfg9Bj9GLJgkrUD9rhjh3vHEYvh' ||
+            signatures[0] === '39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg'
+          ) {
+            logger.warn('Moon/pump scam');
             return;
           }
           if (mintAccount.freezeAuthority !== null) {
