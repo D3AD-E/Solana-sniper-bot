@@ -16,6 +16,7 @@ let lastRequest: any | undefined = undefined;
 let currentTokenKey = '';
 let foundTokenData: RawAccount | undefined = undefined;
 let bignumberInitialPrice: BigNumber | undefined = undefined;
+let bignumberInitialPriceStart: BigNumber | undefined = undefined;
 let minimalAccount: MinimalTokenAccountData | undefined = undefined;
 const timeoutSec = Number(workerData.SELL_TIMEOUT_SEC!);
 
@@ -96,7 +97,6 @@ function setupPairSocket() {
 }
 
 async function getSwappedAmounts(instructionWithSwap: any, signature: any) {
-  if (!foundTokenData) return;
   const swapDataBuy = instructionWithSwap.instructions?.filter((x: any) => x.parsed?.info.amount !== undefined);
   if (swapDataBuy !== undefined) {
     const sol = swapDataBuy.find(
@@ -106,6 +106,18 @@ async function getSwappedAmounts(instructionWithSwap: any, signature: any) {
       const other = swapDataBuy.find(
         (x: any) => x.parsed.info.authority === '5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1',
       );
+      if (sol === undefined || other === undefined) {
+        logger.warn(`Geyser is broken`);
+        if (foundTokenData) sellOnActionGeyser(foundTokenData!);
+        return;
+      }
+      let price = BigNumber(sol.parsed.info.amount as string).div(other.parsed.info.amount as string);
+      const isSolSwapped = price.gt(1);
+      if (isSolSwapped) price = BigNumber(other.parsed.info.amount as string).div(sol.parsed.info.amount as string);
+      if (!bignumberInitialPriceStart) {
+        console.log(signature.toString());
+        bignumberInitialPriceStart = price;
+      }
       if (foundTokenData) {
         if (sol === undefined || other === undefined) {
           logger.warn(`Geyser is broken, selling`);
@@ -113,25 +125,34 @@ async function getSwappedAmounts(instructionWithSwap: any, signature: any) {
           return;
         }
         if (incactivityTimeoutId) clearTimeout(incactivityTimeoutId);
-
-        let price = BigNumber(sol.parsed.info.amount as string).div(other.parsed.info.amount as string);
-        const isSolSwapped = price.gt(1);
-        if (isSolSwapped) price = BigNumber(other.parsed.info.amount as string).div(sol.parsed.info.amount as string);
         if (!bignumberInitialPrice) {
+          const percentageGain = price
+            .minus(bignumberInitialPriceStart)
+            .div(bignumberInitialPriceStart)
+            .multipliedBy(100);
+          const priceFromStart = Number(percentageGain.toFixed(5));
+          console.log(priceFromStart, signature.toString(), price.toString(), bignumberInitialPriceStart.toString());
+          if (priceFromStart < -5) {
+            logger.info(`Selling at PRICEDROP, change addr ${foundTokenData!.mint.toString()}`);
+            sellOnActionGeyser(foundTokenData!);
+            return;
+          }
           bignumberInitialPrice = price;
           return;
         }
 
         const percentageGain = price.minus(bignumberInitialPrice).div(bignumberInitialPrice).multipliedBy(100);
         percentageGainNumber = Number(percentageGain.toFixed(5));
-
-        incactivityTimeoutId = setTimeout(() => {
-          if (!foundTokenData) return;
-          incactivityTimeoutId = undefined;
-          logger.info(`Selling at INACTIVITY, change addr ${foundTokenData!.mint.toString()}`);
-          sellOnActionGeyser(foundTokenData!);
-          return;
-        }, 15 * 1000);
+        const now = new Date();
+        if (now.getTime() - sentBuyTime!.getTime() > 30 * 1000) {
+          incactivityTimeoutId = setTimeout(() => {
+            if (!foundTokenData) return;
+            incactivityTimeoutId = undefined;
+            logger.info(`Selling at INACTIVITY, change addr ${foundTokenData!.mint.toString()}`);
+            sellOnActionGeyser(foundTokenData!);
+            return;
+          }, 15 * 1000);
+        }
 
         if (Number(percentageGain.toFixed(5)) < 0) logger.warn(percentageGain.toString() + ' ' + signature.toString());
         else logger.info(percentageGain.toString() + ' ' + signature.toString());
@@ -164,6 +185,7 @@ function clearAfterSell() {
   bignumberInitialPrice = undefined;
   minimalAccount = undefined;
   sentBuyTime = undefined;
+  bignumberInitialPriceStart = undefined;
   percentageGainNumber = undefined;
   const message: ParentMessage = {
     result: WorkerResult.SellSuccess,
@@ -233,7 +255,7 @@ parentPort?.on('message', (data: string) => {
     sellOnActionGeyser(message.data!.accountData!);
   } else if (message.action === WorkerAction.GotWalletToken) {
     const now = new Date();
-    if (now.getTime() - sentBuyTime!.getTime() > 20 * 1000) {
+    if (now.getTime() - sentBuyTime!.getTime() > 50 * 1000) {
       logger.warn('Buy took too long, selling');
       sellOnActionGeyser(message.data!.foundTokenData!);
       return;
@@ -249,13 +271,13 @@ parentPort?.on('message', (data: string) => {
 
     priceTimeoutId = setTimeout(() => {
       if (!foundTokenData) return;
-      if (percentageGainNumber && percentageGainNumber < 2) {
+      if (percentageGainNumber && percentageGainNumber < 1) {
         priceTimeoutId = undefined;
         logger.info(`Selling at PRICETIMEOUT, change addr ${foundTokenData!.mint.toString()}`);
         sellOnActionGeyser(foundTokenData!);
       }
       return;
-    }, 100 * 1000);
+    }, 50 * 1000);
   } else if (message.action === WorkerAction.AddTokenAccount) {
     minimalAccount = message.data!.tokenAccount!;
   } else if (message.action === WorkerAction.Clear) {

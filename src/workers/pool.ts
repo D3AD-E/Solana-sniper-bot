@@ -51,6 +51,7 @@ export class WorkerPool {
   }
 
   public areThereFreeWorkers = () => this.freeWorkers.length > 0;
+  public isTokenTaken = (token: string) => this.takenWorkers.has(token);
 
   public gotToken(token: string, lastRequest: any) {
     if (this.freeWorkers.length > 0) {

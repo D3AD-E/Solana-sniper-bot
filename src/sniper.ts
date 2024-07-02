@@ -25,7 +25,7 @@ let lastBlocks: Block[] = [];
 let processedTokens: string[] = [];
 let workerPool: WorkerPool | undefined = undefined;
 const enableProtection = envVarToBoolean(process.env.ENABLE_PROTECTION);
-const minPoolSize = 31;
+const minPoolSize = 100;
 export default async function snipe(): Promise<void> {
   existingTokenAccounts = await getTokenAccounts(
     solanaConnection,
@@ -173,18 +173,23 @@ function setupLiquiditySocket() {
             }
           }
           if (!mintAccount) throw 'Failed to get mint ';
-          if ((mintAddress as string).endsWith('pump')) {
-            logger.warn('Token pumpscam');
-            return;
-          }
-          const signatures = jData?.params?.result?.transaction?.transaction!.signatures;
+          const accounts = jData?.params?.result?.transaction?.transaction!.message.accountKeys;
           if (
-            signatures[0] === 'CGsqR7CTqTwbmAUTPnfg9Bj9GLJgkrUD9rhjh3vHEYvh' ||
-            signatures[0] === '39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg'
+            accounts.some(
+              (x: any) =>
+                x.pubkey.toLowerCase() === 'CGsqR7CTqTwbmAUTPnfg9Bj9GLJgkrUD9rhjh3vHEYvh'.toLowerCase() ||
+                x.pubkey.toLowerCase() === '3x76ssYftGsTCLxcMnDcw12hkWBQNPobW61ahEncEpHB'.toLowerCase() ||
+                x.pubkey.toLowerCase() === '39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg'.toLowerCase(),
+            )
           ) {
             logger.warn('Moon/pump scam');
             return;
           }
+          if ((mintAddress as string).endsWith('pump')) {
+            logger.warn('Token pumpscam');
+            return;
+          }
+
           if (mintAccount.freezeAuthority !== null) {
             logger.warn('Token can be frozen, skipping');
             return;
@@ -232,6 +237,10 @@ function setupLiquiditySocket() {
               },
             ],
           };
+          if (workerPool!.isTokenTaken(mintAddress)) {
+            logger.warn('Token is taken');
+            return;
+          }
           workerPool!.gotToken(mintAddress, lastRequest);
 
           const sampleKeys = {
