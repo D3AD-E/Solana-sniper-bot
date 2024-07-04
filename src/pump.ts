@@ -1,6 +1,20 @@
 import { TokenAmount, Token, TokenAccount, TOKEN_PROGRAM_ID, LiquidityStateV4 } from '@raydium-io/raydium-sdk';
-import { AccountLayout, getMint } from '@solana/spl-token';
-import { Commitment, PublicKey, TransactionConfirmationStrategy } from '@solana/web3.js';
+import {
+  AccountLayout,
+  createBurnCheckedInstruction,
+  createCloseAccountInstruction,
+  getAssociatedTokenAddress,
+  getMint,
+} from '@solana/spl-token';
+import {
+  Commitment,
+  LAMPORTS_PER_SOL,
+  PublicKey,
+  Transaction,
+  TransactionConfirmationStrategy,
+  TransactionMessage,
+  VersionedTransaction,
+} from '@solana/web3.js';
 import { buy, getTokenAccounts } from './cryptoQueries';
 import logger from './utils/logger';
 import { solanaConnection, wallet } from './solana';
@@ -12,7 +26,9 @@ import { Block } from './listener.types';
 import { isNumberInRange } from './utils/mathUtils';
 import { WorkerPool } from './workers/pool';
 import { envVarToBoolean } from './utils/envUtils';
-import { PumpFunSDK } from 'pumpdotfun-sdk';
+import { GlobalAccount, PumpFunSDK } from 'pumpdotfun-sdk';
+import { AnchorProvider, BN, Wallet } from '@coral-xyz/anchor';
+import { buyPump, sellPump } from './pumpFun';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
@@ -20,14 +36,36 @@ let swapAmount: TokenAmount;
 let quoteTokenAssociatedAddress: PublicKey;
 let ws: WebSocket | undefined = undefined;
 
-const maxLamports = 500000;
+const maxLamports = 5001138;
 let currentLamports = maxLamports;
 let lastBlocks: Block[] = [];
 let processedTokens: string[] = [];
 let workerPool: WorkerPool | undefined = undefined;
 const enableProtection = envVarToBoolean(process.env.ENABLE_PROTECTION);
 const minPoolSize = 100;
+let isProcessing = false;
+const getProvider = () => {
+  const walletAnchor = new Wallet(wallet);
+  const provider = new AnchorProvider(solanaConnection, walletAnchor, {
+    commitment: process.env.COMMITMENT as Commitment,
+  });
+  return provider;
+};
+let wsPairs: WebSocket | undefined = undefined;
+
+let sdk: PumpFunSDK | undefined = undefined;
+let lastRequest: any = undefined;
+let gotTokenData = false;
+let mintAccount = '7vqqXtvwGBjyLmGrxxPPWsKTgjF4YX3H5vkPLimApump';
+let globalAccount: GlobalAccount | undefined = undefined;
+let provider: AnchorProvider | undefined = undefined;
+let associatedCurve: PublicKey | undefined = undefined;
+let isSelling = false;
 export default async function snipe(): Promise<void> {
+  provider = getProvider();
+  sdk = new PumpFunSDK(provider);
+  globalAccount = await sdk.getGlobalAccount();
+
   // let bondingCurveAccount = await sdj.buy(mint, commitment);
   // existingTokenAccounts = await getTokenAccounts(
   //   solanaConnection,
@@ -35,12 +73,36 @@ export default async function snipe(): Promise<void> {
   //   process.env.COMMITMENT as Commitment,
   // );
   // const tokenAccount = existingTokenAccounts.find(
-  //   (acc) => acc.accountInfo.mint.toString() === quoteToken.mint.toString(),
+  //   (acc) => acc.accountInfo.mint.toString() === '2PfSJLcibNM7CZnh3wBtiUkkXfpNNcHiz4DjZYZCpump',
   // )!;
-  // if (!tokenAccount) {
-  //   throw new Error(`No ${quoteToken.symbol} token account found in wallet: ${wallet.publicKey}`);
-  // }
-  // quoteTokenAssociatedAddress = tokenAccount.pubkey;
+
+  // const bytes = bs58.decode(
+  //   '2K7nL28PxCW8ejnyCeuMpbWQwqKtqyArGAa7ccsDMsh2CEG4wEULZwVYVJm62YZ81jBFyKhYgNkYKUrXyNxAszvpk1sGQ1tBToSJUWhohnPxXTEMKMgz6U6PUtyCiPmYoAbSVdQEPBTnsTHhWkg4kiGSKScqD8sof8TKtm8PTNqdQBQYGZiCAbufFMYT',
+  // );
+  // const buf = Buffer.from(bytes);
+  // const parsed = decodeInstructionData(buf);
+
+  // console.log(parsed);
+  // lastRequest = {
+  //   jsonrpc: '2.0',
+  //   id: 420,
+  //   method: 'transactionSubscribe',
+  //   params: [
+  //     {
+  //       vote: false,
+  //       failed: false,
+  //       accountInclude: ['6NUafpRndeekVpusnVK7DunCggjUrhDhsXHD2U5tpump'],
+  //     },
+  //     {
+  //       commitment: 'processed',
+  //       encoding: 'jsonParsed',
+  //       transactionDetails: 'full',
+  //       showRewards: false,
+  //       maxSupportedTransactionVersion: 1,
+  //     },
+  //   ],
+  // };
+  // setupPairSocket();
   // workerPool = new WorkerPool(Number(process.env.WORKER_AMOUNT!), quoteTokenAssociatedAddress);
   // if (enableProtection) {
   //   setInterval(storeRecentBlockhashes, 700);
@@ -48,23 +110,100 @@ export default async function snipe(): Promise<void> {
   // } else {
   //   await new Promise((resolve) => setTimeout(resolve, 1000));
   // }
-  logger.info('Started listening');
 
-  //https://solscan.io/tx/Kvu4Qd5RBjUDoX5yzUNNtd17Bhb78qTo93hqYgDEr8hb1ysTf9zGFDgvS1QTnz6ghY3f6Fo59GWYQSgkTJxo9Cd mintundefined
-  // skipped https://www.dextools.io/app/en/solana/pair-explorer/HLBmAcU65tm999f3WrshSdeFgAbZNxEGrqD6DzAdR1iF?t=1717674277533 because of jitotip, not sure if want to fix
-  // setupLiquiditySocket();
-  // setInterval(
-  //   () => {
-  //     ws?.close();
-  //   },
-  //   10 * 60 * 1000,
-  // ); // 10 minutes
-  // // await updateLamports();
-  // // setInterval(updateLamports, 15000);
-  // logger.info(`Wallet Address: ${wallet.publicKey}`);
-  // swapAmount = new TokenAmount(Token.WSOL, process.env.SWAP_SOL_AMOUNT, false);
-  // logger.info(`Swap sol amount: ${swapAmount.toFixed()} ${quoteToken.symbol}`);
-  // await listenToChanges();
+  // existingTokenAccounts = await getTokenAccounts(
+  //   solanaConnection,
+  //   wallet.publicKey,
+  //   process.env.COMMITMENT as Commitment,
+  // );
+  // const tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === mintAccount)!;
+  // console.log(tokenAccount.accountInfo.amount);
+  // const bigInt = BigInt(tokenAccount.accountInfo.amount);
+  // const sellResults = await sdk!.sell(wallet, new PublicKey(mintAccount), bigInt, 500000000000n, {
+  //   unitLimit: 100000,
+  //   unitPrice: 500000,
+  // });
+  // console.log(sellResults);
+  // return;
+  setInterval(storeRecentBlockhashes, 100);
+  let boughtAmount: bigint = 0n;
+  logger.info('Started listening');
+  let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
+    if (event.mint.toString() === mintAccount) {
+      if (event.user.toString() === wallet.publicKey.toString()) return;
+      if (isSelling) return;
+      logger.info(signature);
+      console.log('tradeEvent', event);
+      if (!gotTokenData) return;
+      // const price = event.tokenAmount / event.solAmount;
+      // if (!initialPrice) {
+      //   initialPrice = price;
+      //   logger.info('initial');
+      //   logger.info(initialPrice.toString());
+      //   return;
+      // }
+      // logger.info(price.toString());
+      // const priceNumber = Number(price.toString());
+      // const initialPriceNumber = Number(initialPrice.toString());
+      boughtAmount = boughtAmount + (event.isBuy ? event.solAmount : -event.solAmount);
+      // const percentageGain = ((initialPriceNumber - priceNumber) / initialPriceNumber) * 100;
+      console.log(boughtAmount);
+      logger.info('Change');
+      // logger.info(percentageGain.toFixed(4));
+      if (boughtAmount > 100000000n || boughtAmount < -1n) {
+        //0.1 sol
+        if (isSelling) return;
+        while (true) {
+          isSelling = true;
+          try {
+            const wasSellDone = await sellToken();
+            if (wasSellDone) return;
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+          } catch (e) {
+            console.log(e);
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+        }
+      }
+    }
+  });
+  console.log('tradeEvent', tradeEvent);
+  setupLiquiditySocket();
+  await listenToChanges();
+}
+
+async function storeRecentBlockhashes() {
+  try {
+    const block = await solanaConnection.getLatestBlockhash('finalized');
+    if (lastBlocks.length > 500) lastBlocks.splice(0, 100);
+    lastBlocks.push(block);
+  } catch (e) {
+    logger.warn('Fetch blockhash failed');
+    console.log(e);
+  }
+}
+
+async function sellToken() {
+  existingTokenAccounts = await getTokenAccounts(
+    solanaConnection,
+    wallet.publicKey,
+    process.env.COMMITMENT as Commitment,
+  );
+  const tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === mintAccount)!;
+  const bigInt = BigInt(tokenAccount.accountInfo.amount);
+  console.log(bigInt);
+  if (bigInt === 0n) return true;
+  const sellResults = await sellPump(
+    wallet,
+    tokenAccount.accountInfo.mint,
+    bigInt,
+    globalAccount!,
+    provider!,
+    associatedCurve!,
+    500000,
+  );
+  console.log(sellResults);
+  return false;
 }
 
 function setupLiquiditySocket() {
@@ -86,7 +225,7 @@ function setupLiquiditySocket() {
           ],
         },
         {
-          commitment: 'singleGossip',
+          commitment: 'processed',
           encoding: 'jsonParsed',
           transactionDetails: 'full',
           showRewards: false,
@@ -97,8 +236,48 @@ function setupLiquiditySocket() {
     ws!.send(JSON.stringify(request));
   });
   ws!.on('message', async function incoming(data) {
+    if (isProcessing) return;
+    logger.info('here');
     const messageStr = data.toString();
-    console.log(messageStr);
+    var jData = JSON.parse(messageStr);
+    const isntructions = jData?.params?.result?.transaction?.meta?.innerInstructions;
+    if (!isntructions) return;
+    const instructionWithCurve =
+      isntructions.find((x: any) => x.index === 5) ?? isntructions.find((x: any) => x.index === 4);
+    console.log(!instructionWithCurve);
+    if (!instructionWithCurve) return;
+    const curve = instructionWithCurve.instructions[0].parsed.info.source;
+    console.log(curve);
+    const inner = isntructions[0].instructions;
+    const mint = inner[0].parsed.info.newAccount;
+    logger.info(mint);
+    isProcessing = true;
+    // for (let i = 0; i < 5; ++i) {
+    const result = await buyPump(
+      wallet,
+      new PublicKey(mint),
+      BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL),
+      globalAccount!,
+      provider!,
+      new PublicKey(curve),
+      maxLamports,
+      lastBlocks[lastBlocks.length - 1],
+    );
+    console.log(result);
+    // await new Promise((resolve) => setTimeout(resolve, 100));
+    // }
+    associatedCurve = new PublicKey(curve);
+    mintAccount = mint.toString();
+    // solanaConnection
+    //   .confirmTransaction(result as TransactionConfirmationStrategy, 'finalized')
+    //   .then(async (confirmation) => {})
+    //   .catch((e) => {
+    //     console.log(e);
+    //     logger.warn('Buy TX hash expired');
+    //     isProcessing = false;
+    //   });
+    return;
+
     // try {
 
     // } catch (e) {
@@ -117,23 +296,6 @@ function setupLiquiditySocket() {
   });
 }
 
-export async function processGeyserLiquidity(
-  id: PublicKey,
-  poolState: LiquidityStateV4,
-  mint: PublicKey,
-): Promise<TransactionConfirmationStrategy> {
-  let block = undefined;
-  block = await solanaConnection.getLatestBlockhash('processed');
-
-  const packet = await buy(id, poolState, quoteTokenAssociatedAddress, currentLamports, mint, block);
-  workerPool!.addTokenAccount(mint.toString(), packet.tokenAccount);
-  return {
-    signature: packet.signature,
-    blockhash: packet.blockhash,
-    lastValidBlockHeight: packet.lastValidBlockHeight,
-  };
-}
-
 async function listenToChanges() {
   const walletSubscriptionId = solanaConnection.onProgramAccountChange(
     TOKEN_PROGRAM_ID,
@@ -145,17 +307,36 @@ async function listenToChanges() {
         sendMessage(`💸WSOL change ${walletBalance.toFixed(4)}`);
         return;
       }
-      if (updatedAccountInfo.accountId.equals(quoteTokenAssociatedAddress)) {
-        return;
+      // if (updatedAccountInfo.accountId.equals(quoteTokenAssociatedAddress)) {
+      //   return;
+      // }
+      console.log(accountData.mint.toString() === mintAccount);
+      if (accountData.mint.toString() === mintAccount) {
+        gotTokenData = true;
+        logger.info(`Monitoring`);
+        console.log(accountData.mint);
       }
-      if (!workerPool!.doesTokenExist(accountData.mint.toString())) {
-        logger.warn('Got unknown token in wallet');
-        return;
-      }
-      logger.info(`Monitoring`);
-      console.log(accountData.mint);
-      processedTokens.push(accountData.mint.toString());
-      workerPool!.gotWalletToken(accountData.mint.toString(), accountData);
+
+      setTimeout(async () => {
+        logger.info('Timeout');
+        while (true) {
+          isSelling = true;
+          try {
+            const wasSellDone = await sellToken();
+            if (wasSellDone) return;
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+          } catch (e) {
+            console.log(e);
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+        }
+      }, 30 * 1000);
+      // if (!workerPool!.doesTokenExist(accountData.mint.toString())) {
+      //   logger.warn('Got unknown token in wallet');
+      //   return;
+      // }
+      // processedTokens.push(accountData.mint.toString());
+      // workerPool!.gotWalletToken(accountData.mint.toString(), accountData);
     },
     'processed' as Commitment,
     [
