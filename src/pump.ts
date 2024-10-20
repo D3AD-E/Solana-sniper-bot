@@ -128,48 +128,48 @@ export default async function snipe(): Promise<void> {
   setInterval(storeRecentBlockhashes, 100);
   let boughtAmount: bigint = 0n;
   logger.info('Started listening');
-  let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
-    if (event.mint.toString() === mintAccount) {
-      if (event.user.toString() === wallet.publicKey.toString()) return;
-      if (isSelling) return;
-      logger.info(signature);
-      console.log('tradeEvent', event);
-      if (!gotTokenData) return;
-      // const price = event.tokenAmount / event.solAmount;
-      // if (!initialPrice) {
-      //   initialPrice = price;
-      //   logger.info('initial');
-      //   logger.info(initialPrice.toString());
-      //   return;
-      // }
-      // logger.info(price.toString());
-      // const priceNumber = Number(price.toString());
-      // const initialPriceNumber = Number(initialPrice.toString());
-      boughtAmount = boughtAmount + (event.isBuy ? event.solAmount : -event.solAmount);
-      // const percentageGain = ((initialPriceNumber - priceNumber) / initialPriceNumber) * 100;
-      console.log(boughtAmount);
-      logger.info('Change');
-      // logger.info(percentageGain.toFixed(4));
-      if (boughtAmount > 100000000n || boughtAmount < -1n) {
-        //0.1 sol
-        if (isSelling) return;
-        while (true) {
-          isSelling = true;
-          try {
-            const wasSellDone = await sellToken();
-            if (wasSellDone) return;
-            await new Promise((resolve) => setTimeout(resolve, 1500));
-          } catch (e) {
-            console.log(e);
-            await new Promise((resolve) => setTimeout(resolve, 50));
-          }
-        }
-      }
-    }
-  });
-  console.log('tradeEvent', tradeEvent);
+  // let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
+  //   if (event.mint.toString() === mintAccount) {
+  //     if (event.user.toString() === wallet.publicKey.toString()) return;
+  //     if (isSelling) return;
+  //     logger.info(signature);
+  //     console.log('tradeEvent', event);
+  //     if (!gotTokenData) return;
+  //     // const price = event.tokenAmount / event.solAmount;
+  //     // if (!initialPrice) {
+  //     //   initialPrice = price;
+  //     //   logger.info('initial');
+  //     //   logger.info(initialPrice.toString());
+  //     //   return;
+  //     // }
+  //     // logger.info(price.toString());
+  //     // const priceNumber = Number(price.toString());
+  //     // const initialPriceNumber = Number(initialPrice.toString());
+  //     boughtAmount = boughtAmount + (event.isBuy ? event.solAmount : -event.solAmount);
+  //     // const percentageGain = ((initialPriceNumber - priceNumber) / initialPriceNumber) * 100;
+  //     console.log(boughtAmount);
+  //     logger.info('Change');
+  //     // logger.info(percentageGain.toFixed(4));
+  //     if (boughtAmount > 100000000n || boughtAmount < -1n) {
+  //       //0.1 sol
+  //       if (isSelling) return;
+  //       while (true) {
+  //         isSelling = true;
+  //         try {
+  //           const wasSellDone = await sellToken();
+  //           if (wasSellDone) return;
+  //           await new Promise((resolve) => setTimeout(resolve, 1500));
+  //         } catch (e) {
+  //           console.log(e);
+  //           await new Promise((resolve) => setTimeout(resolve, 50));
+  //         }
+  //       }
+  //     }
+  //   }
+  // });
+  // console.log('tradeEvent', tradeEvent);
   setupLiquiditySocket();
-  await listenToChanges();
+  // await listenToChanges();
 }
 
 async function storeRecentBlockhashes() {
@@ -253,21 +253,21 @@ function setupLiquiditySocket() {
     logger.info(mint);
     isProcessing = true;
     // for (let i = 0; i < 5; ++i) {
-    const result = await buyPump(
-      wallet,
-      new PublicKey(mint),
-      BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL),
-      globalAccount!,
-      provider!,
-      new PublicKey(curve),
-      maxLamports,
-      lastBlocks[lastBlocks.length - 1],
-    );
-    console.log(result);
-    // await new Promise((resolve) => setTimeout(resolve, 100));
-    // }
-    associatedCurve = new PublicKey(curve);
-    mintAccount = mint.toString();
+    // const result = await buyPump(
+    //   wallet,
+    //   new PublicKey(mint),
+    //   BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL),
+    //   globalAccount!,
+    //   provider!,
+    //   new PublicKey(curve),
+    //   maxLamports,
+    //   lastBlocks[lastBlocks.length - 1],
+    // );
+    // console.log(result);
+    // // await new Promise((resolve) => setTimeout(resolve, 100));
+    // // }
+    // associatedCurve = new PublicKey(curve);
+    // mintAccount = mint.toString();
     // solanaConnection
     //   .confirmTransaction(result as TransactionConfirmationStrategy, 'finalized')
     //   .then(async (confirmation) => {})
