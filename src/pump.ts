@@ -29,7 +29,7 @@ import { envVarToBoolean } from './utils/envUtils';
 import { GlobalAccount, PumpFunSDK } from 'pumpdotfun-sdk';
 import { AnchorProvider, BN, Wallet } from '@coral-xyz/anchor';
 import { buyPump, sellPump } from './pumpFun';
-import client from './jito/geyser';
+import Client, { CommitmentLevel, SubscribeRequest } from './yellowstone/client';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
@@ -64,25 +64,71 @@ let associatedCurve: PublicKey | undefined = undefined;
 let isSelling = false;
 
 // Example of subscribing to slot updates
-function subscribeToSlotUpdates() {
-  const request = {}; // Empty request for SubscribeSlotUpdates
-
-  const call = client.SubscribeSlotUpdates(request);
-
-  // Handle the incoming stream data
-  call.on('data', (response: any) => {
-    console.log('Slot Update:', response);
+async function subscribeToSlotUpdates() {
+  const client = new Client('http://localhost:10000', 'args.xToken', {
+    'grpc.max_receive_message_length': 64 * 1024 * 1024, // 64MiB
   });
 
-  // Handle any errors
-  call.on('error', (error: any) => {
-    console.error('Error:', error);
+  // Subscribe for events
+  const stream = await client.subscribe();
+
+  // Create `error` / `end` handler
+  const streamClosed = new Promise<void>((resolve, reject) => {
+    stream.on('error', (error) => {
+      reject(error);
+      stream.end();
+    });
+    stream.on('end', () => {
+      resolve();
+    });
+    stream.on('close', () => {
+      resolve();
+    });
   });
 
-  // Handle stream end
-  call.on('end', () => {
-    console.log('Stream ended.');
+  // Handle updates
+  stream.on('data', (data) => {
+    console.log('data', data);
   });
+  // Create subscribe request based on provided arguments.
+  const request: SubscribeRequest = {
+    accounts: {},
+    slots: {},
+    transactions: {},
+    transactionsStatus: {},
+    entry: {},
+    blocks: {},
+    blocksMeta: {},
+    commitment: CommitmentLevel.PROCESSED,
+    accountsDataSlice: [],
+    ping: undefined,
+  };
+
+  request.transactionsStatus.client = {
+    failed: false,
+    accountInclude: [],
+    accountExclude: [],
+    accountRequired: [
+      '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P',
+      'metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s',
+      'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+    ],
+  };
+  // Send subscribe request
+  await new Promise<void>((resolve, reject) => {
+    stream.write(request, (err: any) => {
+      if (err === null || err === undefined) {
+        resolve();
+      } else {
+        reject(err);
+      }
+    });
+  }).catch((reason) => {
+    console.error(reason);
+    throw reason;
+  });
+
+  await streamClosed;
 }
 
 export default async function snipe(): Promise<void> {
