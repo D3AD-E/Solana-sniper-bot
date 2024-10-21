@@ -88,7 +88,7 @@ async function subscribeToSlotUpdates() {
 
   // Handle updates
   stream.on('data', (data) => {
-    console.log('data', data);
+    console.dir(data, { depth: null, colors: true });
   });
   // Create subscribe request based on provided arguments.
   const request: SubscribeRequest = {
