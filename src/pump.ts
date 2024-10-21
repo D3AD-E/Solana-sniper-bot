@@ -97,9 +97,13 @@ async function subscribeToSlotUpdates() {
     transactions: {
       serum: {
         vote: false,
-        accountInclude: ['9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin'],
+        accountInclude: [],
         accountExclude: [],
-        accountRequired: [],
+        accountRequired: [
+          '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P',
+          'metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s',
+          'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+        ],
       },
     },
     blocks: {},
