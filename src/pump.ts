@@ -92,9 +92,7 @@ async function subscribeToSlotUpdates() {
   });
   // Create subscribe request based on provided arguments.
   const request: SubscribeRequest = {
-    slots: {
-      slots: {},
-    },
+    slots: {},
     accounts: {},
     transactions: {
       serum: {
@@ -110,7 +108,6 @@ async function subscribeToSlotUpdates() {
     transactionsStatus: {},
     entry: {},
   };
-
   // Send subscribe request
   await new Promise<void>((resolve, reject) => {
     stream.write(request, (err: any) => {
