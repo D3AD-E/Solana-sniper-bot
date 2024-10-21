@@ -88,7 +88,7 @@ async function subscribeToSlotUpdates() {
 
   // Handle updates
   stream.on('data', (data) => {
-    console.log(data.transaction?.transaction);
+    console.log(data.transaction?.transaction?.meta?.innerInstructions);
     // const jsonString = JSON.stringify(
     //   data,
     //   (key, value) => {
