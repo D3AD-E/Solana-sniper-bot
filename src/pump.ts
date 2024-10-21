@@ -29,6 +29,7 @@ import { envVarToBoolean } from './utils/envUtils';
 import { GlobalAccount, PumpFunSDK } from 'pumpdotfun-sdk';
 import { AnchorProvider, BN, Wallet } from '@coral-xyz/anchor';
 import { buyPump, sellPump } from './pumpFun';
+import client from './jito/geyser';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
@@ -61,11 +62,36 @@ let globalAccount: GlobalAccount | undefined = undefined;
 let provider: AnchorProvider | undefined = undefined;
 let associatedCurve: PublicKey | undefined = undefined;
 let isSelling = false;
+
+// Example of subscribing to slot updates
+function subscribeToSlotUpdates() {
+  const request = {}; // Empty request for SubscribeSlotUpdates
+
+  const call = client.SubscribeSlotUpdates(request);
+
+  // Handle the incoming stream data
+  call.on('data', (response: any) => {
+    console.log('Slot Update:', response);
+  });
+
+  // Handle any errors
+  call.on('error', (error: any) => {
+    console.error('Error:', error);
+  });
+
+  // Handle stream end
+  call.on('end', () => {
+    console.log('Stream ended.');
+  });
+}
+
 export default async function snipe(): Promise<void> {
   provider = getProvider();
   sdk = new PumpFunSDK(provider);
   globalAccount = await sdk.getGlobalAccount();
 
+  // Call the subscription function
+  subscribeToSlotUpdates();
   // let bondingCurveAccount = await sdj.buy(mint, commitment);
   // existingTokenAccounts = await getTokenAccounts(
   //   solanaConnection,
@@ -125,9 +151,9 @@ export default async function snipe(): Promise<void> {
   // });
   // console.log(sellResults);
   // return;
-  setInterval(storeRecentBlockhashes, 100);
-  let boughtAmount: bigint = 0n;
-  logger.info('Started listening');
+  // setInterval(storeRecentBlockhashes, 100);
+  // let boughtAmount: bigint = 0n;
+  // logger.info('Started listening');
   // let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
   //   if (event.mint.toString() === mintAccount) {
   //     if (event.user.toString() === wallet.publicKey.toString()) return;
@@ -168,7 +194,7 @@ export default async function snipe(): Promise<void> {
   //   }
   // });
   // console.log('tradeEvent', tradeEvent);
-  setupLiquiditySocket();
+  // setupLiquiditySocket();
   // await listenToChanges();
 }
 
