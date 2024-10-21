@@ -29,7 +29,7 @@ import { envVarToBoolean } from './utils/envUtils';
 import { GlobalAccount, PumpFunSDK } from 'pumpdotfun-sdk';
 import { AnchorProvider, BN, Wallet } from '@coral-xyz/anchor';
 import { buyPump, sellPump } from './pumpFun';
-import Client, { CommitmentLevel, SubscribeRequest } from './yellowstone/client';
+import Client, { CommitmentLevel, SubscribeRequest } from '@triton-one/yellowstone-grpc';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
@@ -92,28 +92,25 @@ async function subscribeToSlotUpdates() {
   });
   // Create subscribe request based on provided arguments.
   const request: SubscribeRequest = {
+    slots: {
+      slots: {},
+    },
     accounts: {},
-    slots: {},
-    transactions: {},
-    transactionsStatus: {},
-    entry: {},
+    transactions: {
+      serum: {
+        vote: false,
+        accountInclude: ['9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin'],
+        accountExclude: [],
+        accountRequired: [],
+      },
+    },
     blocks: {},
     blocksMeta: {},
-    commitment: CommitmentLevel.PROCESSED,
     accountsDataSlice: [],
-    ping: undefined,
+    transactionsStatus: {},
+    entry: {},
   };
 
-  request.transactionsStatus.client = {
-    failed: false,
-    accountInclude: [],
-    accountExclude: [],
-    accountRequired: [
-      '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P',
-      'metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s',
-      'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
-    ],
-  };
   // Send subscribe request
   await new Promise<void>((resolve, reject) => {
     stream.write(request, (err: any) => {
