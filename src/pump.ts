@@ -88,8 +88,19 @@ async function subscribeToSlotUpdates() {
 
   // Handle updates
   stream.on('data', (data) => {
-    const messageStr = data.toString();
-    console.log(messageStr);
+    console.log(data.transaction.transaction);
+    const jsonString = JSON.stringify(
+      data,
+      (key, value) => {
+        if (typeof value === 'function') {
+          return undefined; // Skip functions
+        }
+        return value;
+      },
+      2,
+    ); // Pretty-print with 2 spaces
+
+    console.log(jsonString);
   });
   // Create subscribe request based on provided arguments.
   const request: SubscribeRequest = {
