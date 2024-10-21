@@ -20,7 +20,7 @@ const GeyserService = protoDescriptor.solana.geyser.Geyser;
 
 // Create a gRPC client
 const client = new GeyserService(
-  'localhost:50051', // Replace with the actual gRPC server address and port
+  '127.0.0.1:10000', // Replace with the actual gRPC server address and port
   grpc.credentials.createInsecure(), // Use createSsl() for secure connections
 );
 
