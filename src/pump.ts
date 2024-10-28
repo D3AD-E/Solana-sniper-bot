@@ -189,12 +189,9 @@ async function subscribeToSlotUpdates() {
 }
 
 export default async function snipe(): Promise<void> {
-  if (enableProtection) {
-    setInterval(storeRecentBlockhashes, 700);
-    await new Promise((resolve) => setTimeout(resolve, 140000));
-  } else {
-    await new Promise((resolve) => setTimeout(resolve, 10000));
-  }
+  setInterval(storeRecentBlockhashes, 700);
+
+  await new Promise((resolve) => setTimeout(resolve, 5000));
 
   provider = getProvider();
   sdk = new PumpFunSDK(provider);
@@ -305,7 +302,6 @@ export default async function snipe(): Promise<void> {
 async function storeRecentBlockhashes() {
   try {
     const block = await solanaConnection.getLatestBlockhash('finalized');
-    console.log(block);
     if (lastBlocks.length > 500) lastBlocks.splice(0, 100);
     lastBlocks.push(block);
   } catch (e) {
