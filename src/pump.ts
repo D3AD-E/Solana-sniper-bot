@@ -122,7 +122,7 @@ async function subscribeToSlotUpdates() {
     const mint = pkKeys[mintAddress];
     console.log('mint');
     console.log(mint.toString());
-    const curveAddress = instructionWithCurve.instructions[0].accounts[2];
+    const curveAddress = instructionWithCurve.instructions[0].accounts[0];
     const curve = pkKeys[curveAddress];
     console.log('curve');
     console.log(curve);
