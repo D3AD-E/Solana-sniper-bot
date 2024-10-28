@@ -193,7 +193,7 @@ export default async function snipe(): Promise<void> {
     setInterval(storeRecentBlockhashes, 700);
     await new Promise((resolve) => setTimeout(resolve, 140000));
   } else {
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 10000));
   }
 
   provider = getProvider();
@@ -305,6 +305,7 @@ export default async function snipe(): Promise<void> {
 async function storeRecentBlockhashes() {
   try {
     const block = await solanaConnection.getLatestBlockhash('finalized');
+    console.log(block);
     if (lastBlocks.length > 500) lastBlocks.splice(0, 100);
     lastBlocks.push(block);
   } catch (e) {
