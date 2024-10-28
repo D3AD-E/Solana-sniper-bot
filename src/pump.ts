@@ -34,6 +34,7 @@ import Client, { CommitmentLevel, SubscribeRequest } from '@triton-one/yellowsto
 import { decodeData } from './decoder';
 import { SYSTEM_INSTRUCTION_LAYOUTS } from './decoder/decoder.types';
 import { bs58 } from '@coral-xyz/anchor/dist/cjs/utils/bytes';
+import { JitoClient } from './jito/searcher';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
@@ -192,6 +193,7 @@ export default async function snipe(): Promise<void> {
   setInterval(storeRecentBlockhashes, 700);
 
   await new Promise((resolve) => setTimeout(resolve, 5000));
+  const client = await JitoClient.getInstance();
 
   provider = getProvider();
   sdk = new PumpFunSDK(provider);
