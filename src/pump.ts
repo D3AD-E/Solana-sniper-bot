@@ -189,6 +189,13 @@ async function subscribeToSlotUpdates() {
 }
 
 export default async function snipe(): Promise<void> {
+  if (enableProtection) {
+    setInterval(storeRecentBlockhashes, 700);
+    await new Promise((resolve) => setTimeout(resolve, 140000));
+  } else {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+
   provider = getProvider();
   sdk = new PumpFunSDK(provider);
   globalAccount = await sdk.getGlobalAccount();
@@ -233,12 +240,6 @@ export default async function snipe(): Promise<void> {
   // };
   // setupPairSocket();
   // workerPool = new WorkerPool(Number(process.env.WORKER_AMOUNT!), quoteTokenAssociatedAddress);
-  // if (enableProtection) {
-  //   setInterval(storeRecentBlockhashes, 700);
-  //   await new Promise((resolve) => setTimeout(resolve, 140000));
-  // } else {
-  //   await new Promise((resolve) => setTimeout(resolve, 1000));
-  // }
 
   // existingTokenAccounts = await getTokenAccounts(
   //   solanaConnection,
