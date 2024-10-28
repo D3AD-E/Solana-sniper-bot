@@ -104,7 +104,8 @@ async function subscribeToSlotUpdates() {
   });
 
   // Handle updates
-  stream.on('data', (data) => {
+  stream.on('data', async (data) => {
+    if (isProcessing) return;
     const ins = data.transaction?.transaction?.meta?.innerInstructions;
     if (!ins) return;
     const signatureString = bs58.encode(data.transaction.transaction.signature);
@@ -112,6 +113,7 @@ async function subscribeToSlotUpdates() {
     console.log(signatureString);
     const instructionWithCurve = ins.find((x: any) => x.index === 5) ?? ins.find((x: any) => x.index === 4);
     if (!instructionWithCurve) return;
+    isProcessing = true;
     const pkKeys = data.transaction?.transaction?.transaction?.message?.accountKeys.map((x: any) => new PublicKey(x));
     console.log(ins[0].instructions[0]);
     console.log(instructionWithCurve.instructions[0]);
@@ -125,6 +127,17 @@ async function subscribeToSlotUpdates() {
     console.log('curve');
     console.log(curve);
     logger.info('Started listening');
+    const result = await buyPump(
+      wallet,
+      new PublicKey(mint),
+      BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL),
+      globalAccount!,
+      provider!,
+      new PublicKey(curve),
+      maxLamports,
+      lastBlocks[lastBlocks.length - 1],
+    );
+    console.log(result);
     // newAccountPubkey: instruction.keys[1].pubkey,
     // {
     //   fromPubkey: instruction.keys[0].pubkey,
