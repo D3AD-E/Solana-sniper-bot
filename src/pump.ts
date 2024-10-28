@@ -298,7 +298,7 @@ export default async function snipe(): Promise<void> {
   // });
   // console.log('tradeEvent', tradeEvent);
   // setupLiquiditySocket();
-  // await listenToChanges();
+  await listenToChanges();
 }
 
 async function storeRecentBlockhashes() {
@@ -380,6 +380,7 @@ function setupLiquiditySocket() {
     const inner = isntructions[0].instructions;
     const mint = inner[0].parsed.info.newAccount;
     logger.info(mint);
+    mintAccount = mint.toString();
     isProcessing = true;
     // for (let i = 0; i < 5; ++i) {
     // const result = await buyPump(
@@ -459,7 +460,7 @@ async function listenToChanges() {
             await new Promise((resolve) => setTimeout(resolve, 50));
           }
         }
-      }, 30 * 1000);
+      }, 2000);
       // if (!workerPool!.doesTokenExist(accountData.mint.toString())) {
       //   logger.warn('Got unknown token in wallet');
       //   return;
