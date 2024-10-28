@@ -13,6 +13,7 @@ import {
   ComputeBudgetProgram,
   TransactionMessage,
   VersionedTransaction,
+  SystemProgram,
 } from '@solana/web3.js';
 import {
   PriorityFee,
@@ -28,7 +29,11 @@ import { IDL, PumpFun } from './IDL';
 import { wallet, solanaConnection } from '../solana';
 import logger from '../utils/logger';
 import { Block } from '../listener.types';
+import { getRandomAccount } from '../jito/constants';
+import { sendBundles } from '../jito/bundles';
 const BN = require('bn.js');
+const tipAmount = Number(process.env.JITO_TIP!);
+
 export async function buyPump(
   buyer: Keypair,
   mint: PublicKey,
@@ -49,29 +54,36 @@ export async function buyPump(
     provider,
     associatedBondingCurve,
   );
-  // const block = await solanaConnection.getLatestBlockhash('finalized');
-  const messageV0 = new TransactionMessage({
-    payerKey: wallet.publicKey,
-    recentBlockhash: block.blockhash,
-    instructions: [
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: lamports }),
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 71999 }),
-      ...buyTx.instructions,
-    ],
-  }).compileToV0Message();
 
-  const transaction = new VersionedTransaction(messageV0);
-  transaction.sign([wallet]);
-  logger.info('sending');
+  for (let i = 0; i < 5; i++) {
+    const tipAccount = getRandomAccount();
 
-  const signature = await solanaConnection.sendRawTransaction(transaction.serialize(), {
-    skipPreflight: true,
-  });
-  logger.info(signature);
+    const tipInstruction = SystemProgram.transfer({
+      fromPubkey: wallet.publicKey,
+      toPubkey: tipAccount,
+      lamports: tipAmount,
+    });
+    const messageV0 = new TransactionMessage({
+      payerKey: wallet.publicKey,
+      recentBlockhash: block.blockhash,
+      instructions: [...buyTx.instructions, tipInstruction],
+    }).compileToV0Message();
+
+    const transaction = new VersionedTransaction(messageV0);
+    transaction.sign([wallet]);
+    logger.info('sending');
+    const bundleId = await sendBundles(wallet, transaction, block.blockhash);
+    console.log(bundleId);
+  }
+
+  // const signature = await solanaConnection.sendRawTransaction(transaction.serialize(), {
+  //   skipPreflight: true,
+  // });
+  // logger.info(signature);
   return {
-    signature: signature!,
-    lastValidBlockHeight: block.lastValidBlockHeight,
-    blockhash: block.blockhash,
+    signature: 'signature!',
+    lastValidBlockHeight: 0, //block.lastValidBlockHeight,
+    blockhash: 'block.blockhash',
   };
 }
 
