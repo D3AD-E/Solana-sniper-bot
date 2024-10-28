@@ -124,6 +124,7 @@ async function subscribeToSlotUpdates() {
     const curve = pkKeys[curveAddress];
     console.log('curve');
     console.log(curve);
+    logger.info('Started listening');
     // newAccountPubkey: instruction.keys[1].pubkey,
     // {
     //   fromPubkey: instruction.keys[0].pubkey,
