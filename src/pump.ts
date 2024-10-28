@@ -106,7 +106,7 @@ async function subscribeToSlotUpdates() {
   stream.on('data', (data) => {
     const ins = data.transaction?.transaction?.meta?.innerInstructions;
     if (!ins) return;
-    console.log(data.transaction.signature.toString());
+    console.dir(data);
     console.log(data.transaction?.transaction?.transaction?.message?.accountKeys);
     const instructionWithCurve = ins.find((x: any) => x.index === 5) ?? ins.find((x: any) => x.index === 4);
     console.log(instructionWithCurve);
