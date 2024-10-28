@@ -33,6 +33,7 @@ import { buyPump, sellPump } from './pumpFun';
 import Client, { CommitmentLevel, SubscribeRequest } from '@triton-one/yellowstone-grpc';
 import { decodeData } from './decoder';
 import { SYSTEM_INSTRUCTION_LAYOUTS } from './decoder/decoder.types';
+import { bs58 } from '@coral-xyz/anchor/dist/cjs/utils/bytes';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
@@ -106,8 +107,9 @@ async function subscribeToSlotUpdates() {
   stream.on('data', (data) => {
     const ins = data.transaction?.transaction?.meta?.innerInstructions;
     if (!ins) return;
-    console.log(data.transaction.transaction.signature);
-    console.log(data.transaction.transaction.signature?.toString());
+    const signatureString = bs58.encode(data.transaction.transaction.signature);
+
+    console.log(signatureString); // Outputs the base58-encoded transaction signature
     const instructionWithCurve = ins.find((x: any) => x.index === 5) ?? ins.find((x: any) => x.index === 4);
     console.log(instructionWithCurve);
     if (!instructionWithCurve) return;
