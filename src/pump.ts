@@ -108,15 +108,16 @@ async function subscribeToSlotUpdates() {
     const ins = data.transaction?.transaction?.meta?.innerInstructions;
     if (!ins) return;
     const signatureString = bs58.encode(data.transaction.transaction.signature);
-
-    console.log(signatureString); // Outputs the base58-encoded transaction signature
+    console.log('Signature');
+    console.log(signatureString);
     const instructionWithCurve = ins.find((x: any) => x.index === 5) ?? ins.find((x: any) => x.index === 4);
     console.log(instructionWithCurve);
     if (!instructionWithCurve) return;
     const pkKeys = data.transaction?.transaction?.transaction?.message?.accountKeys.map((x: any) => new PublicKey(x));
     const dataWithMint = ins[0].instructions[0].data;
     const dataWithCurve = instructionWithCurve.instructions[0].data;
-
+    console.log(ins[0].instructions[0]);
+    console.log(instructionWithCurve.instructions[0]);
     const { lamports, space, programId } = decodeData(SYSTEM_INSTRUCTION_LAYOUTS.Create, dataWithMint);
     // newAccountPubkey: instruction.keys[1].pubkey,
     // {
