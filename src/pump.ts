@@ -120,6 +120,9 @@ async function subscribeToSlotUpdates() {
     console.log(instructionWithCurve.instructions[0]);
     const { lamports, space, programId } = decodeData(SYSTEM_INSTRUCTION_LAYOUTS.Create, dataWithMint);
     console.log(pkKeys.map((x: PublicKey) => x.toString()));
+    const mintAddress = ins[0].instructions[0].accounts[1];
+    const mint = pkKeys[mintAddress];
+    console.log(mint.toString());
     // newAccountPubkey: instruction.keys[1].pubkey,
     // {
     //   fromPubkey: instruction.keys[0].pubkey,
