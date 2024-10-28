@@ -111,18 +111,19 @@ async function subscribeToSlotUpdates() {
     console.log('Signature');
     console.log(signatureString);
     const instructionWithCurve = ins.find((x: any) => x.index === 5) ?? ins.find((x: any) => x.index === 4);
-    console.log(instructionWithCurve);
     if (!instructionWithCurve) return;
     const pkKeys = data.transaction?.transaction?.transaction?.message?.accountKeys.map((x: any) => new PublicKey(x));
-    const dataWithMint = ins[0].instructions[0].data;
-    const dataWithCurve = instructionWithCurve.instructions[0].data;
     console.log(ins[0].instructions[0]);
     console.log(instructionWithCurve.instructions[0]);
-    const { lamports, space, programId } = decodeData(SYSTEM_INSTRUCTION_LAYOUTS.Create, dataWithMint);
     console.log(pkKeys.map((x: PublicKey) => x.toString()));
     const mintAddress = ins[0].instructions[0].accounts[1];
     const mint = pkKeys[mintAddress];
+    console.log('mint');
     console.log(mint.toString());
+    const curveAddress = instructionWithCurve.instructions[0].accounts[2];
+    const curve = pkKeys[curveAddress];
+    console.log('curve');
+    console.log(curve);
     // newAccountPubkey: instruction.keys[1].pubkey,
     // {
     //   fromPubkey: instruction.keys[0].pubkey,
