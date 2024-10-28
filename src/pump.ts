@@ -10,6 +10,7 @@ import {
   Commitment,
   LAMPORTS_PER_SOL,
   PublicKey,
+  SystemProgram,
   Transaction,
   TransactionConfirmationStrategy,
   TransactionMessage,
@@ -30,6 +31,8 @@ import { GlobalAccount, PumpFunSDK } from 'pumpdotfun-sdk';
 import { AnchorProvider, BN, Wallet } from '@coral-xyz/anchor';
 import { buyPump, sellPump } from './pumpFun';
 import Client, { CommitmentLevel, SubscribeRequest } from '@triton-one/yellowstone-grpc';
+import { decodeData } from './decoder';
+import { SYSTEM_INSTRUCTION_LAYOUTS } from './decoder/decoder.types';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
@@ -63,6 +66,19 @@ let provider: AnchorProvider | undefined = undefined;
 let associatedCurve: PublicKey | undefined = undefined;
 let isSelling = false;
 
+export type CreateAccountParams = {
+  /** The account that will transfer lamports to the created account */
+  fromPubkey: PublicKey;
+  /** Public key of the created account */
+  newAccountPubkey: PublicKey;
+  /** Amount of lamports to transfer to the created account */
+  lamports: number;
+  /** Amount of space in bytes to allocate to the created account */
+  space: number;
+  /** Public key of the program to assign as the owner of the created account */
+  programId: PublicKey;
+};
+
 // Example of subscribing to slot updates
 async function subscribeToSlotUpdates() {
   const client = new Client('http://localhost:10000', 'args.xToken', {
@@ -88,24 +104,27 @@ async function subscribeToSlotUpdates() {
 
   // Handle updates
   stream.on('data', (data) => {
+    const ins = data.transaction?.transaction?.meta?.innerInstructions;
+    if (!ins) return;
     console.log(data.transaction?.transaction?.transaction?.message?.accountKeys);
+    const instructionWithCurve = ins.find((x: any) => x.index === 5) ?? ins.find((x: any) => x.index === 4);
+    console.log(instructionWithCurve);
+    if (!instructionWithCurve) return;
+    const pkKeys = data.transaction?.transaction?.transaction?.message?.accountKeys.map((x: any) => new PublicKey(x));
+    const dataWithMint = ins[0].instructions[0].data;
+    const dataWithCurve = instructionWithCurve.instructions[0].data;
+
+    const { lamports, space, programId } = decodeData(SYSTEM_INSTRUCTION_LAYOUTS.Create, dataWithMint);
+    // newAccountPubkey: instruction.keys[1].pubkey,
+    // {
+    //   fromPubkey: instruction.keys[0].pubkey,
+    //   newAccountPubkey: instruction.keys[1].pubkey,
+    //   lamports,
+    //   space,
+    //   programId: new PublicKey(programId),
+    // };
 
     // console.log(data.transaction?.transaction?.transaction?.message?.instructions);
-
-    // const ins = data.transaction?.transaction?.meta?.innerInstructions;
-    // if (ins) console.log(ins[0].instructions);
-    // const jsonString = JSON.stringify(
-    //   data,
-    //   (key, value) => {
-    //     if (typeof value === 'function') {
-    //       return undefined; // Skip functions
-    //     }
-    //     return value;
-    //   },
-    //   2,
-    // ); // Pretty-print with 2 spaces
-
-    // console.log(jsonString);
   });
   // Create subscribe request based on provided arguments.
   const request: SubscribeRequest = {
