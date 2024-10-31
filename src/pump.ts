@@ -100,9 +100,25 @@ async function subscribeToSlotUpdates() {
     console.log(signatureString);
     const instructionWithCurve = ins.find((x: any) => x.index === 5) ?? ins.find((x: any) => x.index === 4);
     if (!instructionWithCurve) return;
+    console.log(data.transaction?.transaction?.meta?.innerInstructions.length);
     console.dir(data.transaction?.transaction?.meta?.innerInstructions[0]);
     console.dir(data.transaction?.transaction?.meta?.innerInstructions[1]);
     console.dir(data.transaction?.transaction?.meta?.innerInstructions[2]);
+    let tr0 = data.transaction?.transaction?.meta?.innerInstructions[0].filter((x: any) => x.programIdIndex === 9);
+    let tr1 = data.transaction?.transaction?.meta?.innerInstructions[1].filter((x: any) => x.programIdIndex === 9);
+    let tr2 = data.transaction?.transaction?.meta?.innerInstructions[2].filter((x: any) => x.programIdIndex === 9);
+    console.log(0);
+    for (const t in tr0) {
+      console.log(t);
+    }
+    console.log(1);
+    for (const t in tr1) {
+      console.log(t);
+    }
+    console.log(2);
+    for (const t in tr2) {
+      console.log(t);
+    }
     // isProcessing = true;
     const pkKeys: PublicKey[] = data.transaction?.transaction?.transaction?.message?.accountKeys.map(
       (x: any) => new PublicKey(x),
