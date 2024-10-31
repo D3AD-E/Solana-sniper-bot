@@ -328,8 +328,6 @@ async function sellToken() {
     wallet.publicKey,
     process.env.COMMITMENT as Commitment,
   );
-  console.log(existingTokenAccounts);
-  console.log(mintAccount);
   const tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === mintAccount)!;
   const bigInt = BigInt(tokenAccount.accountInfo.amount);
   console.log(bigInt);
@@ -463,15 +461,18 @@ async function listenToChanges() {
         while (true) {
           isSelling = true;
           try {
-            const wasSellDone = await sellToken();
-            if (wasSellDone) return;
-            await new Promise((resolve) => setTimeout(resolve, 1500));
+            for (let i = 0; i < 2; i++) {
+              const wasSellDone = await sellToken();
+              if (wasSellDone) return;
+              await new Promise((resolve) => setTimeout(resolve, 500));
+            }
+            await new Promise((resolve) => setTimeout(resolve, 5000));
           } catch (e) {
             console.log(e);
             await new Promise((resolve) => setTimeout(resolve, 50));
           }
         }
-      }, 2000);
+      }, 10000);
       // if (!workerPool!.doesTokenExist(accountData.mint.toString())) {
       //   logger.warn('Got unknown token in wallet');
       //   return;
