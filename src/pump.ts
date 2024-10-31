@@ -194,19 +194,23 @@ export default async function snipe(): Promise<void> {
 
   await new Promise((resolve) => setTimeout(resolve, 5000));
   const client = await JitoClient.getInstance();
-
+  logger.info('Starting');
   provider = getProvider();
+
+  existingTokenAccounts = await getTokenAccounts(
+    solanaConnection,
+    wallet.publicKey,
+    process.env.COMMITMENT as Commitment,
+  );
+  logger.info('Got token accounts');
+
   sdk = new PumpFunSDK(provider);
   globalAccount = await sdk.getGlobalAccount();
 
   // Call the subscription function
   subscribeToSlotUpdates();
   // let bondingCurveAccount = await sdj.buy(mint, commitment);
-  // existingTokenAccounts = await getTokenAccounts(
-  //   solanaConnection,
-  //   wallet.publicKey,
-  //   process.env.COMMITMENT as Commitment,
-  // );
+
   // const tokenAccount = existingTokenAccounts.find(
   //   (acc) => acc.accountInfo.mint.toString() === '2PfSJLcibNM7CZnh3wBtiUkkXfpNNcHiz4DjZYZCpump',
   // )!;
