@@ -283,7 +283,7 @@ export default async function snipe(): Promise<void> {
       console.log(boughtAmount);
       logger.info('Change');
       // logger.info(percentageGain.toFixed(4));
-      if (boughtAmount > 500000000n || boughtAmount < -1n) {
+      if (boughtAmount > 300000000n) {
         if (isSelling) return;
         await sellToken();
         //todo fix
