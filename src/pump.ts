@@ -102,20 +102,10 @@ async function subscribeToSlotUpdates() {
     console.log(signatureString);
     const instructionWithCurve = ins.find((x: any) => x.index === 5) ?? ins.find((x: any) => x.index === 4);
     if (!instructionWithCurve) return;
-    console.log(data.transaction?.transaction?.meta?.innerInstructions.length);
-    console.dir(data.transaction?.transaction?.meta?.innerInstructions[0]);
-    console.dir(data.transaction?.transaction?.meta?.innerInstructions[1]);
-    console.dir(data.transaction?.transaction?.meta?.innerInstructions[2]);
-    await writeFile('transactionDetails.json', JSON.stringify(data, null, 2));
-    let tr0 = data.transaction?.transaction?.meta?.innerInstructions[0].instructions.filter(
-      (x: any) => x.programIdIndex === 9,
-    );
-    let tr1 = data.transaction?.transaction?.meta?.innerInstructions[1].instructions.filter(
-      (x: any) => x.programIdIndex === 9,
-    );
-    let tr2 = data.transaction?.transaction?.meta?.innerInstructions[2].instructions.filter(
-      (x: any) => x.programIdIndex === 9,
-    );
+    console.log(data.transaction?.transaction?.meta);
+    let tr0 = data.transaction?.transaction?.meta?.innerInstructions[0].instructions;
+    let tr1 = data.transaction?.transaction?.meta?.innerInstructions[1].instructions;
+    let tr2 = data.transaction?.transaction?.meta?.innerInstructions[2].instructions;
     console.log(0);
     for (const t of tr0) {
       console.log(t);
