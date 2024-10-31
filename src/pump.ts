@@ -92,6 +92,10 @@ async function subscribeToSlotUpdates() {
   // Handle updates
   stream.on('data', async (data) => {
     if (isProcessing) return;
+    if (boughtTokens >= 2) {
+      logger.warn('Buy limit');
+      return;
+    }
     const ins = data.transaction?.transaction?.meta?.innerInstructions;
     if (!ins) return;
     const signatureString = bs58.encode(data.transaction.transaction.signature);
@@ -141,9 +145,7 @@ async function subscribeToSlotUpdates() {
     console.log('Failbuy check', gotTokenData, localBoughtTokens === boughtTokens);
     if (!gotTokenData && localBoughtTokens === boughtTokens) {
       logger.warn('Buy failed');
-      mintAccount = '';
-      associatedCurve = undefined;
-      isProcessing = false;
+      clearState();
     }
   });
   // Create subscribe request based on provided arguments.
@@ -184,6 +186,12 @@ async function subscribeToSlotUpdates() {
   });
 
   await streamClosed;
+}
+
+function clearState() {
+  mintAccount = '';
+  associatedCurve = undefined;
+  isProcessing = false;
 }
 
 export default async function snipe(): Promise<void> {
@@ -307,14 +315,14 @@ async function storeRecentBlockhashes() {
   }
 }
 
-async function sellToken() {
+async function sellToken(currentMint: string) {
   console.log('Selling');
   existingTokenAccounts = await getTokenAccounts(
     solanaConnection,
     wallet.publicKey,
     process.env.COMMITMENT as Commitment,
   );
-  const tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === mintAccount)!;
+  const tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === currentMint)!;
   if (!tokenAccount || !tokenAccount.accountInfo) {
     logger.warn('Unknown token');
     return true;
@@ -381,38 +389,8 @@ function setupLiquiditySocket() {
     logger.info(mint);
     mintAccount = mint.toString();
     isProcessing = true;
-    // for (let i = 0; i < 5; ++i) {
-    // const result = await buyPump(
-    //   wallet,
-    //   new PublicKey(mint),
-    //   BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL),
-    //   globalAccount!,
-    //   provider!,
-    //   new PublicKey(curve),
-    //   maxLamports,
-    //   lastBlocks[lastBlocks.length - 1],
-    // );
-    // console.log(result);
-    // // await new Promise((resolve) => setTimeout(resolve, 100));
-    // // }
-    // mintAccount = mint.toString();
-    // solanaConnection
-    //   .confirmTransaction(result as TransactionConfirmationStrategy, 'finalized')
-    //   .then(async (confirmation) => {})
-    //   .catch((e) => {
-    //     console.log(e);
-    //     logger.warn('Buy TX hash expired');
-    //     isProcessing = false;
-    //   });
+
     return;
-
-    // try {
-
-    // } catch (e) {
-    //   console.log(messageStr);
-    //   console.error('Failed to parse JSON:', e);
-    //   ws?.close();
-    // }
   });
   ws!.on('error', function error(err) {
     console.error('WebSocket error:', err);
@@ -445,10 +423,11 @@ async function listenToChanges() {
         console.log(accountData.mint);
         boughtTokens++;
       }
-      await sellToken();
+      await sellToken(mintAccount);
       //todo fix
       await new Promise((resolve) => setTimeout(resolve, 5000));
-      await sellToken();
+      await sellToken(mintAccount);
+      clearState();
       // setTimeout(async () => {
       //   logger.info('Timeout');
       //   await sellToken();
