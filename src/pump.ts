@@ -1,4 +1,11 @@
-import { TokenAmount, Token, TokenAccount, TOKEN_PROGRAM_ID, LiquidityStateV4 } from '@raydium-io/raydium-sdk';
+import {
+  TokenAmount,
+  Token,
+  TokenAccount,
+  TOKEN_PROGRAM_ID,
+  LiquidityStateV4,
+  parseBigNumberish,
+} from '@raydium-io/raydium-sdk';
 import {
   AccountLayout,
   createBurnCheckedInstruction,
@@ -102,7 +109,6 @@ async function subscribeToSlotUpdates() {
     console.log(signatureString);
     const instructionWithCurve = ins.find((x: any) => x.index === 5) ?? ins.find((x: any) => x.index === 4);
     if (!instructionWithCurve) return;
-    console.log(data.transaction?.transaction.transaction.instructions);
     let tr2 = data.transaction?.transaction?.meta?.innerInstructions[2].instructions;
 
     console.log(2);
@@ -112,11 +118,14 @@ async function subscribeToSlotUpdates() {
       const opcode = data.readUInt8(0); // First byte (should be 0x02 for transfer)
       try {
         if (opcode === 2) {
-          const amountBuffer = data.slice(3, 7);
+          const amountBuffer = data.slice(1);
 
-          const reversedAmountBuffer = Buffer.from(amountBuffer).reverse();
-          const amount = parseInt(reversedAmountBuffer.toString('hex'), 16);
-          console.log('Decoded Amount (in lamports):', amount);
+          const reversedAmountBuffer1 = amountBuffer;
+          const amount1 = parseBigNumberish(reversedAmountBuffer1);
+          console.log('Decoded Amount (in lamports):', amount1);
+          const reversedAmountBuffer2 = amountBuffer.reverse();
+          const amount2 = parseBigNumberish(reversedAmountBuffer2);
+          console.log('Decoded Amount (in lamports):', amount2);
         } else {
           console.log('Not a transfer instruction');
         }
