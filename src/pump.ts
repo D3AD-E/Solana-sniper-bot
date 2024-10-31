@@ -104,9 +104,10 @@ async function subscribeToSlotUpdates() {
     console.dir(data.transaction?.transaction?.meta?.innerInstructions[1]);
     console.dir(data.transaction?.transaction?.meta?.innerInstructions[2]);
     // isProcessing = true;
-    // const pkKeys: PublicKey[] = data.transaction?.transaction?.transaction?.message?.accountKeys.map(
-    //   (x: any) => new PublicKey(x),
-    // );
+    const pkKeys: PublicKey[] = data.transaction?.transaction?.transaction?.message?.accountKeys.map(
+      (x: any) => new PublicKey(x),
+    );
+    console.log(pkKeys);
     // const mintAddress = ins[0].instructions[0].accounts[1];
     // const mint = pkKeys[mintAddress];
     // console.log('mint');
