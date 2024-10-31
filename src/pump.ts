@@ -247,48 +247,37 @@ export default async function snipe(): Promise<void> {
   // console.log(sellResults);
   // return;
   // setInterval(storeRecentBlockhashes, 100);
-  // let boughtAmount: bigint = 0n;
+  let boughtAmount: bigint = 0n;
   // logger.info('Started listening');
-  // let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
-  //   if (event.mint.toString() === mintAccount) {
-  //     if (event.user.toString() === wallet.publicKey.toString()) return;
-  //     if (isSelling) return;
-  //     logger.info(signature);
-  //     console.log('tradeEvent', event);
-  //     if (!gotTokenData) return;
-  //     // const price = event.tokenAmount / event.solAmount;
-  //     // if (!initialPrice) {
-  //     //   initialPrice = price;
-  //     //   logger.info('initial');
-  //     //   logger.info(initialPrice.toString());
-  //     //   return;
-  //     // }
-  //     // logger.info(price.toString());
-  //     // const priceNumber = Number(price.toString());
-  //     // const initialPriceNumber = Number(initialPrice.toString());
-  //     boughtAmount = boughtAmount + (event.isBuy ? event.solAmount : -event.solAmount);
-  //     // const percentageGain = ((initialPriceNumber - priceNumber) / initialPriceNumber) * 100;
-  //     console.log(boughtAmount);
-  //     logger.info('Change');
-  //     // logger.info(percentageGain.toFixed(4));
-  //     if (boughtAmount > 100000000n || boughtAmount < -1n) {
-  //       //0.1 sol
-  //       if (isSelling) return;
-  //       while (true) {
-  //         isSelling = true;
-  //         try {
-  //           const wasSellDone = await sellToken();
-  //           if (wasSellDone) return;
-  //           await new Promise((resolve) => setTimeout(resolve, 1500));
-  //         } catch (e) {
-  //           console.log(e);
-  //           await new Promise((resolve) => setTimeout(resolve, 50));
-  //         }
-  //       }
-  //     }
-  //   }
-  // });
-  // console.log('tradeEvent', tradeEvent);
+  let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
+    if (event.mint.toString() === mintAccount) {
+      if (event.user.toString() === wallet.publicKey.toString()) return;
+      if (isSelling) return;
+      logger.info(signature);
+      console.log('tradeEvent', event);
+      if (!gotTokenData) return;
+      // const price = event.tokenAmount / event.solAmount;
+      // if (!initialPrice) {
+      //   initialPrice = price;
+      //   logger.info('initial');
+      //   logger.info(initialPrice.toString());
+      //   return;
+      // }
+      // logger.info(price.toString());
+      // const priceNumber = Number(price.toString());
+      // const initialPriceNumber = Number(initialPrice.toString());
+      boughtAmount = boughtAmount + (event.isBuy ? event.solAmount : -event.solAmount);
+      // const percentageGain = ((initialPriceNumber - priceNumber) / initialPriceNumber) * 100;
+      console.log(boughtAmount);
+      logger.info('Change');
+      // logger.info(percentageGain.toFixed(4));
+      if (boughtAmount > 100000000n) {
+        if (isSelling) return;
+        await sellToken();
+      }
+    }
+  });
+  console.log('tradeEvent', tradeEvent);
   // setupLiquiditySocket();
   await listenToChanges();
 }
