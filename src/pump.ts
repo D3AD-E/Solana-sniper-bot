@@ -435,18 +435,15 @@ async function listenToChanges() {
         while (true) {
           isSelling = true;
           try {
-            for (let i = 0; i < 2; i++) {
-              const wasSellDone = await sellToken();
-              if (wasSellDone) return;
-              await new Promise((resolve) => setTimeout(resolve, 500));
-            }
-            await new Promise((resolve) => setTimeout(resolve, 10000));
+            const wasSellDone = await sellToken();
+            if (wasSellDone) return;
+            await new Promise((resolve) => setTimeout(resolve, 500));
           } catch (e) {
             console.log(e);
             await new Promise((resolve) => setTimeout(resolve, 50));
           }
         }
-      }, 10000);
+      }, 3000);
       // if (!workerPool!.doesTokenExist(accountData.mint.toString())) {
       //   logger.warn('Got unknown token in wallet');
       //   return;
