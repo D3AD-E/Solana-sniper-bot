@@ -115,15 +115,15 @@ async function subscribeToSlotUpdates() {
     );
     console.log(0);
     console.log(tr0);
-    for (const t in tr0) {
+    for (const t of tr0) {
       console.log(t);
     }
     console.log(1);
-    for (const t in tr1) {
+    for (const t of tr1) {
       console.log(t);
     }
     console.log(2);
-    for (const t in tr2) {
+    for (const t of tr2) {
       console.log(t);
     }
     // isProcessing = true;
