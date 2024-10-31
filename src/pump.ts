@@ -35,6 +35,8 @@ import { decodeData } from './decoder';
 import { SYSTEM_INSTRUCTION_LAYOUTS } from './decoder/decoder.types';
 import { bs58 } from '@coral-xyz/anchor/dist/cjs/utils/bytes';
 import { JitoClient } from './jito/searcher';
+import { readFile, writeFile } from 'fs/promises';
+
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
@@ -104,7 +106,7 @@ async function subscribeToSlotUpdates() {
     console.dir(data.transaction?.transaction?.meta?.innerInstructions[0]);
     console.dir(data.transaction?.transaction?.meta?.innerInstructions[1]);
     console.dir(data.transaction?.transaction?.meta?.innerInstructions[2]);
-    fs.writeFileSync('transactionDetails.json', JSON.stringify(data, null, 2));
+    await writeFile('transactionDetails.json', JSON.stringify(data, null, 2));
     let tr0 = data.transaction?.transaction?.meta?.innerInstructions[0].instructions.filter(
       (x: any) => x.programIdIndex === 9,
     );
