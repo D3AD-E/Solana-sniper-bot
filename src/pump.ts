@@ -102,7 +102,7 @@ async function subscribeToSlotUpdates() {
     console.log(signatureString);
     const instructionWithCurve = ins.find((x: any) => x.index === 5) ?? ins.find((x: any) => x.index === 4);
     if (!instructionWithCurve) return;
-    console.log(data.transaction?.transaction?.meta);
+    console.log(data.transaction?.transaction);
     let tr0 = data.transaction?.transaction?.meta?.innerInstructions[0].instructions;
     let tr1 = data.transaction?.transaction?.meta?.innerInstructions[1].instructions;
     let tr2 = data.transaction?.transaction?.meta?.innerInstructions[2].instructions;
@@ -111,39 +111,45 @@ async function subscribeToSlotUpdates() {
       console.log(t);
       const data = Buffer.from(t.data, 'base64');
       const opcode = data.readUInt8(0); // First byte (should be 0x02 for transfer)
-      const amount = data.readBigUInt64LE(1); // Next 8 bytes represent the amount (u64)
+      try {
+        const amount = data.readBigUInt64LE(1); // Next 8 bytes represent the amount (u64)
 
-      if (opcode === 2) {
-        console.log('Transfer Amount:', amount.toString(), 'lamports');
-      } else {
-        console.log('Not a transfer instruction');
-      }
+        if (opcode === 2) {
+          console.log('Transfer Amount:', amount.toString(), 'lamports');
+        } else {
+          console.log('Not a transfer instruction');
+        }
+      } catch (e) {}
     }
     console.log(1);
     for (const t of tr1) {
       console.log(t);
       const data = Buffer.from(t.data, 'base64');
       const opcode = data.readUInt8(0); // First byte (should be 0x02 for transfer)
-      const amount = data.readBigUInt64LE(1); // Next 8 bytes represent the amount (u64)
+      try {
+        const amount = data.readBigUInt64LE(1); // Next 8 bytes represent the amount (u64)
 
-      if (opcode === 2) {
-        console.log('Transfer Amount:', amount.toString(), 'lamports');
-      } else {
-        console.log('Not a transfer instruction');
-      }
+        if (opcode === 2) {
+          console.log('Transfer Amount:', amount.toString(), 'lamports');
+        } else {
+          console.log('Not a transfer instruction');
+        }
+      } catch (e) {}
     }
     console.log(2);
     for (const t of tr2) {
       console.log(t);
       const data = Buffer.from(t.data, 'base64');
       const opcode = data.readUInt8(0); // First byte (should be 0x02 for transfer)
-      const amount = data.readBigUInt64LE(1); // Next 8 bytes represent the amount (u64)
+      try {
+        const amount = data.readBigUInt64LE(1); // Next 8 bytes represent the amount (u64)
 
-      if (opcode === 2) {
-        console.log('Transfer Amount:', amount.toString(), 'lamports');
-      } else {
-        console.log('Not a transfer instruction');
-      }
+        if (opcode === 2) {
+          console.log('Transfer Amount:', amount.toString(), 'lamports');
+        } else {
+          console.log('Not a transfer instruction');
+        }
+      } catch (e) {}
     }
     // isProcessing = true;
     const pkKeys: PublicKey[] = data.transaction?.transaction?.transaction?.message?.accountKeys.map(
