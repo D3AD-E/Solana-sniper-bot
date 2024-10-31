@@ -315,6 +315,10 @@ async function sellToken() {
     process.env.COMMITMENT as Commitment,
   );
   const tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === mintAccount)!;
+  if (!tokenAccount || !tokenAccount.accountInfo) {
+    logger.warn('Unknown token');
+    return true;
+  }
   const bigInt = BigInt(tokenAccount.accountInfo.amount);
   console.log(bigInt);
   if (bigInt === 0n) return true;
