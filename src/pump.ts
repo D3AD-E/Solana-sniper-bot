@@ -433,22 +433,18 @@ async function listenToChanges() {
         logger.info(`Monitoring`);
         console.log(accountData.mint);
       }
-      await sellToken(mintAccount);
-      //todo fix
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-      if (await sellToken(mintAccount)) {
-        boughtTokens++;
-        console.log(boughtTokens);
-        clearState();
-      }
 
-      // setTimeout(async () => {
-      //   logger.info('Timeout');
-      //   await sellToken();
-      //   //todo fix
-      //   await new Promise((resolve) => setTimeout(resolve, 5000));
-      //   await sellToken();
-      // }, 520);
+      setTimeout(async () => {
+        logger.info('Timeout');
+        await sellToken(mintAccount);
+        //todo fix
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        if (await sellToken(mintAccount)) {
+          boughtTokens++;
+          console.log(boughtTokens);
+          clearState();
+        }
+      }, 520);
       // if (!workerPool!.doesTokenExist(accountData.mint.toString())) {
       //   logger.warn('Got unknown token in wallet');
       //   return;
