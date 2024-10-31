@@ -57,7 +57,7 @@ function isBuyDataOk(data: any) {
 
     const buyValue = new BN(reversedAmountBuffer); // Use the relevant slice for the value
     console.log('Parsed BigNumber3:', buyValue.toString());
-    if (buyValue > 1500000000n) {
+    if (buyValue > 1000000000n) {
       logger.warn('Buy too big');
       return false;
     } else return true;
@@ -138,8 +138,7 @@ async function subscribeToSlotUpdates() {
     logger.info('Sent buy');
     const localBoughtTokens = boughtTokens;
     await new Promise((resolve) => setTimeout(resolve, 10000));
-    console.log(isProcessing);
-    console.log(localBoughtTokens === boughtTokens);
+    console.log('Failbuy check', isProcessing, localBoughtTokens === boughtTokens);
     if (!isProcessing && localBoughtTokens === boughtTokens) {
       logger.warn('Buy failed');
       mintAccount = '';
