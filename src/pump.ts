@@ -306,16 +306,15 @@ async function sellToken() {
   const bigInt = BigInt(tokenAccount.accountInfo.amount);
   console.log(bigInt);
   if (bigInt === 0n) return true;
-  const sellResults = await sellPump(
+  await sellPump(
     wallet,
     tokenAccount.accountInfo.mint,
     bigInt,
     globalAccount!,
     provider!,
     associatedCurve!,
-    500000,
+    lastBlocks[lastBlocks.length - 1],
   );
-  console.log(sellResults);
   return false;
 }
 
@@ -432,17 +431,7 @@ async function listenToChanges() {
 
       setTimeout(async () => {
         logger.info('Timeout');
-        while (true) {
-          isSelling = true;
-          try {
-            const wasSellDone = await sellToken();
-            if (wasSellDone) return;
-            await new Promise((resolve) => setTimeout(resolve, 500));
-          } catch (e) {
-            console.log(e);
-            await new Promise((resolve) => setTimeout(resolve, 50));
-          }
-        }
+        await sellToken();
       }, 3000);
       // if (!workerPool!.doesTokenExist(accountData.mint.toString())) {
       //   logger.warn('Got unknown token in wallet');

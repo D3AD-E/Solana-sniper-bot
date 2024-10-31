@@ -89,7 +89,7 @@ export async function sellPump(
   globalAccount: GlobalAccount,
   provider: Provider,
   associatedBondingCurve: PublicKey,
-  lamports: number,
+  block: Block,
 ) {
   let sellTx = await getSellInstructions(
     buyer.publicKey,
@@ -99,29 +99,28 @@ export async function sellPump(
     provider,
     associatedBondingCurve,
   );
-  const block = await solanaConnection.getLatestBlockhash('finalized');
-  const messageV0 = new TransactionMessage({
-    payerKey: wallet.publicKey,
-    recentBlockhash: block.blockhash,
-    instructions: [
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: lamports }),
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 100000 }),
-      ...sellTx.instructions,
-    ],
-  }).compileToV0Message();
+  for (let i = 0; i < 5; i++) {
+    const tipAccount = getRandomAccount();
 
-  const transaction = new VersionedTransaction(messageV0);
-  transaction.sign([wallet]);
+    const tipInstruction = SystemProgram.transfer({
+      fromPubkey: wallet.publicKey,
+      toPubkey: tipAccount,
+      lamports: tipAmount / 10,
+    });
+    const messageV0 = new TransactionMessage({
+      payerKey: wallet.publicKey,
+      recentBlockhash: block.blockhash,
+      instructions: [...sellTx.instructions, tipInstruction],
+    }).compileToV0Message();
 
-  const signature = await solanaConnection.sendRawTransaction(transaction.serialize(), {
-    skipPreflight: true,
-  });
-  logger.info(signature);
-  return {
-    signature: signature!,
-    lastValidBlockHeight: block.lastValidBlockHeight,
-    blockhash: block.blockhash,
-  };
+    const transaction = new VersionedTransaction(messageV0);
+    transaction.sign([wallet]);
+    logger.info('selling');
+    const bundleId = await sendBundles(wallet, transaction, block.blockhash);
+    console.log(bundleId);
+  }
+
+  return;
 }
 
 async function getBuyInstructions(
