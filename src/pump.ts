@@ -1,49 +1,22 @@
-import {
-  TokenAmount,
-  Token,
-  TokenAccount,
-  TOKEN_PROGRAM_ID,
-  LiquidityStateV4,
-  parseBigNumberish,
-} from '@raydium-io/raydium-sdk';
-import {
-  AccountLayout,
-  createBurnCheckedInstruction,
-  createCloseAccountInstruction,
-  getAssociatedTokenAddress,
-  getMint,
-} from '@solana/spl-token';
-import {
-  Commitment,
-  LAMPORTS_PER_SOL,
-  PublicKey,
-  SystemProgram,
-  Transaction,
-  TransactionConfirmationStrategy,
-  TransactionMessage,
-  VersionedTransaction,
-} from '@solana/web3.js';
-import { buy, getTokenAccounts } from './cryptoQueries';
+import { TokenAmount, Token, TokenAccount, TOKEN_PROGRAM_ID } from '@raydium-io/raydium-sdk';
+import { AccountLayout } from '@solana/spl-token';
+import { Commitment, LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js';
+import { u64 } from '@solana/buffer-layout-utils';
+import { getTokenAccounts } from './cryptoQueries';
 import logger from './utils/logger';
 import { solanaConnection, wallet } from './solana';
-import { RAYDIUM_LIQUIDITY_PROGRAM_ID_V4, regeneratePoolKeys } from './cryptoQueries/raydiumSwapUtils/liquidity';
 import WebSocket from 'ws';
 import { sendMessage } from './telegramBot';
-import { helius } from './helius';
 import { Block } from './listener.types';
-import { isNumberInRange } from './utils/mathUtils';
 import { WorkerPool } from './workers/pool';
 import { envVarToBoolean } from './utils/envUtils';
 import { GlobalAccount, PumpFunSDK } from 'pumpdotfun-sdk';
 import { AnchorProvider, BN, Wallet } from '@coral-xyz/anchor';
-import { buyPump, sellPump } from './pumpFun';
-import Client, { CommitmentLevel, SubscribeRequest } from '@triton-one/yellowstone-grpc';
-import { decodeData } from './decoder';
-import { SYSTEM_INSTRUCTION_LAYOUTS } from './decoder/decoder.types';
+import { sellPump } from './pumpFun';
+import Client, { SubscribeRequest } from '@triton-one/yellowstone-grpc';
 import { bs58 } from '@coral-xyz/anchor/dist/cjs/utils/bytes';
 import { JitoClient } from './jito/searcher';
-import { readFile, writeFile } from 'fs/promises';
-
+import { struct, u32, u8 } from '@solana/buffer-layout';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
@@ -76,6 +49,13 @@ let isSelling = false;
 let buyAmountSol: bigint | undefined = undefined;
 let buyAmount: bigint | undefined = undefined;
 let boughtTokens = 0;
+
+interface TransferInfo {
+  opcode: number;
+  amount: bigint;
+}
+
+const TransferData = struct<TransferInfo>([u8('opcode'), u64('amount')]);
 // Example of subscribing to slot updates
 async function subscribeToSlotUpdates() {
   const client = new Client('http://localhost:10000', 'args.xToken', {
@@ -118,6 +98,8 @@ async function subscribeToSlotUpdates() {
       const opcode = data.readUInt8(0); // First byte (should be 0x02 for transfer)
       try {
         if (opcode === 2) {
+          const decodedData = TransferData.decode(data);
+          console.log(decodedData);
           const amountBuffer = data.slice(1);
           const bigNumberValue = BN.from(amountBuffer); // Use the relevant slice for the value
           console.log('Parsed BigNumber:', bigNumberValue.toString());
