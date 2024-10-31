@@ -436,11 +436,9 @@ async function listenToChanges() {
           isSelling = true;
           try {
             for (let i = 0; i < 2; i++) {
-              const wasSellDone = await sellToken();
-              if (wasSellDone) return;
+              await sellToken();
               await new Promise((resolve) => setTimeout(resolve, 500));
             }
-            await new Promise((resolve) => setTimeout(resolve, 10000));
           } catch (e) {
             console.log(e);
             await new Promise((resolve) => setTimeout(resolve, 50));
