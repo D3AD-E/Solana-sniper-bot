@@ -274,6 +274,9 @@ export default async function snipe(): Promise<void> {
       if (boughtAmount > 100000000n) {
         if (isSelling) return;
         await sellToken();
+        //todo fix
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        await sellToken();
       }
     }
   });
@@ -430,6 +433,9 @@ async function listenToChanges() {
 
       setTimeout(async () => {
         logger.info('Timeout');
+        await sellToken();
+        //todo fix
+        await new Promise((resolve) => setTimeout(resolve, 5000));
         await sellToken();
       }, 29000);
       // if (!workerPool!.doesTokenExist(accountData.mint.toString())) {
