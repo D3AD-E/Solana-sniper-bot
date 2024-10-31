@@ -313,11 +313,13 @@ async function storeRecentBlockhashes() {
 }
 
 async function sellToken() {
+  console.log('Selling');
   existingTokenAccounts = await getTokenAccounts(
     solanaConnection,
     wallet.publicKey,
     process.env.COMMITMENT as Commitment,
   );
+  console.log(existingTokenAccounts);
   const tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === mintAccount)!;
   const bigInt = BigInt(tokenAccount.accountInfo.amount);
   console.log(bigInt);
