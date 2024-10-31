@@ -115,7 +115,9 @@ async function subscribeToSlotUpdates() {
     const instructionWithCurve = ins.find((x: any) => x.index === 5) ?? ins.find((x: any) => x.index === 4);
     if (!instructionWithCurve) return;
     isProcessing = true;
-    const pkKeys = data.transaction?.transaction?.transaction?.message?.accountKeys.map((x: any) => new PublicKey(x));
+    const pkKeys: PublicKey[] = data.transaction?.transaction?.transaction?.message?.accountKeys.map(
+      (x: any) => new PublicKey(x),
+    );
     console.log(ins[0].instructions[0]);
     console.log(instructionWithCurve.instructions[0]);
     console.log(pkKeys.map((x: PublicKey) => x.toString()));
@@ -128,6 +130,8 @@ async function subscribeToSlotUpdates() {
     const curve = pkKeys[curveAddress];
     console.log('curve');
     console.log(curve);
+    associatedCurve = curve;
+
     logger.info('Started listening');
     const result = await buyPump(
       wallet,
@@ -135,7 +139,7 @@ async function subscribeToSlotUpdates() {
       BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL),
       globalAccount!,
       provider!,
-      new PublicKey(curve),
+      curve,
       maxLamports,
       lastBlocks[lastBlocks.length - 1],
     );
@@ -404,7 +408,6 @@ function setupLiquiditySocket() {
     // console.log(result);
     // // await new Promise((resolve) => setTimeout(resolve, 100));
     // // }
-    // associatedCurve = new PublicKey(curve);
     // mintAccount = mint.toString();
     // solanaConnection
     //   .confirmTransaction(result as TransactionConfirmationStrategy, 'finalized')
