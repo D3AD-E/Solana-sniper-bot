@@ -138,6 +138,8 @@ async function subscribeToSlotUpdates() {
     logger.info('Sent buy');
     const localBoughtTokens = boughtTokens;
     await new Promise((resolve) => setTimeout(resolve, 10000));
+    console.log(isProcessing);
+    console.log(localBoughtTokens === boughtTokens);
     if (!isProcessing && localBoughtTokens === boughtTokens) {
       logger.warn('Buy failed');
       mintAccount = '';
