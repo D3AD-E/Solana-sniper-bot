@@ -42,13 +42,10 @@ let swapAmount: TokenAmount;
 let quoteTokenAssociatedAddress: PublicKey;
 let ws: WebSocket | undefined = undefined;
 
-const maxLamports = 5001138;
-let currentLamports = maxLamports;
 let lastBlocks: Block[] = [];
 let processedTokens: string[] = [];
 let workerPool: WorkerPool | undefined = undefined;
 const enableProtection = envVarToBoolean(process.env.ENABLE_PROTECTION);
-const minPoolSize = 100;
 let isProcessing = false;
 const getProvider = () => {
   const walletAnchor = new Wallet(wallet);
@@ -67,19 +64,6 @@ let globalAccount: GlobalAccount | undefined = undefined;
 let provider: AnchorProvider | undefined = undefined;
 let associatedCurve: PublicKey | undefined = undefined;
 let isSelling = false;
-
-export type CreateAccountParams = {
-  /** The account that will transfer lamports to the created account */
-  fromPubkey: PublicKey;
-  /** Public key of the created account */
-  newAccountPubkey: PublicKey;
-  /** Amount of lamports to transfer to the created account */
-  lamports: number;
-  /** Amount of space in bytes to allocate to the created account */
-  space: number;
-  /** Public key of the program to assign as the owner of the created account */
-  programId: PublicKey;
-};
 
 // Example of subscribing to slot updates
 async function subscribeToSlotUpdates() {
@@ -110,7 +94,7 @@ async function subscribeToSlotUpdates() {
     const ins = data.transaction?.transaction?.meta?.innerInstructions;
     if (!ins) return;
     const signatureString = bs58.encode(data.transaction.transaction.signature);
-    console.log('Signature');
+    logger.info('Signature');
     console.log(signatureString);
     const instructionWithCurve = ins.find((x: any) => x.index === 5) ?? ins.find((x: any) => x.index === 4);
     if (!instructionWithCurve) return;
@@ -118,9 +102,6 @@ async function subscribeToSlotUpdates() {
     const pkKeys: PublicKey[] = data.transaction?.transaction?.transaction?.message?.accountKeys.map(
       (x: any) => new PublicKey(x),
     );
-    console.log(ins[0].instructions[0]);
-    console.log(instructionWithCurve.instructions[0]);
-    console.log(pkKeys.map((x: PublicKey) => x.toString()));
     const mintAddress = ins[0].instructions[0].accounts[1];
     const mint = pkKeys[mintAddress];
     console.log('mint');
@@ -140,20 +121,9 @@ async function subscribeToSlotUpdates() {
       globalAccount!,
       provider!,
       curve,
-      maxLamports,
       lastBlocks[lastBlocks.length - 1],
     );
-    console.log(result);
-    // newAccountPubkey: instruction.keys[1].pubkey,
-    // {
-    //   fromPubkey: instruction.keys[0].pubkey,
-    //   newAccountPubkey: instruction.keys[1].pubkey,
-    //   lamports,
-    //   space,
-    //   programId: new PublicKey(programId),
-    // };
-
-    // console.log(data.transaction?.transaction?.transaction?.message?.instructions);
+    logger.info('Sent buy');
   });
   // Create subscribe request based on provided arguments.
   const request: SubscribeRequest = {

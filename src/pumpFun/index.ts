@@ -41,7 +41,6 @@ export async function buyPump(
   globalAccount: GlobalAccount,
   provider: Provider,
   associatedBondingCurve: PublicKey,
-  lamports: number,
   block: Block,
 ) {
   const buyAmount = globalAccount.getInitialBuyPrice(buyAmountSol);
