@@ -432,7 +432,7 @@ async function listenToChanges() {
       setTimeout(async () => {
         logger.info('Timeout');
         await sellToken();
-      }, 10000);
+      }, 7777);
       // if (!workerPool!.doesTokenExist(accountData.mint.toString())) {
       //   logger.warn('Got unknown token in wallet');
       //   return;
