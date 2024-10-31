@@ -49,7 +49,7 @@ export async function buyPump(
     mint,
     globalAccount.feeRecipient,
     buyAmount,
-    buyAmountSol + buyAmountSol * 500n,
+    buyAmountSol + 200000000n,
     provider,
     associatedBondingCurve,
   );
