@@ -12,7 +12,7 @@ import { WorkerPool } from './workers/pool';
 import { envVarToBoolean } from './utils/envUtils';
 import { GlobalAccount, PumpFunSDK } from 'pumpdotfun-sdk';
 import { AnchorProvider, BN, Wallet } from '@coral-xyz/anchor';
-import { sellPump } from './pumpFun';
+import { buyPump, sellPump } from './pumpFun';
 import Client, { SubscribeRequest } from '@triton-one/yellowstone-grpc';
 import { bs58 } from '@coral-xyz/anchor/dist/cjs/utils/bytes';
 import { JitoClient } from './jito/searcher';
@@ -56,6 +56,29 @@ interface TransferInfo {
 }
 
 const TransferData = struct<TransferInfo>([u8('opcode'), u64('amount')]);
+
+function isBuyDataOk(data: any) {
+  try {
+    const decodedData = TransferData.decode(data);
+    console.log(decodedData);
+
+    const amountBuffer = data.slice(4);
+    console.log(amountBuffer);
+    // Reverse the buffer to switch from little-endian to big-endian
+    const reversedAmountBuffer = Buffer.from(amountBuffer).reverse();
+    console.log(reversedAmountBuffer);
+
+    const buyValue = new BN(reversedAmountBuffer); // Use the relevant slice for the value
+    console.log('Parsed BigNumber3:', buyValue.toString());
+    if (buyValue > 1500000000n) {
+      logger.warn('Buy too big');
+      return false;
+    } else return true;
+  } catch (e) {
+    console.log(e);
+  }
+  return false;
+}
 // Example of subscribing to slot updates
 async function subscribeToSlotUpdates() {
   const client = new Client('http://localhost:10000', 'args.xToken', {
@@ -91,72 +114,50 @@ async function subscribeToSlotUpdates() {
     if (!instructionWithCurve) return;
     let tr2 = data.transaction?.transaction?.meta?.innerInstructions[2].instructions;
 
-    console.log(2);
     for (const t of tr2) {
-      console.log(t);
-      const data = Buffer.from(t.data, 'base64');
+      const dataBuffer = Buffer.from(t.data, 'base64');
       const opcode = data.readUInt8(0); // First byte (should be 0x02 for transfer)
-      try {
-        if (opcode === 2) {
-          const decodedData = TransferData.decode(data);
-          console.log(decodedData);
-
-          const amountBuffer = data.slice(4);
-          console.log(amountBuffer);
-          // Reverse the buffer to switch from little-endian to big-endian
-          const reversedAmountBuffer = Buffer.from(amountBuffer).reverse();
-          console.log(reversedAmountBuffer);
-
-          const amount = reversedAmountBuffer.readBigUInt64LE();
-          console.log('Parsed BigNumber1:', amount.toString());
-          // Convert the reversed buffer to an integer
-          const amount1 = parseInt(reversedAmountBuffer.toString('hex'), 16);
-          console.log('Parsed BigNumber2:', amount1);
-          const bigNumberValue2 = new BN(reversedAmountBuffer); // Use the relevant slice for the value
-          console.log('Parsed BigNumber3:', bigNumberValue2.toString());
-        } else {
-          console.log('Not a transfer instruction');
-        }
-      } catch (e) {
-        console.log(e);
+      if (opcode === 2) {
+        if (isBuyDataOk(dataBuffer)) break;
+        else return;
       }
     }
-    // isProcessing = true;
+    isProcessing = true;
     const pkKeys: PublicKey[] = data.transaction?.transaction?.transaction?.message?.accountKeys.map(
       (x: any) => new PublicKey(x),
     );
     console.log(pkKeys);
-    // const mintAddress = ins[0].instructions[0].accounts[1];
-    // const mint = pkKeys[mintAddress];
-    // console.log('mint');
-    // console.log(mint.toString());
-    // mintAccount = mint.toString();
-    // const curveAddress = instructionWithCurve.instructions[0].accounts[0];
-    // const curve = pkKeys[curveAddress];
-    // console.log('curve');
-    // console.log(curve);
-    // associatedCurve = curve;
+    const mintAddress = ins[0].instructions[0].accounts[1];
+    const mint = pkKeys[mintAddress];
+    console.log('mint');
+    console.log(mint.toString());
+    mintAccount = mint.toString();
+    const curveAddress = instructionWithCurve.instructions[0].accounts[0];
+    const curve = pkKeys[curveAddress];
+    console.log('curve');
+    console.log(curve);
+    associatedCurve = curve;
 
-    // logger.info('Started listening');
-    // await buyPump(
-    //   wallet,
-    //   mint,
-    //   buyAmountSol!,
-    //   buyAmount!,
-    //   globalAccount!,
-    //   provider!,
-    //   curve,
-    //   lastBlocks[lastBlocks.length - 1],
-    // );
-    // logger.info('Sent buy');
-    // const localBoughtTokens = boughtTokens;
-    // await new Promise((resolve) => setTimeout(resolve, 10000));
-    // if (!isProcessing && localBoughtTokens === boughtTokens) {
-    //   logger.warn('Buy failed');
-    //   mintAccount = '';
-    //   associatedCurve = undefined;
-    //   isProcessing = false;
-    // }
+    logger.info('Started listening');
+    await buyPump(
+      wallet,
+      mint,
+      buyAmountSol!,
+      buyAmount!,
+      globalAccount!,
+      provider!,
+      curve,
+      lastBlocks[lastBlocks.length - 1],
+    );
+    logger.info('Sent buy');
+    const localBoughtTokens = boughtTokens;
+    await new Promise((resolve) => setTimeout(resolve, 10000));
+    if (!isProcessing && localBoughtTokens === boughtTokens) {
+      logger.warn('Buy failed');
+      mintAccount = '';
+      associatedCurve = undefined;
+      isProcessing = false;
+    }
   });
   // Create subscribe request based on provided arguments.
   const request: SubscribeRequest = {
