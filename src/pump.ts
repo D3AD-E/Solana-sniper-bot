@@ -192,6 +192,7 @@ function clearState() {
   mintAccount = '';
   associatedCurve = undefined;
   isProcessing = false;
+  gotTokenData = false;
 }
 
 export default async function snipe(): Promise<void> {
