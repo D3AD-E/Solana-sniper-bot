@@ -50,18 +50,8 @@ let buyAmountSol: bigint | undefined = undefined;
 let buyAmount: bigint | undefined = undefined;
 let boughtTokens = 0;
 
-interface TransferInfo {
-  opcode: number;
-  amount: bigint;
-}
-
-const TransferData = struct<TransferInfo>([u8('opcode'), u64('amount')]);
-
 function isBuyDataOk(data: any) {
   try {
-    const decodedData = TransferData.decode(data);
-    console.log(decodedData);
-
     const amountBuffer = data.slice(4);
     console.log(amountBuffer);
     // Reverse the buffer to switch from little-endian to big-endian
@@ -116,7 +106,7 @@ async function subscribeToSlotUpdates() {
 
     for (const t of tr2) {
       const dataBuffer = Buffer.from(t.data, 'base64');
-      const opcode = data.readUInt8(0); // First byte (should be 0x02 for transfer)
+      const opcode = dataBuffer.readUInt8(0); // First byte (should be 0x02 for transfer)
       if (opcode === 2) {
         if (isBuyDataOk(dataBuffer)) break;
         else return;
