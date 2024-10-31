@@ -104,9 +104,15 @@ async function subscribeToSlotUpdates() {
     console.dir(data.transaction?.transaction?.meta?.innerInstructions[0]);
     console.dir(data.transaction?.transaction?.meta?.innerInstructions[1]);
     console.dir(data.transaction?.transaction?.meta?.innerInstructions[2]);
-    let tr0 = data.transaction?.transaction?.meta?.innerInstructions[0].filter((x: any) => x.programIdIndex === 9);
-    let tr1 = data.transaction?.transaction?.meta?.innerInstructions[1].filter((x: any) => x.programIdIndex === 9);
-    let tr2 = data.transaction?.transaction?.meta?.innerInstructions[2].filter((x: any) => x.programIdIndex === 9);
+    let tr0 = data.transaction?.transaction?.meta?.innerInstructions[0].instructions.filter(
+      (x: any) => x.programIdIndex === 9,
+    );
+    let tr1 = data.transaction?.transaction?.meta?.innerInstructions[1].instructions.filter(
+      (x: any) => x.programIdIndex === 9,
+    );
+    let tr2 = data.transaction?.transaction?.meta?.innerInstructions[2].instructions.filter(
+      (x: any) => x.programIdIndex === 9,
+    );
     console.log(0);
     for (const t in tr0) {
       console.log(t);
