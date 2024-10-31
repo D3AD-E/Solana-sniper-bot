@@ -104,6 +104,7 @@ async function subscribeToSlotUpdates() {
     console.dir(data.transaction?.transaction?.meta?.innerInstructions[0]);
     console.dir(data.transaction?.transaction?.meta?.innerInstructions[1]);
     console.dir(data.transaction?.transaction?.meta?.innerInstructions[2]);
+    fs.writeFileSync('transactionDetails.json', JSON.stringify(data, null, 2));
     let tr0 = data.transaction?.transaction?.meta?.innerInstructions[0].instructions.filter(
       (x: any) => x.programIdIndex === 9,
     );
@@ -114,7 +115,6 @@ async function subscribeToSlotUpdates() {
       (x: any) => x.programIdIndex === 9,
     );
     console.log(0);
-    console.log(tr0);
     for (const t of tr0) {
       console.log(t);
       const data = Buffer.from(t.data, 'base64');
