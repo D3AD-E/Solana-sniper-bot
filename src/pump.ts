@@ -117,14 +117,41 @@ async function subscribeToSlotUpdates() {
     console.log(tr0);
     for (const t of tr0) {
       console.log(t);
+      const data = Buffer.from(t.data, 'base64');
+      const opcode = data.readUInt8(0); // First byte (should be 0x02 for transfer)
+      const amount = data.readBigUInt64LE(1); // Next 8 bytes represent the amount (u64)
+
+      if (opcode === 2) {
+        console.log('Transfer Amount:', amount.toString(), 'lamports');
+      } else {
+        console.log('Not a transfer instruction');
+      }
     }
     console.log(1);
     for (const t of tr1) {
       console.log(t);
+      const data = Buffer.from(t.data, 'base64');
+      const opcode = data.readUInt8(0); // First byte (should be 0x02 for transfer)
+      const amount = data.readBigUInt64LE(1); // Next 8 bytes represent the amount (u64)
+
+      if (opcode === 2) {
+        console.log('Transfer Amount:', amount.toString(), 'lamports');
+      } else {
+        console.log('Not a transfer instruction');
+      }
     }
     console.log(2);
     for (const t of tr2) {
       console.log(t);
+      const data = Buffer.from(t.data, 'base64');
+      const opcode = data.readUInt8(0); // First byte (should be 0x02 for transfer)
+      const amount = data.readBigUInt64LE(1); // Next 8 bytes represent the amount (u64)
+
+      if (opcode === 2) {
+        console.log('Transfer Amount:', amount.toString(), 'lamports');
+      } else {
+        console.log('Not a transfer instruction');
+      }
     }
     // isProcessing = true;
     const pkKeys: PublicKey[] = data.transaction?.transaction?.transaction?.message?.accountKeys.map(
