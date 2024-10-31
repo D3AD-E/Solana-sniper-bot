@@ -433,6 +433,7 @@ async function listenToChanges() {
         logger.info(`Monitoring`);
         console.log(accountData.mint);
       }
+      const randomValue = Math.floor(Math.random() * (1500 - 500 + 1)) + 500;
 
       setTimeout(async () => {
         logger.info('Timeout');
@@ -444,7 +445,7 @@ async function listenToChanges() {
           console.log(boughtTokens);
           clearState();
         }
-      }, 520);
+      }, randomValue);
       // if (!workerPool!.doesTokenExist(accountData.mint.toString())) {
       //   logger.warn('Got unknown token in wallet');
       //   return;
