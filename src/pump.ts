@@ -466,7 +466,7 @@ async function listenToChanges() {
               if (wasSellDone) return;
               await new Promise((resolve) => setTimeout(resolve, 500));
             }
-            await new Promise((resolve) => setTimeout(resolve, 5000));
+            await new Promise((resolve) => setTimeout(resolve, 10000));
           } catch (e) {
             console.log(e);
             await new Promise((resolve) => setTimeout(resolve, 50));
