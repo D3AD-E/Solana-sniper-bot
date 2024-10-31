@@ -92,7 +92,7 @@ async function subscribeToSlotUpdates() {
   // Handle updates
   stream.on('data', async (data) => {
     if (isProcessing) return;
-    if (boughtTokens >= 5) {
+    if (boughtTokens >= 15) {
       logger.warn('Buy limit');
       return;
     }
