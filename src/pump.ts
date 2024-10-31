@@ -114,6 +114,7 @@ async function subscribeToSlotUpdates() {
       (x: any) => x.programIdIndex === 9,
     );
     console.log(0);
+    console.log(tr0);
     for (const t in tr0) {
       console.log(t);
     }
