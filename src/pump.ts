@@ -119,17 +119,16 @@ async function subscribeToSlotUpdates() {
       try {
         if (opcode === 2) {
           const amountBuffer = data.slice(1);
-
-          const reversedAmountBuffer1 = amountBuffer;
-          const amount1 = parseBigNumberish(reversedAmountBuffer1);
-          console.log('Decoded Amount (in lamports):', amount1);
-          const reversedAmountBuffer2 = amountBuffer.reverse();
-          const amount2 = parseBigNumberish(reversedAmountBuffer2);
-          console.log('Decoded Amount (in lamports):', amount2);
+          const bigNumberValue = BN.from(amountBuffer); // Use the relevant slice for the value
+          console.log('Parsed BigNumber:', bigNumberValue.toString());
+          const bigNumberValue2 = BN.from(amountBuffer.reverse()); // Use the relevant slice for the value
+          console.log('Parsed BigNumber:', bigNumberValue2.toString());
         } else {
           console.log('Not a transfer instruction');
         }
-      } catch (e) {}
+      } catch (e) {
+        console.log(e);
+      }
     }
     // isProcessing = true;
     const pkKeys: PublicKey[] = data.transaction?.transaction?.transaction?.message?.accountKeys.map(
