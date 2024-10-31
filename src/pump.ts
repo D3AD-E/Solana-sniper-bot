@@ -102,15 +102,17 @@ async function subscribeToSlotUpdates() {
           console.log(decodedData);
 
           const amountBuffer = data.slice(3);
-
+          console.log(amountBuffer);
           // Reverse the buffer to switch from little-endian to big-endian
           const reversedAmountBuffer = Buffer.from(amountBuffer).reverse();
+          console.log(reversedAmountBuffer);
+
           const amount = reversedAmountBuffer.readBigUInt64LE();
           console.log('Parsed BigNumber1:', amount.toString());
           // Convert the reversed buffer to an integer
           const amount1 = parseInt(reversedAmountBuffer.toString('hex'), 16);
           console.log('Parsed BigNumber2:', amount1);
-          const bigNumberValue2 = new BN(amountBuffer.reverse()); // Use the relevant slice for the value
+          const bigNumberValue2 = new BN(reversedAmountBuffer); // Use the relevant slice for the value
           console.log('Parsed BigNumber3:', bigNumberValue2.toString());
         } else {
           console.log('Not a transfer instruction');
