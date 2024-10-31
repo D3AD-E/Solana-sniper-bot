@@ -100,7 +100,9 @@ async function subscribeToSlotUpdates() {
     console.log(signatureString);
     const instructionWithCurve = ins.find((x: any) => x.index === 5) ?? ins.find((x: any) => x.index === 4);
     if (!instructionWithCurve) return;
-    console.log(data.transaction?.transaction?.meta?.innerInstructions);
+    console.dir(data.transaction?.transaction?.meta?.innerInstructions[0]);
+    console.dir(data.transaction?.transaction?.meta?.innerInstructions[1]);
+    console.dir(data.transaction?.transaction?.meta?.innerInstructions[2]);
     // isProcessing = true;
     // const pkKeys: PublicKey[] = data.transaction?.transaction?.transaction?.message?.accountKeys.map(
     //   (x: any) => new PublicKey(x),
@@ -150,6 +152,7 @@ async function subscribeToSlotUpdates() {
           '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P',
           'metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s',
           'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+          '11111111111111111111111111111111',
         ],
       },
     },
