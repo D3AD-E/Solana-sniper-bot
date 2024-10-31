@@ -100,7 +100,7 @@ async function subscribeToSlotUpdates() {
     console.log(signatureString);
     const instructionWithCurve = ins.find((x: any) => x.index === 5) ?? ins.find((x: any) => x.index === 4);
     if (!instructionWithCurve) return;
-    console.log(data.transaction.transaction);
+    console.log(data.transaction?.transaction?.meta?.innerInstructions);
     // isProcessing = true;
     // const pkKeys: PublicKey[] = data.transaction?.transaction?.transaction?.message?.accountKeys.map(
     //   (x: any) => new PublicKey(x),
