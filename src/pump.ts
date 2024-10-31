@@ -112,7 +112,7 @@ async function subscribeToSlotUpdates() {
       const opcode = data.readUInt8(0); // First byte (should be 0x02 for transfer)
       try {
         if (opcode === 2) {
-          const amountBuffer = data.slice(1);
+          const amountBuffer = data.slice(3, 7);
 
           const reversedAmountBuffer = Buffer.from(amountBuffer).reverse();
           const amount = parseInt(reversedAmountBuffer.toString('hex'), 16);
