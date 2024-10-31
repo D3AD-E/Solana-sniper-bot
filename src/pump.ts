@@ -189,6 +189,7 @@ async function subscribeToSlotUpdates() {
 }
 
 function clearState() {
+  console.log('Clearing state');
   mintAccount = '';
   associatedCurve = undefined;
   isProcessing = false;
@@ -323,10 +324,19 @@ async function sellToken(currentMint: string) {
     wallet.publicKey,
     process.env.COMMITMENT as Commitment,
   );
-  const tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === currentMint)!;
+  let tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === currentMint)!;
   if (!tokenAccount || !tokenAccount.accountInfo) {
+    console.log('curmint', currentMint);
     logger.warn('Unknown token');
-    return true;
+    existingTokenAccounts = await getTokenAccounts(
+      solanaConnection,
+      wallet.publicKey,
+      process.env.COMMITMENT as Commitment,
+    );
+    tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === currentMint)!;
+    logger.warn('Unknown token2');
+    console.log(tokenAccount);
+    if (!tokenAccount || !tokenAccount.accountInfo) return true;
   }
   const bigInt = BigInt(tokenAccount.accountInfo.amount);
   console.log(bigInt);
