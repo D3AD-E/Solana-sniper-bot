@@ -432,15 +432,19 @@ async function listenToChanges() {
 
       setTimeout(async () => {
         logger.info('Timeout');
-        try {
-          for (let i = 0; i < 2; i++) {
-            await sellToken();
-            await new Promise((resolve) => setTimeout(resolve, 500));
+        while (true) {
+          isSelling = true;
+          try {
+            for (let i = 0; i < 2; i++) {
+              const wasSellDone = await sellToken();
+              if (wasSellDone) return;
+              await new Promise((resolve) => setTimeout(resolve, 500));
+            }
+            await new Promise((resolve) => setTimeout(resolve, 10000));
+          } catch (e) {
+            console.log(e);
+            await new Promise((resolve) => setTimeout(resolve, 50));
           }
-        } catch (e) {
-          console.log(e);
-          await new Promise((resolve) => setTimeout(resolve, 50));
-          await sellToken();
         }
       }, 10000);
       // if (!workerPool!.doesTokenExist(accountData.mint.toString())) {
