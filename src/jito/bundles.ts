@@ -20,8 +20,12 @@ export const sendBundles = async (wallet: Keypair, transactions: VersionedTransa
   if (isError(b)) {
     throw b;
   }
-
-  const resp = await client.sendBundle(b);
-  logger.info('resp: ' + resp);
-  return resp;
+  try {
+    const resp = await client.sendBundle(b);
+    logger.info('resp: ' + resp);
+    return resp;
+  } catch (e) {
+    console.log(e);
+    return 'Failed';
+  }
 };
