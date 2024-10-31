@@ -100,41 +100,42 @@ async function subscribeToSlotUpdates() {
     console.log(signatureString);
     const instructionWithCurve = ins.find((x: any) => x.index === 5) ?? ins.find((x: any) => x.index === 4);
     if (!instructionWithCurve) return;
-    isProcessing = true;
-    const pkKeys: PublicKey[] = data.transaction?.transaction?.transaction?.message?.accountKeys.map(
-      (x: any) => new PublicKey(x),
-    );
-    const mintAddress = ins[0].instructions[0].accounts[1];
-    const mint = pkKeys[mintAddress];
-    console.log('mint');
-    console.log(mint.toString());
-    mintAccount = mint.toString();
-    const curveAddress = instructionWithCurve.instructions[0].accounts[0];
-    const curve = pkKeys[curveAddress];
-    console.log('curve');
-    console.log(curve);
-    associatedCurve = curve;
+    console.log(data.transaction.transaction);
+    // isProcessing = true;
+    // const pkKeys: PublicKey[] = data.transaction?.transaction?.transaction?.message?.accountKeys.map(
+    //   (x: any) => new PublicKey(x),
+    // );
+    // const mintAddress = ins[0].instructions[0].accounts[1];
+    // const mint = pkKeys[mintAddress];
+    // console.log('mint');
+    // console.log(mint.toString());
+    // mintAccount = mint.toString();
+    // const curveAddress = instructionWithCurve.instructions[0].accounts[0];
+    // const curve = pkKeys[curveAddress];
+    // console.log('curve');
+    // console.log(curve);
+    // associatedCurve = curve;
 
-    logger.info('Started listening');
-    await buyPump(
-      wallet,
-      mint,
-      buyAmountSol!,
-      buyAmount!,
-      globalAccount!,
-      provider!,
-      curve,
-      lastBlocks[lastBlocks.length - 1],
-    );
-    logger.info('Sent buy');
-    const localBoughtTokens = boughtTokens;
-    await new Promise((resolve) => setTimeout(resolve, 10000));
-    if (!isProcessing && localBoughtTokens === boughtTokens) {
-      logger.warn('Buy failed');
-      mintAccount = '';
-      associatedCurve = undefined;
-      isProcessing = false;
-    }
+    // logger.info('Started listening');
+    // await buyPump(
+    //   wallet,
+    //   mint,
+    //   buyAmountSol!,
+    //   buyAmount!,
+    //   globalAccount!,
+    //   provider!,
+    //   curve,
+    //   lastBlocks[lastBlocks.length - 1],
+    // );
+    // logger.info('Sent buy');
+    // const localBoughtTokens = boughtTokens;
+    // await new Promise((resolve) => setTimeout(resolve, 10000));
+    // if (!isProcessing && localBoughtTokens === boughtTokens) {
+    //   logger.warn('Buy failed');
+    //   mintAccount = '';
+    //   associatedCurve = undefined;
+    //   isProcessing = false;
+    // }
   });
   // Create subscribe request based on provided arguments.
   const request: SubscribeRequest = {
