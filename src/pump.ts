@@ -115,9 +115,9 @@ async function subscribeToSlotUpdates() {
     associatedCurve = curve;
 
     logger.info('Started listening');
-    const result = await buyPump(
+    await buyPump(
       wallet,
-      new PublicKey(mint),
+      mint,
       buyAmountSol!,
       buyAmount!,
       globalAccount!,

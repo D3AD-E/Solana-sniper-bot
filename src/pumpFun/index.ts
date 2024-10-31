@@ -79,11 +79,7 @@ export async function buyPump(
   //   skipPreflight: true,
   // });
   // logger.info(signature);
-  return {
-    signature: 'signature!',
-    lastValidBlockHeight: 0, //block.lastValidBlockHeight,
-    blockhash: 'block.blockhash',
-  };
+  return;
 }
 
 export async function sellPump(
