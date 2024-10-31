@@ -421,13 +421,16 @@ async function listenToChanges() {
         gotTokenData = true;
         logger.info(`Monitoring`);
         console.log(accountData.mint);
-        boughtTokens++;
       }
       await sellToken(mintAccount);
       //todo fix
       await new Promise((resolve) => setTimeout(resolve, 5000));
-      await sellToken(mintAccount);
-      clearState();
+      if (await sellToken(mintAccount)) {
+        boughtTokens++;
+        console.log(boughtTokens);
+        clearState();
+      }
+
       // setTimeout(async () => {
       //   logger.info('Timeout');
       //   await sellToken();
