@@ -101,7 +101,7 @@ async function subscribeToSlotUpdates() {
           const decodedData = TransferData.decode(data);
           console.log(decodedData);
 
-          const amountBuffer = data.slice(3);
+          const amountBuffer = data.slice(4);
           console.log(amountBuffer);
           // Reverse the buffer to switch from little-endian to big-endian
           const reversedAmountBuffer = Buffer.from(amountBuffer).reverse();
