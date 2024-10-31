@@ -102,50 +102,21 @@ async function subscribeToSlotUpdates() {
     console.log(signatureString);
     const instructionWithCurve = ins.find((x: any) => x.index === 5) ?? ins.find((x: any) => x.index === 4);
     if (!instructionWithCurve) return;
-    console.log(data.transaction?.transaction);
-    let tr0 = data.transaction?.transaction?.meta?.innerInstructions[0].instructions;
-    let tr1 = data.transaction?.transaction?.meta?.innerInstructions[1].instructions;
+    console.log(data.transaction?.transaction.transaction.instructions);
     let tr2 = data.transaction?.transaction?.meta?.innerInstructions[2].instructions;
-    console.log(0);
-    for (const t of tr0) {
-      console.log(t);
-      const data = Buffer.from(t.data, 'base64');
-      const opcode = data.readUInt8(0); // First byte (should be 0x02 for transfer)
-      try {
-        const amount = data.readBigUInt64LE(1); // Next 8 bytes represent the amount (u64)
 
-        if (opcode === 2) {
-          console.log('Transfer Amount:', amount.toString(), 'lamports');
-        } else {
-          console.log('Not a transfer instruction');
-        }
-      } catch (e) {}
-    }
-    console.log(1);
-    for (const t of tr1) {
-      console.log(t);
-      const data = Buffer.from(t.data, 'base64');
-      const opcode = data.readUInt8(0); // First byte (should be 0x02 for transfer)
-      try {
-        const amount = data.readBigUInt64LE(1); // Next 8 bytes represent the amount (u64)
-
-        if (opcode === 2) {
-          console.log('Transfer Amount:', amount.toString(), 'lamports');
-        } else {
-          console.log('Not a transfer instruction');
-        }
-      } catch (e) {}
-    }
     console.log(2);
     for (const t of tr2) {
       console.log(t);
       const data = Buffer.from(t.data, 'base64');
       const opcode = data.readUInt8(0); // First byte (should be 0x02 for transfer)
       try {
-        const amount = data.readBigUInt64LE(1); // Next 8 bytes represent the amount (u64)
-
         if (opcode === 2) {
-          console.log('Transfer Amount:', amount.toString(), 'lamports');
+          const amountBuffer = data.slice(1);
+
+          const reversedAmountBuffer = Buffer.from(amountBuffer).reverse();
+          const amount = parseInt(reversedAmountBuffer.toString('hex'), 16);
+          console.log('Decoded Amount (in lamports):', amount);
         } else {
           console.log('Not a transfer instruction');
         }
