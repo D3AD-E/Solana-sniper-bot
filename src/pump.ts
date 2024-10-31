@@ -53,10 +53,7 @@ let boughtTokens = 0;
 function isBuyDataOk(data: any) {
   try {
     const amountBuffer = data.slice(4);
-    console.log(amountBuffer);
-    // Reverse the buffer to switch from little-endian to big-endian
     const reversedAmountBuffer = Buffer.from(amountBuffer).reverse();
-    console.log(reversedAmountBuffer);
 
     const buyValue = new BN(reversedAmountBuffer); // Use the relevant slice for the value
     console.log('Parsed BigNumber3:', buyValue.toString());
@@ -116,7 +113,6 @@ async function subscribeToSlotUpdates() {
     const pkKeys: PublicKey[] = data.transaction?.transaction?.transaction?.message?.accountKeys.map(
       (x: any) => new PublicKey(x),
     );
-    console.log(pkKeys);
     const mintAddress = ins[0].instructions[0].accounts[1];
     const mint = pkKeys[mintAddress];
     console.log('mint');
