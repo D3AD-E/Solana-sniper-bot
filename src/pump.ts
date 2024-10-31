@@ -66,6 +66,7 @@ let associatedCurve: PublicKey | undefined = undefined;
 let isSelling = false;
 let buyAmountSol: bigint | undefined = undefined;
 let buyAmount: bigint | undefined = undefined;
+let boughtTokens = 0;
 // Example of subscribing to slot updates
 async function subscribeToSlotUpdates() {
   const client = new Client('http://localhost:10000', 'args.xToken', {
@@ -126,6 +127,14 @@ async function subscribeToSlotUpdates() {
       lastBlocks[lastBlocks.length - 1],
     );
     logger.info('Sent buy');
+    const localBoughtTokens = boughtTokens;
+    await new Promise((resolve) => setTimeout(resolve, 10000));
+    if (!isProcessing && localBoughtTokens === boughtTokens) {
+      logger.warn('Buy failed');
+      mintAccount = '';
+      associatedCurve = undefined;
+      isProcessing = false;
+    }
   });
   // Create subscribe request based on provided arguments.
   const request: SubscribeRequest = {
@@ -427,6 +436,7 @@ async function listenToChanges() {
         gotTokenData = true;
         logger.info(`Monitoring`);
         console.log(accountData.mint);
+        boughtTokens++;
       }
 
       setTimeout(async () => {
