@@ -100,6 +100,8 @@ async function subscribeToSlotUpdates() {
     const instructionWithCurve = ins.find((x: any) => x.index === 5) ?? ins.find((x: any) => x.index === 4);
     if (!instructionWithCurve) return;
     isProcessing = true;
+    const currentSlot = await solanaConnection.getSlot();
+    console.log('Current Slot:', currentSlot);
     const pkKeys: PublicKey[] = data.transaction?.transaction?.transaction?.message?.accountKeys.map(
       (x: any) => new PublicKey(x),
     );
