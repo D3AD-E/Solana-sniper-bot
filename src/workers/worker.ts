@@ -216,7 +216,7 @@ async function sellOnActionGeyser(account: RawAccount) {
         wallet.publicKey,
         workerData.COMMITMENT as Commitment,
       );
-      const tokenAccount = existingTokenAccounts.find(
+      let tokenAccount = existingTokenAccounts.find(
         (acc) => acc.accountInfo.mint.toString() === account.mint.toString(),
       );
       if (!tokenAccount) {
@@ -224,8 +224,17 @@ async function sellOnActionGeyser(account: RawAccount) {
         clearAfterSell();
         return;
       }
+      //accountinfo undefined???
+      if (tokenAccount.accountInfo === undefined) {
+        const existingTokenAccounts = await getTokenAccounts(
+          solanaConnection,
+          wallet.publicKey,
+          workerData.COMMITMENT as Commitment,
+        );
+        tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === account.mint.toString());
+      }
       const signature = await sell(
-        tokenAccount.accountInfo.amount,
+        tokenAccount!.accountInfo.amount,
         minimalAccount!,
         quoteTokenAssociatedAddress,
         account.mint.toString(),
