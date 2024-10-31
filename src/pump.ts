@@ -62,7 +62,7 @@ let wsPairs: WebSocket | undefined = undefined;
 let sdk: PumpFunSDK | undefined = undefined;
 let lastRequest: any = undefined;
 let gotTokenData = false;
-let mintAccount = '7vqqXtvwGBjyLmGrxxPPWsKTgjF4YX3H5vkPLimApump';
+let mintAccount = '';
 let globalAccount: GlobalAccount | undefined = undefined;
 let provider: AnchorProvider | undefined = undefined;
 let associatedCurve: PublicKey | undefined = undefined;
@@ -123,6 +123,7 @@ async function subscribeToSlotUpdates() {
     const mint = pkKeys[mintAddress];
     console.log('mint');
     console.log(mint.toString());
+    mintAccount = mint.toString();
     const curveAddress = instructionWithCurve.instructions[0].accounts[0];
     const curve = pkKeys[curveAddress];
     console.log('curve');
@@ -324,6 +325,7 @@ async function sellToken() {
     process.env.COMMITMENT as Commitment,
   );
   console.log(existingTokenAccounts);
+  console.log(mintAccount);
   const tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === mintAccount)!;
   const bigInt = BigInt(tokenAccount.accountInfo.amount);
   console.log(bigInt);
