@@ -64,7 +64,8 @@ let globalAccount: GlobalAccount | undefined = undefined;
 let provider: AnchorProvider | undefined = undefined;
 let associatedCurve: PublicKey | undefined = undefined;
 let isSelling = false;
-
+let buyAmountSol: bigint | undefined = undefined;
+let buyAmount: bigint | undefined = undefined;
 // Example of subscribing to slot updates
 async function subscribeToSlotUpdates() {
   const client = new Client('http://localhost:10000', 'args.xToken', {
@@ -117,7 +118,8 @@ async function subscribeToSlotUpdates() {
     const result = await buyPump(
       wallet,
       new PublicKey(mint),
-      BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL),
+      buyAmountSol!,
+      buyAmount!,
       globalAccount!,
       provider!,
       curve,
@@ -181,6 +183,8 @@ export default async function snipe(): Promise<void> {
 
   sdk = new PumpFunSDK(provider);
   globalAccount = await sdk.getGlobalAccount();
+  buyAmountSol = BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL);
+  buyAmount = globalAccount.getInitialBuyPrice(buyAmountSol);
 
   // Call the subscription function
   subscribeToSlotUpdates();

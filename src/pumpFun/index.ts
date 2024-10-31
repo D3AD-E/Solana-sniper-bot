@@ -38,12 +38,12 @@ export async function buyPump(
   buyer: Keypair,
   mint: PublicKey,
   buyAmountSol: bigint,
+  buyAmount: bigint,
   globalAccount: GlobalAccount,
   provider: Provider,
   associatedBondingCurve: PublicKey,
   block: Block,
 ) {
-  const buyAmount = globalAccount.getInitialBuyPrice(buyAmountSol);
   let buyTx = await getBuyInstructions(
     buyer.publicKey,
     mint,
