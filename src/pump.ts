@@ -49,6 +49,7 @@ let buyAmount: bigint | undefined = undefined;
 let boughtTokens = 0;
 let tradesAmount = 0;
 let initialWalletBalance = 0;
+let tokenBuySellDiff = 0n;
 function isBuyDataOk(data: any) {
   try {
     const amountBuffer = data.slice(4);
@@ -230,7 +231,8 @@ export default async function snipe(): Promise<void> {
     if (event.mint.toString() === mintAccount) {
       if (event.user.toString() === wallet.publicKey.toString()) return;
       logger.info(signature);
-      console.log('tradeEvent ', event.isBuy ? 'Buy' : 'Sell', event.solAmount);
+      tokenBuySellDiff = event.isBuy ? tokenBuySellDiff + event.solAmount : tokenBuySellDiff - event.solAmount;
+      console.log('tradeEvent', event.isBuy ? 'Buy' : 'Sell', event.solAmount, 'Diff', tokenBuySellDiff);
       tradesAmount++;
     }
   });
