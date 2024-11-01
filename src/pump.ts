@@ -58,7 +58,7 @@ function isBuyDataOk(data: any) {
     const buyValue = new BN(reversedAmountBuffer); // Use the relevant slice for the value
     console.log('Parsed BigNumber3:', buyValue.toString());
     otherPersonBuySol = buyValue;
-    if (buyValue > 500000000n) {
+    if (buyValue > 1000000000n) {
       logger.warn('Buy wrong');
       return false;
     } else return true;
@@ -206,12 +206,8 @@ function clearState() {
 function calculateBuy(otherPersonBuyAmount: bigint) {
   logger.info('Calcbuy');
   const otherPersonCorrected = BigInt(otherPersonBuyAmount);
-  console.log(otherPersonCorrected, buyAmountSol);
   const otherBuy = globalAccount!.getInitialBuyPrice(otherPersonCorrected);
-  console.log(otherBuy);
   const buyAmountTotal = globalAccount!.getInitialBuyPrice(otherPersonCorrected + buyAmountSol!);
-  console.log(buyAmountTotal);
-  console.log(buyAmountTotal - otherBuy);
   return buyAmountTotal - otherBuy;
 }
 
