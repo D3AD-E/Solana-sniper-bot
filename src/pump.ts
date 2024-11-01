@@ -308,7 +308,7 @@ async function monitorSellLogic(currentMint: string) {
 
   const thirdPart = total / 10n;
   console.log(tradesAmount);
-  if (tradesAmount < 4) {
+  if (tradesAmount < 5) {
     logger.warn('Inactive pair');
     await sellAll(currentMint);
     await summaryPrint();
