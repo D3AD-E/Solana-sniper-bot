@@ -21,13 +21,13 @@ let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
 let swapAmount: TokenAmount;
-let quoteTokenAssociatedAddress: PublicKey;
+
 let ws: WebSocket | undefined = undefined;
 
 let lastBlocks: Block[] = [];
 let processedTokens: string[] = [];
 let workerPool: WorkerPool | undefined = undefined;
-const enableProtection = envVarToBoolean(process.env.ENABLE_PROTECTION);
+
 let isProcessing = false;
 const getProvider = () => {
   const walletAnchor = new Wallet(wallet);
@@ -36,10 +36,8 @@ const getProvider = () => {
   });
   return provider;
 };
-let wsPairs: WebSocket | undefined = undefined;
 
 let sdk: PumpFunSDK | undefined = undefined;
-let lastRequest: any = undefined;
 let gotTokenData = false;
 let mintAccount = '';
 let globalAccount: GlobalAccount | undefined = undefined;
@@ -50,6 +48,7 @@ let buyAmountSol: bigint | undefined = undefined;
 let buyAmount: bigint | undefined = undefined;
 let boughtTokens = 0;
 let tradesAmount = 0;
+let initialWalletBalance = 0;
 function isBuyDataOk(data: any) {
   try {
     const amountBuffer = data.slice(4);
@@ -222,7 +221,8 @@ export default async function snipe(): Promise<void> {
   buyAmountSol = BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL);
   buyAmount = globalAccount.getInitialBuyPrice(buyAmountSol);
   const balance = await solanaConnection.getBalance(wallet.publicKey);
-  console.log('Wallet balance (in SOL):', balance / 1_000_000_000);
+  initialWalletBalance = balance / 1_000_000_000;
+  console.log('Wallet balance (in SOL):', initialWalletBalance);
   // Call the subscription function
   subscribeToSlotUpdates();
 
@@ -230,7 +230,7 @@ export default async function snipe(): Promise<void> {
     if (event.mint.toString() === mintAccount) {
       if (event.user.toString() === wallet.publicKey.toString()) return;
       logger.info(signature);
-      console.log('tradeEvent', event);
+      console.log('tradeEvent ', event.isBuy ? 'Buy' : 'Sell', event.solAmount);
       tradesAmount++;
     }
   });
@@ -308,6 +308,12 @@ async function monitorSellLogic(currentMint: string) {
 
   const thirdPart = total / 10n;
   console.log(tradesAmount);
+  if (tradesAmount < 4) {
+    logger.warn('Inactive pair');
+    await sellAll(currentMint);
+    await summaryPrint();
+    return false;
+  }
   await sellPump(
     wallet,
     tokenAccount.accountInfo.mint,
@@ -332,12 +338,17 @@ async function monitorSellLogic(currentMint: string) {
   );
   await new Promise((resolve) => setTimeout(resolve, 1800 * 60));
   //all
+  await sellAll(currentMint);
+  await summaryPrint();
+  return false;
+}
+async function sellAll(currentMint: string) {
   existingTokenAccounts = await getTokenAccounts(
     solanaConnection,
     wallet.publicKey,
     process.env.COMMITMENT as Commitment,
   );
-  tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === currentMint)!;
+  const tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === currentMint)!;
   const newTotal = BigInt(tokenAccount.accountInfo.amount);
   console.log(newTotal);
 
@@ -351,10 +362,13 @@ async function monitorSellLogic(currentMint: string) {
     lastBlocks[lastBlocks.length - 1],
   );
   logger.info('Sold all');
+}
+async function summaryPrint() {
   await new Promise((resolve) => setTimeout(resolve, 5000));
   const balance = await solanaConnection.getBalance(wallet.publicKey);
-  console.log('Wallet balance (in SOL):', balance / 1_000_000_000);
-  return false;
+  const newWalletBalance = balance / 1_000_000_000;
+  console.log('Wallet balance (in SOL):', newWalletBalance);
+  console.log(newWalletBalance - balance > 0 ? 'Trade won' : 'Trade loss', 'Diff', newWalletBalance - balance);
 }
 
 async function sellToken(currentMint: string) {
