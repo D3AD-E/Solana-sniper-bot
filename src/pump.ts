@@ -50,6 +50,7 @@ let boughtTokens = 0;
 let tradesAmount = 0;
 let initialWalletBalance = 0;
 let tokenBuySellDiff = 0n;
+let otherPersonBuySol = 0n;
 function isBuyDataOk(data: any) {
   try {
     const amountBuffer = data.slice(4);
@@ -57,6 +58,7 @@ function isBuyDataOk(data: any) {
 
     const buyValue = new BN(reversedAmountBuffer); // Use the relevant slice for the value
     console.log('Parsed BigNumber3:', buyValue.toString());
+    otherPersonBuySol = buyValue;
     if (buyValue > 500000000n) {
       logger.warn('Buy wrong');
       return false;
@@ -64,6 +66,7 @@ function isBuyDataOk(data: any) {
   } catch (e) {
     console.log(e);
   }
+  otherPersonBuySol = 0n;
   return false;
 }
 // Example of subscribing to slot updates
@@ -138,7 +141,7 @@ async function subscribeToSlotUpdates() {
       wallet,
       mint,
       buyAmountSol!,
-      buyAmount!,
+      calculateBuy(otherPersonBuySol)!,
       globalAccount!,
       provider!,
       curve,
@@ -201,6 +204,16 @@ function clearState() {
   gotTokenData = false;
   tradesAmount = 0;
 }
+function calculateBuy(otherPersonBuyAmount: bigint) {
+  logger.info('Calcbuy');
+  console.log(otherPersonBuyAmount);
+  const otherBuy = globalAccount!.getInitialBuyPrice(otherPersonBuyAmount);
+  console.log(otherBuy);
+  const buyAmountTotal = globalAccount!.getInitialBuyPrice(otherPersonBuyAmount + buyAmount!);
+  console.log(buyAmountTotal);
+  console.log(buyAmountTotal - otherBuy);
+  return buyAmountTotal - otherBuy;
+}
 
 export default async function snipe(): Promise<void> {
   // setInterval(storeRecentBlockhashes, 700);
@@ -210,39 +223,33 @@ export default async function snipe(): Promise<void> {
   logger.info('Starting');
   provider = getProvider();
 
-  // existingTokenAccounts = await getTokenAccounts(
-  //   solanaConnection,
-  //   wallet.publicKey,
-  //   process.env.COMMITMENT as Commitment,
-  // );
-  // logger.info('Got token accounts');
+  existingTokenAccounts = await getTokenAccounts(
+    solanaConnection,
+    wallet.publicKey,
+    process.env.COMMITMENT as Commitment,
+  );
+  logger.info('Got token accounts');
 
   sdk = new PumpFunSDK(provider);
   globalAccount = await sdk.getGlobalAccount();
   buyAmountSol = BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL);
-  const buyAmountSol2 = BigInt(Number(1) * LAMPORTS_PER_SOL);
-  buyAmount = globalAccount.getInitialBuyPrice(buyAmountSol);
-  const buyAmount1 = globalAccount.getInitialBuyPrice(BigInt(Number(1) * LAMPORTS_PER_SOL));
-  console.log(buyAmount1);
-  const buyAmount2 = globalAccount.getInitialBuyPrice(BigInt(Number(2.3) * LAMPORTS_PER_SOL));
-  console.log(buyAmount2);
-  console.log(buyAmount2 - buyAmount1);
-  // const balance = await solanaConnection.getBalance(wallet.publicKey);
-  // initialWalletBalance = balance / 1_000_000_000;
-  // console.log('Wallet balance (in SOL):', initialWalletBalance);
-  // // Call the subscription function
-  // subscribeToSlotUpdates();
 
-  // let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
-  //   if (event.mint.toString() === mintAccount) {
-  //     if (event.user.toString() === wallet.publicKey.toString()) return;
-  //     logger.info(signature);
-  //     tokenBuySellDiff = event.isBuy ? tokenBuySellDiff + event.solAmount : tokenBuySellDiff - event.solAmount;
-  //     console.log('tradeEvent', event.isBuy ? 'Buy' : 'Sell', event.solAmount, 'Diff', tokenBuySellDiff);
-  //     tradesAmount++;
-  //   }
-  // });
-  // await listenToChanges();
+  const balance = await solanaConnection.getBalance(wallet.publicKey);
+  initialWalletBalance = balance / 1_000_000_000;
+  console.log('Wallet balance (in SOL):', initialWalletBalance);
+  // Call the subscription function
+  subscribeToSlotUpdates();
+
+  let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
+    if (event.mint.toString() === mintAccount) {
+      if (event.user.toString() === wallet.publicKey.toString()) return;
+      logger.info(signature);
+      tokenBuySellDiff = event.isBuy ? tokenBuySellDiff + event.solAmount : tokenBuySellDiff - event.solAmount;
+      console.log('tradeEvent', event.isBuy ? 'Buy' : 'Sell', event.solAmount, 'Diff', tokenBuySellDiff);
+      tradesAmount++;
+    }
+  });
+  await listenToChanges();
 }
 
 async function storeRecentBlockhashes() {
