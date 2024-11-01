@@ -221,71 +221,20 @@ export default async function snipe(): Promise<void> {
   globalAccount = await sdk.getGlobalAccount();
   buyAmountSol = BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL);
   buyAmount = globalAccount.getInitialBuyPrice(buyAmountSol);
-
+  const balance = await solanaConnection.getBalance(wallet.publicKey);
+  console.log('Wallet balance (in SOL):', balance / 1_000_000_000);
   // Call the subscription function
   subscribeToSlotUpdates();
-  // let bondingCurveAccount = await sdj.buy(mint, commitment);
 
-  // const tokenAccount = existingTokenAccounts.find(
-  //   (acc) => acc.accountInfo.mint.toString() === '2PfSJLcibNM7CZnh3wBtiUkkXfpNNcHiz4DjZYZCpump',
-  // )!;
-
-  // const bytes = bs58.decode(
-  //   '2K7nL28PxCW8ejnyCeuMpbWQwqKtqyArGAa7ccsDMsh2CEG4wEULZwVYVJm62YZ81jBFyKhYgNkYKUrXyNxAszvpk1sGQ1tBToSJUWhohnPxXTEMKMgz6U6PUtyCiPmYoAbSVdQEPBTnsTHhWkg4kiGSKScqD8sof8TKtm8PTNqdQBQYGZiCAbufFMYT',
-  // );
-  // const buf = Buffer.from(bytes);
-  // const parsed = decodeInstructionData(buf);
-
-  // console.log(parsed);
-  // lastRequest = {
-  //   jsonrpc: '2.0',
-  //   id: 420,
-  //   method: 'transactionSubscribe',
-  //   params: [
-  //     {
-  //       vote: false,
-  //       failed: false,
-  //       accountInclude: ['6NUafpRndeekVpusnVK7DunCggjUrhDhsXHD2U5tpump'],
-  //     },
-  //     {
-  //       commitment: 'processed',
-  //       encoding: 'jsonParsed',
-  //       transactionDetails: 'full',
-  //       showRewards: false,
-  //       maxSupportedTransactionVersion: 1,
-  //     },
-  //   ],
-  // };
-  // setupPairSocket();
-  // workerPool = new WorkerPool(Number(process.env.WORKER_AMOUNT!), quoteTokenAssociatedAddress);
-
-  // existingTokenAccounts = await getTokenAccounts(
-  //   solanaConnection,
-  //   wallet.publicKey,
-  //   process.env.COMMITMENT as Commitment,
-  // );
-  // const tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === mintAccount)!;
-  // console.log(tokenAccount.accountInfo.amount);
-  // const bigInt = BigInt(tokenAccount.accountInfo.amount);
-  // const sellResults = await sdk!.sell(wallet, new PublicKey(mintAccount), bigInt, 500000000000n, {
-  //   unitLimit: 100000,
-  //   unitPrice: 500000,
-  // });
-  // console.log(sellResults);
-  // return;
-  // setInterval(storeRecentBlockhashes, 100);
-  let boughtAmount: bigint = 0n;
-  // logger.info('Started listening');
   let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
     if (event.mint.toString() === mintAccount) {
       if (event.user.toString() === wallet.publicKey.toString()) return;
       logger.info(signature);
       console.log('tradeEvent', event);
-      tradeEvent++;
+      tradesAmount++;
     }
   });
   // console.log('tradeEvent', tradeEvent);
-  // setupLiquiditySocket();
   await listenToChanges();
 }
 
@@ -342,6 +291,8 @@ async function monitorSellLogic(currentMint: string) {
   //sell 1/5 later
   const secondPart = total / 5n;
   await new Promise((resolve) => setTimeout(resolve, 9000));
+  logger.info('Sell 2');
+
   await sellPump(
     wallet,
     tokenAccount.accountInfo.mint,
@@ -353,6 +304,8 @@ async function monitorSellLogic(currentMint: string) {
   );
 
   await new Promise((resolve) => setTimeout(resolve, 3900 * 60));
+  logger.info('Sell 3');
+
   const thirdPart = total / 10n;
   console.log(tradesAmount);
   await sellPump(
@@ -365,6 +318,8 @@ async function monitorSellLogic(currentMint: string) {
     lastBlocks[lastBlocks.length - 1],
   );
   await new Promise((resolve) => setTimeout(resolve, 1800 * 60));
+  logger.info('Sell 4');
+
   const forthPart = total / 20n;
   await sellPump(
     wallet,
@@ -396,6 +351,9 @@ async function monitorSellLogic(currentMint: string) {
     lastBlocks[lastBlocks.length - 1],
   );
   logger.info('Sold all');
+  await new Promise((resolve) => setTimeout(resolve, 5000));
+  const balance = await solanaConnection.getBalance(wallet.publicKey);
+  console.log('Wallet balance (in SOL):', balance / 1_000_000_000);
   return false;
 }
 
