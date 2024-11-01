@@ -58,7 +58,7 @@ function isBuyDataOk(data: any) {
     const buyValue = new BN(reversedAmountBuffer); // Use the relevant slice for the value
     console.log('Parsed BigNumber3:', buyValue.toString());
     otherPersonBuySol = buyValue;
-    if (buyValue > 1000000000n) {
+    if (buyValue > 1500000000n) {
       logger.warn('Buy wrong');
       return false;
     } else return true;
@@ -148,7 +148,7 @@ async function subscribeToSlotUpdates() {
     );
     logger.info('Sent buy');
     const localBoughtTokens = boughtTokens;
-    await new Promise((resolve) => setTimeout(resolve, 10000));
+    await new Promise((resolve) => setTimeout(resolve, 5000));
     console.log('Failbuy check', !gotTokenData, localBoughtTokens === boughtTokens);
     if (!gotTokenData && localBoughtTokens === boughtTokens) {
       logger.warn('Buy failed');
