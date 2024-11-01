@@ -94,10 +94,6 @@ async function subscribeToSlotUpdates() {
   // Handle updates
   stream.on('data', async (data) => {
     if (isProcessing) return;
-    if (boughtTokens >= 15) {
-      logger.warn('Buy limit');
-      return;
-    }
     const ins = data.transaction?.transaction?.meta?.innerInstructions;
     if (!ins) return;
     const signatureString = bs58.encode(data.transaction.transaction.signature);
@@ -149,6 +145,7 @@ async function subscribeToSlotUpdates() {
     logger.info('Sent buy');
     const localBoughtTokens = boughtTokens;
     await new Promise((resolve) => setTimeout(resolve, 5000));
+    //fix boughttokens
     console.log('Failbuy check', !gotTokenData, localBoughtTokens === boughtTokens);
     if (!gotTokenData && localBoughtTokens === boughtTokens) {
       logger.warn('Buy failed');
@@ -460,10 +457,11 @@ async function listenToChanges() {
       if (accountData.mint.toString() === mintAccount) {
         logger.info(`Monitoring`);
         console.log(accountData.mint);
+        if (gotTokenData) return;
+        gotTokenData = true;
+        await monitorSellLogic(mintAccount);
       }
-      if (gotTokenData) return;
-      gotTokenData = true;
-      await monitorSellLogic(mintAccount);
+
       // if (!workerPool!.doesTokenExist(accountData.mint.toString())) {
       //   logger.warn('Got unknown token in wallet');
       //   return;
