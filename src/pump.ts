@@ -236,7 +236,6 @@ export default async function snipe(): Promise<void> {
       tradesAmount++;
     }
   });
-  // console.log('tradeEvent', tradeEvent);
   await listenToChanges();
 }
 
@@ -344,6 +343,7 @@ async function monitorSellLogic(currentMint: string) {
   await summaryPrint();
   return false;
 }
+
 async function sellAll(currentMint: string) {
   existingTokenAccounts = await getTokenAccounts(
     solanaConnection,
@@ -370,7 +370,11 @@ async function summaryPrint() {
   const balance = await solanaConnection.getBalance(wallet.publicKey);
   const newWalletBalance = balance / 1_000_000_000;
   console.log('Wallet balance (in SOL):', newWalletBalance);
-  console.log(newWalletBalance - balance > 0 ? 'Trade won' : 'Trade loss', 'Diff', newWalletBalance - balance);
+  console.log(
+    newWalletBalance - initialWalletBalance > 0 ? 'Trade won' : 'Trade loss',
+    'Diff',
+    newWalletBalance - initialWalletBalance,
+  );
 }
 
 async function sellToken(currentMint: string) {
@@ -409,66 +413,6 @@ async function sellToken(currentMint: string) {
   return false;
 }
 
-function setupLiquiditySocket() {
-  ws = new WebSocket(process.env.GEYSER_ENDPOINT!);
-  ws!.on('open', function open() {
-    logger.info('Listening to geyser liquidity');
-    const request = {
-      jsonrpc: '2.0',
-      id: 420,
-      method: 'transactionSubscribe',
-      params: [
-        {
-          vote: false,
-          failed: false,
-          accountRequired: [
-            '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P',
-            'metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s',
-            'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
-          ],
-        },
-        {
-          commitment: 'processed',
-          encoding: 'jsonParsed',
-          transactionDetails: 'full',
-          showRewards: false,
-          maxSupportedTransactionVersion: 0,
-        },
-      ],
-    };
-    ws!.send(JSON.stringify(request));
-  });
-  ws!.on('message', async function incoming(data) {
-    if (isProcessing) return;
-    logger.info('here');
-    const messageStr = data.toString();
-    var jData = JSON.parse(messageStr);
-    const isntructions = jData?.params?.result?.transaction?.meta?.innerInstructions;
-    if (!isntructions) return;
-    const instructionWithCurve =
-      isntructions.find((x: any) => x.index === 5) ?? isntructions.find((x: any) => x.index === 4);
-    console.log(!instructionWithCurve);
-    if (!instructionWithCurve) return;
-    const curve = instructionWithCurve.instructions[0].parsed.info.source;
-    console.log(curve);
-    const inner = isntructions[0].instructions;
-    const mint = inner[0].parsed.info.newAccount;
-    logger.info(mint);
-    mintAccount = mint.toString();
-    isProcessing = true;
-
-    return;
-  });
-  ws!.on('error', function error(err) {
-    console.error('WebSocket error:', err);
-  });
-  ws!.on('close', async function close() {
-    logger.warn('WebSocket is closed liquidity');
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    setupLiquiditySocket();
-  });
-}
-
 async function listenToChanges() {
   const walletSubscriptionId = solanaConnection.onProgramAccountChange(
     TOKEN_PROGRAM_ID,
@@ -480,9 +424,6 @@ async function listenToChanges() {
         sendMessage(`💸WSOL change ${walletBalance.toFixed(4)}`);
         return;
       }
-      // if (updatedAccountInfo.accountId.equals(quoteTokenAssociatedAddress)) {
-      //   return;
-      // }
       console.log(accountData.mint.toString() === mintAccount);
       if (accountData.mint.toString() === mintAccount) {
         logger.info(`Monitoring`);
@@ -491,17 +432,6 @@ async function listenToChanges() {
       if (gotTokenData) return;
       gotTokenData = true;
       await monitorSellLogic(mintAccount);
-      // setTimeout(async () => {
-      //   logger.info('Timeout');
-      //   await monitorSellLogic(mintAccount);
-      //   //todo fix
-      //   await new Promise((resolve) => setTimeout(resolve, 5000));
-      //   if (await sellToken(mintAccount)) {
-      //     boughtTokens++;
-      //     console.log(boughtTokens);
-      //     clearState();
-      //   }
-      // }, 12000);
       // if (!workerPool!.doesTokenExist(accountData.mint.toString())) {
       //   logger.warn('Got unknown token in wallet');
       //   return;
