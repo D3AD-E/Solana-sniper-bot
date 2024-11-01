@@ -220,8 +220,12 @@ export default async function snipe(): Promise<void> {
   sdk = new PumpFunSDK(provider);
   globalAccount = await sdk.getGlobalAccount();
   buyAmountSol = BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL);
+  const buyAmountSol2 = BigInt(Number(1) * LAMPORTS_PER_SOL);
   buyAmount = globalAccount.getInitialBuyPrice(buyAmountSol);
   console.log(buyAmount);
+  const buyAmount2 = globalAccount.getInitialBuyPrice(buyAmountSol2 + buyAmountSol);
+  console.log(buyAmount2);
+  console.log(buyAmount2 - buyAmount);
   // const balance = await solanaConnection.getBalance(wallet.publicKey);
   // initialWalletBalance = balance / 1_000_000_000;
   // console.log('Wallet balance (in SOL):', initialWalletBalance);
