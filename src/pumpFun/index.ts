@@ -99,26 +99,24 @@ export async function sellPump(
     provider,
     associatedBondingCurve,
   );
-  for (let i = 0; i < 5; i++) {
-    const tipAccount = getRandomAccount();
+  const tipAccount = getRandomAccount();
 
-    const tipInstruction = SystemProgram.transfer({
-      fromPubkey: wallet.publicKey,
-      toPubkey: tipAccount,
-      lamports: tipAmount / 10,
-    });
-    const messageV0 = new TransactionMessage({
-      payerKey: wallet.publicKey,
-      recentBlockhash: block.blockhash,
-      instructions: [...sellTx.instructions, tipInstruction],
-    }).compileToV0Message();
+  const tipInstruction = SystemProgram.transfer({
+    fromPubkey: wallet.publicKey,
+    toPubkey: tipAccount,
+    lamports: tipAmount / 40,
+  });
+  const messageV0 = new TransactionMessage({
+    payerKey: wallet.publicKey,
+    recentBlockhash: block.blockhash,
+    instructions: [...sellTx.instructions, tipInstruction],
+  }).compileToV0Message();
 
-    const transaction = new VersionedTransaction(messageV0);
-    transaction.sign([wallet]);
-    logger.info('selling');
-    const bundleId = await sendBundles(wallet, transaction, block.blockhash);
-    console.log(bundleId);
-  }
+  const transaction = new VersionedTransaction(messageV0);
+  transaction.sign([wallet]);
+  logger.info('selling');
+  const bundleId = await sendBundles(wallet, transaction, block.blockhash);
+  console.log(bundleId);
 
   return;
 }

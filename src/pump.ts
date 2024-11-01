@@ -322,6 +322,103 @@ async function storeRecentBlockhashes() {
   }
 }
 
+async function monitorSellLogic(currentMint: string) {
+  console.log('Monitoring partial sell');
+  existingTokenAccounts = await getTokenAccounts(
+    solanaConnection,
+    wallet.publicKey,
+    process.env.COMMITMENT as Commitment,
+  );
+  let tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === currentMint)!;
+  if (!tokenAccount || !tokenAccount.accountInfo) {
+    console.log('curmint', currentMint);
+    logger.warn('Unknown token');
+    existingTokenAccounts = await getTokenAccounts(
+      solanaConnection,
+      wallet.publicKey,
+      process.env.COMMITMENT as Commitment,
+    );
+    tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === currentMint)!;
+    logger.warn('Unknown token2');
+    console.log(tokenAccount);
+    if (!tokenAccount || !tokenAccount.accountInfo) return true;
+  }
+
+  //here we have tokenaccount
+  //sell 1/3 instant
+
+  const total = BigInt(tokenAccount.accountInfo.amount);
+  console.log(total);
+  if (total === 0n) return true;
+  const firstPart = total / 3n;
+
+  await sellPump(
+    wallet,
+    tokenAccount.accountInfo.mint,
+    firstPart,
+    globalAccount!,
+    provider!,
+    associatedCurve!,
+    lastBlocks[lastBlocks.length - 1],
+  );
+  //sell 1/5 later
+  const secondPart = total / 5n;
+  await new Promise((resolve) => setTimeout(resolve, 9000));
+  await sellPump(
+    wallet,
+    tokenAccount.accountInfo.mint,
+    secondPart,
+    globalAccount!,
+    provider!,
+    associatedCurve!,
+    lastBlocks[lastBlocks.length - 1],
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, 3900 * 60));
+  const thirdPart = total / 10n;
+  await sellPump(
+    wallet,
+    tokenAccount.accountInfo.mint,
+    thirdPart,
+    globalAccount!,
+    provider!,
+    associatedCurve!,
+    lastBlocks[lastBlocks.length - 1],
+  );
+  await new Promise((resolve) => setTimeout(resolve, 1800 * 60));
+  const forthPart = total / 20n;
+  await sellPump(
+    wallet,
+    tokenAccount.accountInfo.mint,
+    forthPart,
+    globalAccount!,
+    provider!,
+    associatedCurve!,
+    lastBlocks[lastBlocks.length - 1],
+  );
+  await new Promise((resolve) => setTimeout(resolve, 1800 * 60));
+  //all
+  existingTokenAccounts = await getTokenAccounts(
+    solanaConnection,
+    wallet.publicKey,
+    process.env.COMMITMENT as Commitment,
+  );
+  tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === currentMint)!;
+  const newTotal = BigInt(tokenAccount.accountInfo.amount);
+  console.log(newTotal);
+
+  await sellPump(
+    wallet,
+    tokenAccount.accountInfo.mint,
+    newTotal,
+    globalAccount!,
+    provider!,
+    associatedCurve!,
+    lastBlocks[lastBlocks.length - 1],
+  );
+  return false;
+}
+
 async function sellToken(currentMint: string) {
   console.log('Selling');
   existingTokenAccounts = await getTokenAccounts(
@@ -438,18 +535,20 @@ async function listenToChanges() {
         logger.info(`Monitoring`);
         console.log(accountData.mint);
       }
-
-      setTimeout(async () => {
-        logger.info('Timeout');
-        await sellToken(mintAccount);
-        //todo fix
-        await new Promise((resolve) => setTimeout(resolve, 5000));
-        if (await sellToken(mintAccount)) {
-          boughtTokens++;
-          console.log(boughtTokens);
-          clearState();
-        }
-      }, 12000);
+      if (gotTokenData) return;
+      gotTokenData = true;
+      await monitorSellLogic(mintAccount);
+      // setTimeout(async () => {
+      //   logger.info('Timeout');
+      //   await monitorSellLogic(mintAccount);
+      //   //todo fix
+      //   await new Promise((resolve) => setTimeout(resolve, 5000));
+      //   if (await sellToken(mintAccount)) {
+      //     boughtTokens++;
+      //     console.log(boughtTokens);
+      //     clearState();
+      //   }
+      // }, 12000);
       // if (!workerPool!.doesTokenExist(accountData.mint.toString())) {
       //   logger.warn('Got unknown token in wallet');
       //   return;
