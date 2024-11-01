@@ -270,6 +270,7 @@ async function monitorSellLogic(currentMint: string) {
   if (!tokenAccount || !tokenAccount.accountInfo) {
     console.log('curmint', currentMint);
     logger.warn('Unknown token');
+    //another idea use the vents form swaps
     await new Promise((resolve) => setTimeout(resolve, 400));
     existingTokenAccounts = await getTokenAccounts(
       solanaConnection,
@@ -300,7 +301,7 @@ async function monitorSellLogic(currentMint: string) {
   const total = BigInt(tokenAccount.accountInfo.amount);
   console.log(total);
   if (total === 0n) return true;
-  const firstPart = total / 3n;
+  const firstPart = total / 2n;
 
   await sellPump(
     wallet,
@@ -335,6 +336,8 @@ async function monitorSellLogic(currentMint: string) {
     logger.warn('Inactive pair');
     await sellAll(currentMint);
     await summaryPrint();
+    clearState();
+
     return false;
   }
   await sellPump(
@@ -363,6 +366,7 @@ async function monitorSellLogic(currentMint: string) {
   //all
   await sellAll(currentMint);
   await summaryPrint();
+  clearState();
   return false;
 }
 
