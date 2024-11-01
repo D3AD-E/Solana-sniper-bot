@@ -49,7 +49,7 @@ let isSelling = false;
 let buyAmountSol: bigint | undefined = undefined;
 let buyAmount: bigint | undefined = undefined;
 let boughtTokens = 0;
-
+let tradesAmount = 0;
 function isBuyDataOk(data: any) {
   try {
     const amountBuffer = data.slice(4);
@@ -199,6 +199,7 @@ function clearState() {
   associatedCurve = undefined;
   isProcessing = false;
   gotTokenData = false;
+  tradesAmount = 0;
 }
 
 export default async function snipe(): Promise<void> {
@@ -273,39 +274,16 @@ export default async function snipe(): Promise<void> {
   // console.log(sellResults);
   // return;
   // setInterval(storeRecentBlockhashes, 100);
-  // let boughtAmount: bigint = 0n;
-  // // logger.info('Started listening');
-  // let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
-  //   if (event.mint.toString() === mintAccount) {
-  //     if (event.user.toString() === wallet.publicKey.toString()) return;
-  //     if (isSelling) return;
-  //     logger.info(signature);
-  //     console.log('tradeEvent', event);
-  //     if (!gotTokenData) return;
-  //     // const price = event.tokenAmount / event.solAmount;
-  //     // if (!initialPrice) {
-  //     //   initialPrice = price;
-  //     //   logger.info('initial');
-  //     //   logger.info(initialPrice.toString());
-  //     //   return;
-  //     // }
-  //     // logger.info(price.toString());
-  //     // const priceNumber = Number(price.toString());
-  //     // const initialPriceNumber = Number(initialPrice.toString());
-  //     boughtAmount = boughtAmount + (event.isBuy ? event.solAmount : -event.solAmount);
-  //     // const percentageGain = ((initialPriceNumber - priceNumber) / initialPriceNumber) * 100;
-  //     console.log(boughtAmount);
-  //     logger.info('Change');
-  //     // logger.info(percentageGain.toFixed(4));
-  //     if (boughtAmount > 300000000n) {
-  //       if (isSelling) return;
-  //       await sellToken();
-  //       //todo fix
-  //       await new Promise((resolve) => setTimeout(resolve, 5000));
-  //       await sellToken();
-  //     }
-  //   }
-  // });
+  let boughtAmount: bigint = 0n;
+  // logger.info('Started listening');
+  let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
+    if (event.mint.toString() === mintAccount) {
+      if (event.user.toString() === wallet.publicKey.toString()) return;
+      logger.info(signature);
+      console.log('tradeEvent', event);
+      tradeEvent++;
+    }
+  });
   // console.log('tradeEvent', tradeEvent);
   // setupLiquiditySocket();
   await listenToChanges();
@@ -376,6 +354,7 @@ async function monitorSellLogic(currentMint: string) {
 
   await new Promise((resolve) => setTimeout(resolve, 3900 * 60));
   const thirdPart = total / 10n;
+  console.log(tradesAmount);
   await sellPump(
     wallet,
     tokenAccount.accountInfo.mint,
@@ -416,6 +395,7 @@ async function monitorSellLogic(currentMint: string) {
     associatedCurve!,
     lastBlocks[lastBlocks.length - 1],
   );
+  logger.info('Sold all');
   return false;
 }
 
