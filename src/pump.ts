@@ -103,6 +103,11 @@ async function subscribeToSlotUpdates() {
     console.log(signatureString);
     const instructionWithCurve = ins.find((x: any) => x.index === 5) ?? ins.find((x: any) => x.index === 4);
     if (!instructionWithCurve) return;
+    if (
+      !data.transaction?.transaction?.meta?.innerInstructions ||
+      !data.transaction?.transaction?.meta?.innerInstructions[2]
+    )
+      return;
     let tr2 = data.transaction?.transaction?.meta?.innerInstructions[2].instructions;
 
     for (const t of tr2) {
