@@ -33,7 +33,7 @@ import { getRandomAccount } from '../jito/constants';
 import { sendBundles } from '../jito/bundles';
 const BN = require('bn.js');
 const tipAmount = Number(process.env.JITO_TIP!);
-
+//13814844391485 for 0.4 after 0.33b
 export async function buyPump(
   buyer: Keypair,
   mint: PublicKey,
@@ -49,7 +49,7 @@ export async function buyPump(
     mint,
     globalAccount.feeRecipient,
     buyAmount,
-    buyAmountSol + 100000000n,
+    buyAmountSol + buyAmountSol / 100n, //1%
     provider,
     associatedBondingCurve,
   );
