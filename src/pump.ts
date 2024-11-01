@@ -222,10 +222,11 @@ export default async function snipe(): Promise<void> {
   buyAmountSol = BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL);
   const buyAmountSol2 = BigInt(Number(1) * LAMPORTS_PER_SOL);
   buyAmount = globalAccount.getInitialBuyPrice(buyAmountSol);
-  console.log(buyAmount);
-  const buyAmount2 = globalAccount.getInitialBuyPrice(buyAmountSol2 + buyAmountSol);
+  const buyAmount1 = globalAccount.getInitialBuyPrice(BigInt(Number(1) * LAMPORTS_PER_SOL));
+  console.log(buyAmount1);
+  const buyAmount2 = globalAccount.getInitialBuyPrice(BigInt(Number(2.3) * LAMPORTS_PER_SOL));
   console.log(buyAmount2);
-  console.log(buyAmount2 - buyAmount);
+  console.log(buyAmount2 - buyAmount1);
   // const balance = await solanaConnection.getBalance(wallet.publicKey);
   // initialWalletBalance = balance / 1_000_000_000;
   // console.log('Wallet balance (in SOL):', initialWalletBalance);
