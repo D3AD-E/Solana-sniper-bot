@@ -301,7 +301,7 @@ async function monitorSellLogic(currentMint: string) {
   //sell 1/5 later
   const secondPart = total / 5n;
   await new Promise((resolve) => setTimeout(resolve, 9000));
-  logger.info('Sell 2');
+  logger.info('Sell 2/4');
 
   await sellPump(
     wallet,
@@ -314,7 +314,7 @@ async function monitorSellLogic(currentMint: string) {
   );
 
   await new Promise((resolve) => setTimeout(resolve, 3900 * 60));
-  logger.info('Sell 3');
+  logger.info('Sell 3/4');
 
   const thirdPart = total / 10n;
   console.log(tradesAmount);
@@ -334,7 +334,7 @@ async function monitorSellLogic(currentMint: string) {
     lastBlocks[lastBlocks.length - 1],
   );
   await new Promise((resolve) => setTimeout(resolve, 1800 * 60));
-  logger.info('Sell 4');
+  logger.info('Sell 4/4');
 
   const forthPart = total / 20n;
   await sellPump(
