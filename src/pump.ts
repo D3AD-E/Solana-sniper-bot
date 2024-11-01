@@ -205,7 +205,7 @@ function clearState() {
 }
 function calculateBuy(otherPersonBuyAmount: bigint) {
   logger.info('Calcbuy');
-  console.log(otherPersonBuyAmount);
+  console.log(otherPersonBuyAmount, buyAmountSol);
   const otherBuy = globalAccount!.getInitialBuyPrice(BigInt(otherPersonBuyAmount));
   console.log(otherBuy);
   const buyAmountTotal = globalAccount!.getInitialBuyPrice(BigInt(otherPersonBuyAmount + buyAmountSol!));
@@ -215,7 +215,7 @@ function calculateBuy(otherPersonBuyAmount: bigint) {
 }
 
 export default async function snipe(): Promise<void> {
-  // setInterval(storeRecentBlockhashes, 700);
+  setInterval(storeRecentBlockhashes, 700);
 
   await new Promise((resolve) => setTimeout(resolve, 5000));
   const client = await JitoClient.getInstance();
