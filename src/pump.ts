@@ -205,10 +205,11 @@ function clearState() {
 }
 function calculateBuy(otherPersonBuyAmount: bigint) {
   logger.info('Calcbuy');
-  console.log(otherPersonBuyAmount, buyAmountSol);
-  const otherBuy = globalAccount!.getInitialBuyPrice(BigInt(otherPersonBuyAmount));
+  const otherPersonCorrected = BigInt(otherPersonBuyAmount);
+  console.log(otherPersonCorrected, buyAmountSol);
+  const otherBuy = globalAccount!.getInitialBuyPrice(otherPersonCorrected);
   console.log(otherBuy);
-  const buyAmountTotal = globalAccount!.getInitialBuyPrice(BigInt(otherPersonBuyAmount + buyAmountSol!));
+  const buyAmountTotal = globalAccount!.getInitialBuyPrice(otherPersonCorrected + buyAmountSol!);
   console.log(buyAmountTotal);
   console.log(buyAmountTotal - otherBuy);
   return buyAmountTotal - otherBuy;
