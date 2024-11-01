@@ -205,10 +205,10 @@ function clearState() {
 export default async function snipe(): Promise<void> {
   // setInterval(storeRecentBlockhashes, 700);
 
-  // await new Promise((resolve) => setTimeout(resolve, 5000));
-  // const client = await JitoClient.getInstance();
-  // logger.info('Starting');
-  // provider = getProvider();
+  await new Promise((resolve) => setTimeout(resolve, 5000));
+  const client = await JitoClient.getInstance();
+  logger.info('Starting');
+  provider = getProvider();
 
   // existingTokenAccounts = await getTokenAccounts(
   //   solanaConnection,
