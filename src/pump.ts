@@ -213,6 +213,7 @@ function calculateBuy(otherPersonBuyAmount: bigint) {
 
 export default async function snipe(): Promise<void> {
   setInterval(storeRecentBlockhashes, 700);
+  sendMessage(`Started`);
 
   await new Promise((resolve) => setTimeout(resolve, 5000));
   const client = await JitoClient.getInstance();
@@ -261,6 +262,8 @@ async function storeRecentBlockhashes() {
 
 async function monitorSellLogic(currentMint: string) {
   console.log('Monitoring partial sell');
+  sendMessage(`Monitoring partial sell for ${currentMint}`);
+
   existingTokenAccounts = await getTokenAccounts(
     solanaConnection,
     wallet.publicKey,
@@ -400,6 +403,9 @@ async function summaryPrint() {
     newWalletBalance - initialWalletBalance > 0 ? 'Trade won' : 'Trade loss',
     'Diff',
     newWalletBalance - initialWalletBalance,
+  );
+  sendMessage(
+    `${newWalletBalance - initialWalletBalance > 0 ? 'Trade won' : 'Trade loss'} ${newWalletBalance - initialWalletBalance}`,
   );
 }
 

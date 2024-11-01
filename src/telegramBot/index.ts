@@ -13,5 +13,9 @@ bot.on('message', (msg) => {
 });
 
 export const sendMessage = (text: string) => {
-  bot.sendMessage(Number(process.env.CHAT_ID!), text);
+  try {
+    bot.sendMessage(Number(process.env.CHAT_ID!), text);
+  } catch (e) {
+    console.error(e);
+  }
 };
