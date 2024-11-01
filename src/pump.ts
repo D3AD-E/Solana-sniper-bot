@@ -404,6 +404,7 @@ async function summaryPrint() {
   sendMessage(
     `${newWalletBalance - initialWalletBalance > 0 ? 'Trade won' : 'Trade loss'} ${newWalletBalance - initialWalletBalance}`,
   );
+  initialWalletBalance = newWalletBalance;
 }
 
 async function sellToken(currentMint: string) {
