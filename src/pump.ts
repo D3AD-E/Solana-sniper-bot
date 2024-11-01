@@ -45,7 +45,6 @@ let provider: AnchorProvider | undefined = undefined;
 let associatedCurve: PublicKey | undefined = undefined;
 let isSelling = false;
 let buyAmountSol: bigint | undefined = undefined;
-let buyAmount: bigint | undefined = undefined;
 let boughtTokens = 0;
 let tradesAmount = 0;
 let initialWalletBalance = 0;
@@ -209,7 +208,7 @@ function calculateBuy(otherPersonBuyAmount: bigint) {
   console.log(otherPersonBuyAmount);
   const otherBuy = globalAccount!.getInitialBuyPrice(BigInt(otherPersonBuyAmount));
   console.log(otherBuy);
-  const buyAmountTotal = globalAccount!.getInitialBuyPrice(BigInt(otherPersonBuyAmount + buyAmount!));
+  const buyAmountTotal = globalAccount!.getInitialBuyPrice(BigInt(otherPersonBuyAmount + buyAmountSol!));
   console.log(buyAmountTotal);
   console.log(buyAmountTotal - otherBuy);
   return buyAmountTotal - otherBuy;
