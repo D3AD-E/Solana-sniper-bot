@@ -270,6 +270,7 @@ async function monitorSellLogic(currentMint: string) {
   if (!tokenAccount || !tokenAccount.accountInfo) {
     console.log('curmint', currentMint);
     logger.warn('Unknown token');
+    await new Promise((resolve) => setTimeout(resolve, 400));
     existingTokenAccounts = await getTokenAccounts(
       solanaConnection,
       wallet.publicKey,
@@ -278,7 +279,19 @@ async function monitorSellLogic(currentMint: string) {
     tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === currentMint)!;
     logger.warn('Unknown token2');
     console.log(tokenAccount);
-    if (!tokenAccount || !tokenAccount.accountInfo) return true;
+    if (!tokenAccount || !tokenAccount.accountInfo) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      existingTokenAccounts = await getTokenAccounts(
+        solanaConnection,
+        wallet.publicKey,
+        process.env.COMMITMENT as Commitment,
+      );
+      console.log(existingTokenAccounts.map((x) => x.accountInfo?.mint?.toString()));
+      tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === currentMint)!;
+      logger.warn('Unknown token3');
+      console.log(tokenAccount);
+      if (!tokenAccount || !tokenAccount.accountInfo) return true;
+    }
   }
 
   //here we have tokenaccount
