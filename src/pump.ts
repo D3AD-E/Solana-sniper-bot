@@ -147,7 +147,7 @@ async function subscribeToSlotUpdates() {
     logger.info('Sent buy');
     const localBoughtTokens = boughtTokens;
     await new Promise((resolve) => setTimeout(resolve, 10000));
-    console.log('Failbuy check', gotTokenData, localBoughtTokens === boughtTokens);
+    console.log('Failbuy check', !gotTokenData, localBoughtTokens === boughtTokens);
     if (!gotTokenData && localBoughtTokens === boughtTokens) {
       logger.warn('Buy failed');
       clearState();
@@ -531,7 +531,6 @@ async function listenToChanges() {
       // }
       console.log(accountData.mint.toString() === mintAccount);
       if (accountData.mint.toString() === mintAccount) {
-        gotTokenData = true;
         logger.info(`Monitoring`);
         console.log(accountData.mint);
       }
