@@ -63,6 +63,8 @@ const blackList = [
   '62GTFDBV2FjsBFTjEhMjRBW5AzjUKK8ycY7tq1teBLkY',
   'Gwc7ky7XDPvpCS9zzcaqnAYHAczMFmrpvNT4PZDLEF6e',
   '9Hb6DRHm4vaZRfqKN71qR7aNHirG7d5g86a4hm5xDVFt',
+  'HTMnamSDgtkpHVBGA4ouQduJK5qBBGtGMoNqVJ8gt29',
+  '75vDwFcZ4msM6ztSnmqhvgxdMr6qk7iy3RLQGNdkeSry',
 ];
 
 function findCommonElement(array1: string[], array2: string[]) {
