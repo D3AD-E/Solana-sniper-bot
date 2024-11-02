@@ -77,8 +77,7 @@ export async function buyPump(
     const transaction = new VersionedTransaction(messageV0);
     transaction.sign([wallet]);
     logger.info('sending');
-    const bundleId = await sendBundles(wallet, transaction, block.blockhash);
-    console.log(bundleId);
+    sendBundles(wallet, transaction, block.blockhash);
   }
 
   // const signature = await solanaConnection.sendRawTransaction(transaction.serialize(), {
