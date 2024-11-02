@@ -116,6 +116,7 @@ async function subscribeToSlotUpdates() {
         else return;
       }
     }
+    if (isProcessing) return;
     isProcessing = true;
     const pkKeys: PublicKey[] = data.transaction?.transaction?.transaction?.message?.accountKeys.map(
       (x: any) => new PublicKey(x),
@@ -144,7 +145,7 @@ async function subscribeToSlotUpdates() {
     );
     logger.info('Sent buy');
     const localBoughtTokens = boughtTokens;
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await new Promise((resolve) => setTimeout(resolve, 3000));
     //fix boughttokens
     console.log('Failbuy check', !gotTokenData, localBoughtTokens === boughtTokens);
     if (!gotTokenData && localBoughtTokens === boughtTokens) {
