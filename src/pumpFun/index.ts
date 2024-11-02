@@ -54,26 +54,24 @@ export async function buyPump(
     associatedBondingCurve,
   );
 
-  for (let i = 0; i < 5; i++) {
-    const tipAccount = getRandomAccount();
+  const tipAccount = getRandomAccount();
 
-    const tipInstruction = SystemProgram.transfer({
-      fromPubkey: wallet.publicKey,
-      toPubkey: tipAccount,
-      lamports: tipAmount,
-    });
-    const messageV0 = new TransactionMessage({
-      payerKey: wallet.publicKey,
-      recentBlockhash: block.blockhash,
-      instructions: [...buyTx.instructions, tipInstruction],
-    }).compileToV0Message();
+  const tipInstruction = SystemProgram.transfer({
+    fromPubkey: wallet.publicKey,
+    toPubkey: tipAccount,
+    lamports: tipAmount,
+  });
+  const messageV0 = new TransactionMessage({
+    payerKey: wallet.publicKey,
+    recentBlockhash: block.blockhash,
+    instructions: [...buyTx.instructions, tipInstruction],
+  }).compileToV0Message();
 
-    const transaction = new VersionedTransaction(messageV0);
-    transaction.sign([wallet]);
-    logger.info('sending');
-    const bundleId = await sendBundles(wallet, transaction, block.blockhash);
-    console.log(bundleId);
-  }
+  const transaction = new VersionedTransaction(messageV0);
+  transaction.sign([wallet]);
+  logger.info('sending');
+  const bundleId = await sendBundles(wallet, transaction, block.blockhash);
+  console.log(bundleId);
 
   // const signature = await solanaConnection.sendRawTransaction(transaction.serialize(), {
   //   skipPreflight: true,
