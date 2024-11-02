@@ -111,7 +111,7 @@ export async function buyPump(
   // });
   // logger.info(signature);
   let initialPrice = 1020010;
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 3; i++) {
     const messageV0 = new TransactionMessage({
       payerKey: wallet.publicKey,
       recentBlockhash: block.blockhash,
