@@ -304,7 +304,16 @@ async function monitorSellLogic(currentMint: string) {
   if (total === 0n) return true;
   const firstPart = total / 2n;
   await new Promise((resolve) => setTimeout(resolve, 3000));
-  await sellAll(currentMint);
+  await sellPump(
+    wallet,
+    tokenAccount.accountInfo.mint,
+    total,
+    globalAccount!,
+    provider!,
+    associatedCurve!,
+    lastBlocks[lastBlocks.length - 1],
+  );
+  logger.info('Sold all');
   await summaryPrint();
   // clearState();
 
