@@ -470,7 +470,10 @@ async function listenToChanges() {
         return;
       }
       console.log(accountData.mint.toString() === mintAccount);
-      if (accountData.mint.toString() === mintAccount || accountData.mint.toString().toLowerCase().endsWith('pump')) {
+      if (accountData.mint.toString().toLowerCase().endsWith('pump') && accountData.mint.toString() !== mintAccount) {
+        await monitorSellLogic(accountData.mint.toString());
+      }
+      if (accountData.mint.toString() === mintAccount) {
         logger.info(`Monitoring`);
         console.log(accountData.mint);
         if (gotTokenData) return;
