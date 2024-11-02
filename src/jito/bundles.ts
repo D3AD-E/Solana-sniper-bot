@@ -16,7 +16,7 @@ export const sendBundles = async (wallet: Keypair, transactions: VersionedTransa
   // }
 
   // const maybeBundle = b.addTipTx(wallet, 100_000, tipAccount, blockHash);
-  client.sendBundle(b);
+  client.sendBundle(b).catch((e) => console.error(e));
   // if (isError(b)) {
   //   throw b;
   // }
