@@ -34,6 +34,34 @@ import { sendBundles } from '../jito/bundles';
 const BN = require('bn.js');
 const tipAmount = Number(process.env.JITO_TIP!);
 //13814844391485 for 0.4 after 0.33b
+
+async function sendJitoTx(transaction: VersionedTransaction) {
+  // Serialize transaction to Base64
+  const serializedTransaction = transaction.serialize();
+  const transactionBuffer = Buffer.from(serializedTransaction);
+
+  const base64Transaction = transactionBuffer.toString('base64');
+
+  // Prepare JSON payload for Jito Block Engine API
+  const payload = {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'sendTransaction',
+    params: [base64Transaction],
+  };
+
+  // Send transaction to Jito Block Engine API
+  const response = await fetch('https://ny.mainnet.block-engine.jito.wtf/api/v1/transactions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  console.log(response.ok);
+  console.log(response);
+}
+
 export async function buyPump(
   buyer: Keypair,
   mint: PublicKey,
@@ -77,10 +105,11 @@ export async function buyPump(
   const transaction = new VersionedTransaction(messageV0);
   transaction.sign([wallet]);
   logger.info('sending');
-  const signature = await solanaConnection.sendRawTransaction(transaction.serialize(), {
-    skipPreflight: true,
-  });
-  logger.info(signature);
+  await sendJitoTx(transaction);
+  // const signature = await solanaConnection.sendRawTransaction(transaction.serialize(), {
+  //   skipPreflight: true,
+  // });
+  // logger.info(signature);
   let initialPrice = 1020010;
   for (let i = 0; i < 10; i++) {
     const messageV0 = new TransactionMessage({
@@ -96,10 +125,7 @@ export async function buyPump(
     const transaction = new VersionedTransaction(messageV0);
     transaction.sign([wallet]);
     logger.info('sending');
-    const signature = await solanaConnection.sendRawTransaction(transaction.serialize(), {
-      skipPreflight: true,
-    });
-    logger.info(signature);
+    await sendJitoTx(transaction);
   }
 
   return;
