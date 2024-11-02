@@ -58,9 +58,6 @@ async function sendJitoTx(transaction: VersionedTransaction) {
     body: JSON.stringify(payload),
   });
   console.log(response.ok);
-  console.log(response);
-  console.log(base58Transaction);
-  console.log(await response.json());
 }
 
 export async function buyPump(
@@ -112,7 +109,7 @@ export async function buyPump(
   // });
   // logger.info(signature);
   let initialPrice = 1020010;
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
     const messageV0 = new TransactionMessage({
       payerKey: wallet.publicKey,
       recentBlockhash: block.blockhash,
