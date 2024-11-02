@@ -73,6 +73,8 @@ function isBuyDataOk(data: any) {
     const buyValue = new BN(reversedAmountBuffer); // Use the relevant slice for the value
     console.log('Parsed BigNumber3:', buyValue.toString());
     otherPersonBuySol = buyValue;
+    return true;
+
     if (buyValue > 2500000000n) {
       logger.warn('Buy wrong');
       return false;
