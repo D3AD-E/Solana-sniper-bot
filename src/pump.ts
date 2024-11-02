@@ -37,12 +37,18 @@ const getProvider = () => {
   return provider;
 };
 
+type CurveMint = {
+  mint: string;
+  curve: PublicKey;
+};
+
+let oldCurves: CurveMint[] = [];
+
 let sdk: PumpFunSDK | undefined = undefined;
 let gotTokenData = false;
 let mintAccount = '';
 let globalAccount: GlobalAccount | undefined = undefined;
 let provider: AnchorProvider | undefined = undefined;
-let associatedCurve: PublicKey | undefined = undefined;
 let isSelling = false;
 let buyAmountSol: bigint | undefined = undefined;
 let boughtTokens = 0;
@@ -157,8 +163,7 @@ async function subscribeToSlotUpdates() {
     const curve = pkKeys[curveAddress];
     console.log('curve');
     console.log(curve);
-    associatedCurve = curve;
-
+    oldCurves.push({ curve: curve, mint: mint.toString() });
     logger.info('Started listening');
     await buyPump(
       wallet,
@@ -223,7 +228,6 @@ async function subscribeToSlotUpdates() {
 function clearState() {
   console.log('Clearing state');
   mintAccount = '';
-  associatedCurve = undefined;
   isProcessing = false;
   gotTokenData = false;
   tradesAmount = 0;
@@ -285,7 +289,7 @@ async function storeRecentBlockhashes() {
   }
 }
 
-async function monitorSellLogic(currentMint: string) {
+async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey) {
   console.log('Monitoring partial sell');
   sendMessage(`Monitoring partial sell for ${currentMint}`);
 
@@ -345,74 +349,74 @@ async function monitorSellLogic(currentMint: string) {
   clearState();
 
   return false;
-  await sellPump(
-    wallet,
-    tokenAccount.accountInfo.mint,
-    firstPart,
-    globalAccount!,
-    provider!,
-    associatedCurve!,
-    lastBlocks[lastBlocks.length - 1],
-  );
-  //sell 1/5 later
-  const secondPart = total / 5n;
-  await new Promise((resolve) => setTimeout(resolve, 15000));
-  logger.info('Sell 2/4');
+  // await sellPump(
+  //   wallet,
+  //   tokenAccount.accountInfo.mint,
+  //   firstPart,
+  //   globalAccount!,
+  //   provider!,
+  //   associatedCurve!,
+  //   lastBlocks[lastBlocks.length - 1],
+  // );
+  // //sell 1/5 later
+  // const secondPart = total / 5n;
+  // await new Promise((resolve) => setTimeout(resolve, 15000));
+  // logger.info('Sell 2/4');
 
-  await sellPump(
-    wallet,
-    tokenAccount.accountInfo.mint,
-    secondPart,
-    globalAccount!,
-    provider!,
-    associatedCurve!,
-    lastBlocks[lastBlocks.length - 1],
-  );
+  // await sellPump(
+  //   wallet,
+  //   tokenAccount.accountInfo.mint,
+  //   secondPart,
+  //   globalAccount!,
+  //   provider!,
+  //   associatedCurve!,
+  //   lastBlocks[lastBlocks.length - 1],
+  // );
 
-  await new Promise((resolve) => setTimeout(resolve, 3900 * 60));
-  logger.info('Sell 3/4');
+  // await new Promise((resolve) => setTimeout(resolve, 3900 * 60));
+  // logger.info('Sell 3/4');
 
-  const thirdPart = total / 10n;
-  console.log(tradesAmount);
-  if (tradesAmount < 5) {
-    logger.warn('Inactive pair');
-    await sellAll(currentMint);
-    await summaryPrint();
-    clearState();
+  // const thirdPart = total / 10n;
+  // console.log(tradesAmount);
+  // if (tradesAmount < 5) {
+  //   logger.warn('Inactive pair');
+  //   await sellAll(currentMint);
+  //   await summaryPrint();
+  //   clearState();
 
-    return false;
-  }
-  await sellPump(
-    wallet,
-    tokenAccount.accountInfo.mint,
-    thirdPart,
-    globalAccount!,
-    provider!,
-    associatedCurve!,
-    lastBlocks[lastBlocks.length - 1],
-  );
-  await new Promise((resolve) => setTimeout(resolve, 1800 * 60));
-  logger.info('Sell 4/4');
+  //   return false;
+  // }
+  // await sellPump(
+  //   wallet,
+  //   tokenAccount.accountInfo.mint,
+  //   thirdPart,
+  //   globalAccount!,
+  //   provider!,
+  //   associatedCurve!,
+  //   lastBlocks[lastBlocks.length - 1],
+  // );
+  // await new Promise((resolve) => setTimeout(resolve, 1800 * 60));
+  // logger.info('Sell 4/4');
 
-  const forthPart = total / 20n;
-  await sellPump(
-    wallet,
-    tokenAccount.accountInfo.mint,
-    forthPart,
-    globalAccount!,
-    provider!,
-    associatedCurve!,
-    lastBlocks[lastBlocks.length - 1],
-  );
-  await new Promise((resolve) => setTimeout(resolve, 1800 * 60));
-  //all
-  await sellAll(currentMint);
-  await summaryPrint();
-  clearState();
-  return false;
+  // const forthPart = total / 20n;
+  // await sellPump(
+  //   wallet,
+  //   tokenAccount.accountInfo.mint,
+  //   forthPart,
+  //   globalAccount!,
+  //   provider!,
+  //   associatedCurve!,
+  //   lastBlocks[lastBlocks.length - 1],
+  // );
+  // await new Promise((resolve) => setTimeout(resolve, 1800 * 60));
+  // //all
+  // await sellAll(currentMint);
+  // await summaryPrint();
+  // clearState();
+  // return false;
 }
 
-async function sellAll(currentMint: string) {
+async function sellAll(currentMint: string, associatedCurve: PublicKey) {
   existingTokenAccounts = await getTokenAccounts(
     solanaConnection,
     wallet.publicKey,
@@ -449,41 +453,41 @@ async function summaryPrint() {
   initialWalletBalance = newWalletBalance;
 }
 
-async function sellToken(currentMint: string) {
-  console.log('Selling');
-  existingTokenAccounts = await getTokenAccounts(
-    solanaConnection,
-    wallet.publicKey,
-    process.env.COMMITMENT as Commitment,
-  );
-  let tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === currentMint)!;
-  if (!tokenAccount || !tokenAccount.accountInfo) {
-    console.log('curmint', currentMint);
-    logger.warn('Unknown token');
-    existingTokenAccounts = await getTokenAccounts(
-      solanaConnection,
-      wallet.publicKey,
-      process.env.COMMITMENT as Commitment,
-    );
-    tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === currentMint)!;
-    logger.warn('Unknown token2');
-    console.log(tokenAccount);
-    if (!tokenAccount || !tokenAccount.accountInfo) return true;
-  }
-  const bigInt = BigInt(tokenAccount.accountInfo.amount);
-  console.log(bigInt);
-  if (bigInt === 0n) return true;
-  await sellPump(
-    wallet,
-    tokenAccount.accountInfo.mint,
-    bigInt,
-    globalAccount!,
-    provider!,
-    associatedCurve!,
-    lastBlocks[lastBlocks.length - 1],
-  );
-  return false;
-}
+// async function sellToken(currentMint: string) {
+//   console.log('Selling');
+//   existingTokenAccounts = await getTokenAccounts(
+//     solanaConnection,
+//     wallet.publicKey,
+//     process.env.COMMITMENT as Commitment,
+//   );
+//   let tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === currentMint)!;
+//   if (!tokenAccount || !tokenAccount.accountInfo) {
+//     console.log('curmint', currentMint);
+//     logger.warn('Unknown token');
+//     existingTokenAccounts = await getTokenAccounts(
+//       solanaConnection,
+//       wallet.publicKey,
+//       process.env.COMMITMENT as Commitment,
+//     );
+//     tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === currentMint)!;
+//     logger.warn('Unknown token2');
+//     console.log(tokenAccount);
+//     if (!tokenAccount || !tokenAccount.accountInfo) return true;
+//   }
+//   const bigInt = BigInt(tokenAccount.accountInfo.amount);
+//   console.log(bigInt);
+//   if (bigInt === 0n) return true;
+//   await sellPump(
+//     wallet,
+//     tokenAccount.accountInfo.mint,
+//     bigInt,
+//     globalAccount!,
+//     provider!,
+//     associatedCurve!,
+//     lastBlocks[lastBlocks.length - 1],
+//   );
+//   return false;
+// }
 
 async function listenToChanges() {
   const walletSubscriptionId = solanaConnection.onProgramAccountChange(
@@ -498,14 +502,16 @@ async function listenToChanges() {
       }
       console.log(accountData.mint.toString() === mintAccount);
       if (accountData.mint.toString().toLowerCase().endsWith('pump') && accountData.mint.toString() !== mintAccount) {
-        await monitorSellLogic(accountData.mint.toString());
+        const curve = oldCurves.find((x) => x.mint === accountData.mint.toString());
+        if (curve) await monitorSellLogic(accountData.mint.toString(), curve.curve);
       }
       if (accountData.mint.toString() === mintAccount) {
         logger.info(`Monitoring`);
         console.log(accountData.mint);
         if (gotTokenData) return;
         gotTokenData = true;
-        await monitorSellLogic(accountData.mint.toString());
+        const curve = oldCurves.find((x) => x.mint === accountData.mint.toString());
+        if (curve) await monitorSellLogic(accountData.mint.toString(), curve.curve);
       }
 
       // if (!workerPool!.doesTokenExist(accountData.mint.toString())) {
