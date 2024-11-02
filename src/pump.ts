@@ -338,7 +338,7 @@ async function monitorSellLogic(currentMint: string) {
   );
   logger.info('Sold all');
   await summaryPrint();
-  // clearState();
+  clearState();
 
   return false;
   await sellPump(
