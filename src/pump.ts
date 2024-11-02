@@ -51,7 +51,7 @@ let initialWalletBalance = 0;
 let tokenBuySellDiff = 0n;
 let otherPersonBuySol = 0n;
 
-const blackList = ['4RAxiPpuxjKFnp1vUBGV8G8pubujLffktWxSkBxWU6SQ'];
+const blackList = ['4RAxiPpuxjKFnp1vUBGV8G8pubujLffktWxSkBxWU6SQ', '5LAiMexZHGtWkkcw3uhLDNt263HFYazaZHJtKjq1duxk'];
 
 function findCommonElement(array1: string[], array2: string[]) {
   for (let i = 0; i < array1.length; i++) {
