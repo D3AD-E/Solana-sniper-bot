@@ -31,6 +31,7 @@ import logger from '../utils/logger';
 import { Block } from '../listener.types';
 import { getRandomAccount } from '../jito/constants';
 import { sendBundles } from '../jito/bundles';
+import bs58 from 'bs58';
 const BN = require('bn.js');
 const tipAmount = Number(process.env.JITO_TIP!);
 //13814844391485 for 0.4 after 0.33b
@@ -38,16 +39,14 @@ const tipAmount = Number(process.env.JITO_TIP!);
 async function sendJitoTx(transaction: VersionedTransaction) {
   // Serialize transaction to Base64
   const serializedTransaction = transaction.serialize();
-  const transactionBuffer = Buffer.from(serializedTransaction);
-
-  const base64Transaction = transactionBuffer.toString('base64');
+  const base58Transaction = bs58.encode(serializedTransaction);
 
   // Prepare JSON payload for Jito Block Engine API
   const payload = {
     jsonrpc: '2.0',
     id: 1,
     method: 'sendTransaction',
-    params: [base64Transaction],
+    params: [base58Transaction],
   };
 
   // Send transaction to Jito Block Engine API
@@ -60,7 +59,7 @@ async function sendJitoTx(transaction: VersionedTransaction) {
   });
   console.log(response.ok);
   console.log(response);
-  console.log(base64Transaction);
+  console.log(base58Transaction);
   console.log(await response.json());
 }
 
