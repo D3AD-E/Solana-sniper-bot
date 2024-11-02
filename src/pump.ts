@@ -303,6 +303,7 @@ async function monitorSellLogic(currentMint: string) {
   console.log(total);
   if (total === 0n) return true;
   const firstPart = total / 2n;
+  await new Promise((resolve) => setTimeout(resolve, 3000));
 
   await sellPump(
     wallet,
@@ -315,7 +316,7 @@ async function monitorSellLogic(currentMint: string) {
   );
   //sell 1/5 later
   const secondPart = total / 5n;
-  await new Promise((resolve) => setTimeout(resolve, 10000));
+  await new Promise((resolve) => setTimeout(resolve, 15000));
   logger.info('Sell 2/4');
   await sellAll(currentMint);
   await summaryPrint();
