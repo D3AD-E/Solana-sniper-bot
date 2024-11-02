@@ -336,7 +336,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey)
   console.log(total);
   if (total === 0n) return true;
   const firstPart = total / 2n;
-  await new Promise((resolve) => setTimeout(resolve, 1500));
+  await new Promise((resolve) => setTimeout(resolve, 2700));
   await sellPump(
     wallet,
     tokenAccount.accountInfo.mint,
@@ -503,10 +503,7 @@ async function listenToChanges() {
         return;
       }
       console.log(accountData.mint.toString() === mintAccount);
-      if (accountData.mint.toString().toLowerCase().endsWith('pump') && accountData.mint.toString() !== mintAccount) {
-        const curve = oldCurves.find((x) => x.mint === accountData.mint.toString());
-        if (curve) await monitorSellLogic(accountData.mint.toString(), curve.curve);
-      }
+
       if (accountData.mint.toString() === mintAccount) {
         logger.info(`Monitoring`);
         console.log(accountData.mint);
@@ -514,8 +511,10 @@ async function listenToChanges() {
         gotTokenData = true;
         const curve = oldCurves.find((x) => x.mint === accountData.mint.toString());
         if (curve) await monitorSellLogic(accountData.mint.toString(), curve.curve);
+      } else {
+        const curve = oldCurves.find((x) => x.mint === accountData.mint.toString());
+        if (curve) await monitorSellLogic(accountData.mint.toString(), curve.curve);
       }
-
       // if (!workerPool!.doesTokenExist(accountData.mint.toString())) {
       //   logger.warn('Got unknown token in wallet');
       //   return;
