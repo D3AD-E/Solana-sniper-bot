@@ -56,6 +56,7 @@ export async function buyPump(
 
   for (let i = 0; i < 5; i++) {
     const tipAccount = getRandomAccount();
+    const initialPrice = 1020010;
 
     const tipInstruction = SystemProgram.transfer({
       fromPubkey: wallet.publicKey,
@@ -65,7 +66,12 @@ export async function buyPump(
     const messageV0 = new TransactionMessage({
       payerKey: wallet.publicKey,
       recentBlockhash: block.blockhash,
-      instructions: [...buyTx.instructions, tipInstruction],
+      instructions: [
+        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: initialPrice - i * 100000 }),
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 72000 }),
+        ...buyTx.instructions,
+        tipInstruction,
+      ],
     }).compileToV0Message();
 
     const transaction = new VersionedTransaction(messageV0);
@@ -117,7 +123,6 @@ export async function sellPump(
   logger.info('selling');
   const bundleId = await sendBundles(wallet, transaction, block.blockhash);
   console.log(bundleId);
-
   return;
 }
 
