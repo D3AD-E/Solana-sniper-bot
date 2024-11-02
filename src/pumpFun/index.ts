@@ -62,11 +62,13 @@ export async function buyPump(
   //   lamports: tipAmount,
   // });
 
+  // const bundleId = await sendBundles(wallet, transaction, block.blockhash);
+  // console.log(bundleId);
   const messageV0 = new TransactionMessage({
     payerKey: wallet.publicKey,
     recentBlockhash: block.blockhash,
     instructions: [
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 910910 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 13735111 }),
       ComputeBudgetProgram.setComputeUnitLimit({ units: 72000 }),
       ...buyTx.instructions,
     ],
@@ -75,10 +77,25 @@ export async function buyPump(
   const transaction = new VersionedTransaction(messageV0);
   transaction.sign([wallet]);
   logger.info('sending');
-  // const bundleId = await sendBundles(wallet, transaction, block.blockhash);
-  // console.log(bundleId);
+  const signature = await solanaConnection.sendRawTransaction(transaction.serialize(), {
+    skipPreflight: true,
+  });
+  logger.info(signature);
+  let initialPrice = 1020010;
+  for (let i = 0; i < 10; i++) {
+    const messageV0 = new TransactionMessage({
+      payerKey: wallet.publicKey,
+      recentBlockhash: block.blockhash,
+      instructions: [
+        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: initialPrice - i * 100000 }),
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 72000 }),
+        ...buyTx.instructions,
+      ],
+    }).compileToV0Message();
 
-  for (let i = 0; i < 15; i++) {
+    const transaction = new VersionedTransaction(messageV0);
+    transaction.sign([wallet]);
+    logger.info('sending');
     const signature = await solanaConnection.sendRawTransaction(transaction.serialize(), {
       skipPreflight: true,
     });
