@@ -104,7 +104,7 @@ export async function sellPump(
   const tipInstruction = SystemProgram.transfer({
     fromPubkey: wallet.publicKey,
     toPubkey: tipAccount,
-    lamports: tipAmount / 75,
+    lamports: tipAmount / 80,
   });
   const messageV0 = new TransactionMessage({
     payerKey: wallet.publicKey,
