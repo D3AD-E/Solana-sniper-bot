@@ -58,7 +58,7 @@ function isBuyDataOk(data: any) {
     const buyValue = new BN(reversedAmountBuffer); // Use the relevant slice for the value
     console.log('Parsed BigNumber3:', buyValue.toString());
     otherPersonBuySol = buyValue;
-    if (buyValue > 1000000000n) {
+    if (buyValue > 2500000000n) {
       logger.warn('Buy wrong');
       return false;
     } else return true;
@@ -314,7 +314,7 @@ async function monitorSellLogic(currentMint: string) {
   );
   //sell 1/5 later
   const secondPart = total / 5n;
-  await new Promise((resolve) => setTimeout(resolve, 9000));
+  await new Promise((resolve) => setTimeout(resolve, 10000));
   logger.info('Sell 2/4');
   await sellAll(currentMint);
   await summaryPrint();
