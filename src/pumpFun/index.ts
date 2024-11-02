@@ -60,6 +60,7 @@ async function sendJitoTx(transaction: VersionedTransaction) {
   });
   console.log(response.ok);
   console.log(response);
+  console.log(await response.json());
 }
 
 export async function buyPump(
