@@ -31,35 +31,9 @@ import logger from '../utils/logger';
 import { Block } from '../listener.types';
 import { getRandomAccount } from '../jito/constants';
 import { sendBundles } from '../jito/bundles';
-import bs58 from 'bs58';
 const BN = require('bn.js');
 const tipAmount = Number(process.env.JITO_TIP!);
 //13814844391485 for 0.4 after 0.33b
-
-async function sendJitoTx(transaction: VersionedTransaction) {
-  // Serialize transaction to Base64
-  const serializedTransaction = transaction.serialize();
-  const base58Transaction = bs58.encode(serializedTransaction);
-
-  // Prepare JSON payload for Jito Block Engine API
-  const payload = {
-    jsonrpc: '2.0',
-    id: 1,
-    method: 'sendTransaction',
-    params: [base58Transaction],
-  };
-
-  // Send transaction to Jito Block Engine API
-  const response = await fetch('https://ny.mainnet.block-engine.jito.wtf/api/v1/transactions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  });
-  console.log(response.ok);
-}
-
 export async function buyPump(
   buyer: Keypair,
   mint: PublicKey,
@@ -80,52 +54,31 @@ export async function buyPump(
     associatedBondingCurve,
   );
 
-  // const tipAccount = getRandomAccount();
+  for (let i = 0; i < 5; i++) {
+    const tipAccount = getRandomAccount();
 
-  // const tipInstruction = SystemProgram.transfer({
-  //   fromPubkey: wallet.publicKey,
-  //   toPubkey: tipAccount,
-  //   lamports: tipAmount,
-  // });
-
-  // const bundleId = await sendBundles(wallet, transaction, block.blockhash);
-  // console.log(bundleId);
-  const messageV0 = new TransactionMessage({
-    payerKey: wallet.publicKey,
-    recentBlockhash: block.blockhash,
-    instructions: [
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 13735111 }),
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 72000 }),
-      ...buyTx.instructions,
-    ],
-  }).compileToV0Message();
-
-  const transaction = new VersionedTransaction(messageV0);
-  transaction.sign([wallet]);
-  logger.info('sending');
-  await sendJitoTx(transaction);
-  // const signature = await solanaConnection.sendRawTransaction(transaction.serialize(), {
-  //   skipPreflight: true,
-  // });
-  // logger.info(signature);
-  let initialPrice = 1020010;
-  for (let i = 0; i < 4; i++) {
+    const tipInstruction = SystemProgram.transfer({
+      fromPubkey: wallet.publicKey,
+      toPubkey: tipAccount,
+      lamports: tipAmount,
+    });
     const messageV0 = new TransactionMessage({
       payerKey: wallet.publicKey,
       recentBlockhash: block.blockhash,
-      instructions: [
-        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: initialPrice - i * 100000 }),
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 72000 }),
-        ...buyTx.instructions,
-      ],
+      instructions: [...buyTx.instructions, tipInstruction],
     }).compileToV0Message();
 
     const transaction = new VersionedTransaction(messageV0);
     transaction.sign([wallet]);
     logger.info('sending');
-    await sendJitoTx(transaction);
+    const bundleId = await sendBundles(wallet, transaction, block.blockhash);
+    console.log(bundleId);
   }
 
+  // const signature = await solanaConnection.sendRawTransaction(transaction.serialize(), {
+  //   skipPreflight: true,
+  // });
+  // logger.info(signature);
   return;
 }
 
