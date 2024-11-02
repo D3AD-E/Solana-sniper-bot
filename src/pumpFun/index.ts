@@ -123,8 +123,6 @@ export async function sellPump(
   const transaction = new VersionedTransaction(messageV0);
   transaction.sign([wallet]);
   logger.info('selling');
-  const bundleId = await sendBundles(wallet, transaction, block.blockhash);
-  console.log(bundleId);
 
   const messageV0NoTip = new TransactionMessage({
     payerKey: wallet.publicKey,
@@ -142,6 +140,11 @@ export async function sellPump(
     skipPreflight: true,
   });
   console.log(txid);
+  try {
+    sendBundles(wallet, transaction, block.blockhash);
+  } catch (e) {
+    console.error(e);
+  }
   return;
 }
 
