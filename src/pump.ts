@@ -179,7 +179,7 @@ async function subscribeToSlotUpdates() {
     );
     logger.info('Sent buy');
     const localBoughtTokens = boughtTokens;
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await new Promise((resolve) => setTimeout(resolve, 3000));
     //fix boughttokens
     console.log('Failbuy check', !gotTokenData, localBoughtTokens === boughtTokens);
     if (!gotTokenData && localBoughtTokens === boughtTokens) {
@@ -336,7 +336,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey)
   console.log(total);
   if (total === 0n) return true;
   const firstPart = total / 2n;
-  await new Promise((resolve) => setTimeout(resolve, 3000));
+  await new Promise((resolve) => setTimeout(resolve, 2000));
   await sellPump(
     wallet,
     tokenAccount.accountInfo.mint,
