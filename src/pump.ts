@@ -144,7 +144,7 @@ async function subscribeToSlotUpdates() {
     );
     logger.info('Sent buy');
     const localBoughtTokens = boughtTokens;
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
     //fix boughttokens
     console.log('Failbuy check', !gotTokenData, localBoughtTokens === boughtTokens);
     if (!gotTokenData && localBoughtTokens === boughtTokens) {
