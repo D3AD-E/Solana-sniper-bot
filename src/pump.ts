@@ -50,6 +50,21 @@ let tradesAmount = 0;
 let initialWalletBalance = 0;
 let tokenBuySellDiff = 0n;
 let otherPersonBuySol = 0n;
+
+const blackList = ['4RAxiPpuxjKFnp1vUBGV8G8pubujLffktWxSkBxWU6SQ'];
+
+function findCommonElement(array1: string[], array2: string[]) {
+  for (let i = 0; i < array1.length; i++) {
+    for (let j = 0; j < array2.length; j++) {
+      if (array1[i] === array2[j]) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 function isBuyDataOk(data: any) {
   try {
     const amountBuffer = data.slice(4);
@@ -116,11 +131,17 @@ async function subscribeToSlotUpdates() {
         else return;
       }
     }
-    if (isProcessing) return;
-    isProcessing = true;
     const pkKeys: PublicKey[] = data.transaction?.transaction?.transaction?.message?.accountKeys.map(
       (x: any) => new PublicKey(x),
     );
+    const pkKeysStr = pkKeys.map((x) => x.toString().toLowerCase());
+    if (findCommonElement(pkKeysStr, blackList)) {
+      logger.warn('Blacklisted');
+      return;
+    }
+    if (isProcessing) return;
+    isProcessing = true;
+
     const mintAddress = ins[0].instructions[0].accounts[1];
     const mint = pkKeys[mintAddress];
     console.log('mint');
