@@ -461,12 +461,12 @@ async function listenToChanges() {
         return;
       }
       console.log(accountData.mint.toString() === mintAccount);
-      if (accountData.mint.toString() === mintAccount) {
+      if (accountData.mint.toString() === mintAccount || accountData.mint.toString().toLowerCase().endsWith('pump')) {
         logger.info(`Monitoring`);
         console.log(accountData.mint);
         if (gotTokenData) return;
         gotTokenData = true;
-        await monitorSellLogic(mintAccount);
+        await monitorSellLogic(accountData.mint.toString());
       }
 
       // if (!workerPool!.doesTokenExist(accountData.mint.toString())) {
