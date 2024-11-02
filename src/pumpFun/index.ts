@@ -60,6 +60,7 @@ async function sendJitoTx(transaction: VersionedTransaction) {
   });
   console.log(response.ok);
   console.log(response);
+  console.log(base64Transaction);
   console.log(await response.json());
 }
 
