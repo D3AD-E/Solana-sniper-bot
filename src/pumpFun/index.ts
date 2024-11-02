@@ -65,7 +65,11 @@ export async function buyPump(
   const messageV0 = new TransactionMessage({
     payerKey: wallet.publicKey,
     recentBlockhash: block.blockhash,
-    instructions: [...buyTx.instructions],
+    instructions: [
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 910910 }),
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 72000 }),
+      ...buyTx.instructions,
+    ],
   }).compileToV0Message();
 
   const transaction = new VersionedTransaction(messageV0);
