@@ -509,8 +509,8 @@ async function listenToChanges() {
       if (accountData.mint.toString() === mintAccount) {
         logger.info(`Monitoring`);
         console.log(accountData.mint);
-        if (gotTokenData) return;
-        gotTokenData = true;
+        // if (gotTokenData) return;
+        // gotTokenData = true;
         const curve = oldCurves.find((x) => x.mint === accountData.mint.toString());
         if (curve) await monitorSellLogic(accountData.mint.toString(), curve.curve);
       } else {
