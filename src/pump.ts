@@ -67,22 +67,18 @@ const blackList = [
 ];
 
 function getAmountWeBuyBasedOnOther(otherPersonBuy: bigint) {
-  if (otherPersonBuy <= 500_000_000n)
-    //0.5 sol
-    return buyAmountSol!;
-  if (otherPersonBuy <= 1_000_000_000n)
-    //1 sol
-    return buyAmountSol! - buyAmountSol! / 10n; //10% off
-  if (otherPersonBuy <= 1_500_000_000n)
-    //1 5 sol
-    return buyAmountSol! - buyAmountSol! / 5n; //20% off
-  if (otherPersonBuy <= 2_000_000_000n)
-    //2 sol
-    return buyAmountSol! - (buyAmountSol! * 3n) / 10n; //30% off
-  if (otherPersonBuy <= 2_500_000_000n)
-    //2 5 sol
-    return buyAmountSol! - (buyAmountSol! * 4n) / 10n; //40% off
-  return buyAmountSol! - (buyAmountSol! * 5n) / 10n; //50% off
+  if (otherPersonBuy <= 500_000_000n) return buyAmountSol!;
+
+  let discountThreshold = 500_000_000n;
+  let discountStep = 0n;
+  while (otherPersonBuy > discountThreshold) {
+    discountThreshold += 500_000_000n;
+    discountStep = discountStep + 10n;
+    if (discountStep === 90n) {
+      return buyAmountSol! - (buyAmountSol! * discountStep) / 100n;
+    }
+  }
+  return buyAmountSol! - (buyAmountSol! * discountStep) / 100n;
 }
 
 function findCommonElement(array1: string[], array2: string[]) {
