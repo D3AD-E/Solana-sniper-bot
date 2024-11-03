@@ -54,31 +54,24 @@ export async function buyPump(
     associatedBondingCurve,
   );
   try {
-    for (let i = 0; i < 3; i++) {
-      const tipAccount = getRandomAccount();
-      const initialPrice = 1020010;
+    const tipAccount = getRandomAccount();
+    const initialPrice = 1020010;
 
-      const tipInstruction = SystemProgram.transfer({
-        fromPubkey: wallet.publicKey,
-        toPubkey: tipAccount,
-        lamports: tipAmount,
-      });
-      const messageV0 = new TransactionMessage({
-        payerKey: wallet.publicKey,
-        recentBlockhash: block.blockhash,
-        instructions: [
-          ComputeBudgetProgram.setComputeUnitPrice({ microLamports: initialPrice - i * 100000 }),
-          ComputeBudgetProgram.setComputeUnitLimit({ units: 72000 }),
-          ...buyTx.instructions,
-          tipInstruction,
-        ],
-      }).compileToV0Message();
+    const tipInstruction = SystemProgram.transfer({
+      fromPubkey: wallet.publicKey,
+      toPubkey: tipAccount,
+      lamports: tipAmount,
+    });
+    const messageV0 = new TransactionMessage({
+      payerKey: wallet.publicKey,
+      recentBlockhash: block.blockhash,
+      instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: 72000 }), ...buyTx.instructions, tipInstruction],
+    }).compileToV0Message();
 
-      const transaction = new VersionedTransaction(messageV0);
-      transaction.sign([wallet]);
-      logger.info('sending');
-      sendBundles(wallet, transaction, block.blockhash);
-    }
+    const transaction = new VersionedTransaction(messageV0);
+    transaction.sign([wallet]);
+    logger.info('sending');
+    sendBundles(wallet, transaction, block.blockhash);
   } catch (e) {
     console.error(e);
   }
