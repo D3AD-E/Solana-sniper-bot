@@ -262,23 +262,23 @@ export default async function snipe(): Promise<void> {
   sdk = new PumpFunSDK(provider);
   globalAccount = await sdk.getGlobalAccount();
   buyAmountSol = BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL);
-  console.log(calculateBuy(3500000000n));
-  // const balance = await solanaConnection.getBalance(wallet.publicKey);
-  // initialWalletBalance = balance / 1_000_000_000;
-  // console.log('Wallet balance (in SOL):', initialWalletBalance);
-  // // Call the subscription function
-  // subscribeToSlotUpdates();
 
-  // let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
-  //   if (event.mint.toString() === mintAccount) {
-  //     if (event.user.toString() === wallet.publicKey.toString()) return;
-  //     logger.info(signature);
-  //     tokenBuySellDiff = event.isBuy ? tokenBuySellDiff + event.solAmount : tokenBuySellDiff - event.solAmount;
-  //     console.log('tradeEvent', event.isBuy ? 'Buy' : 'Sell', event.solAmount, 'Diff', tokenBuySellDiff);
-  //     tradesAmount++;
-  //   }
-  // });
-  // await listenToChanges();
+  const balance = await solanaConnection.getBalance(wallet.publicKey);
+  initialWalletBalance = balance / 1_000_000_000;
+  console.log('Wallet balance (in SOL):', initialWalletBalance);
+  // Call the subscription function
+  subscribeToSlotUpdates();
+
+  let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
+    if (event.mint.toString() === mintAccount) {
+      if (event.user.toString() === wallet.publicKey.toString()) return;
+      logger.info(signature);
+      tokenBuySellDiff = event.isBuy ? tokenBuySellDiff + event.solAmount : tokenBuySellDiff - event.solAmount;
+      console.log('tradeEvent', event.isBuy ? 'Buy' : 'Sell', event.solAmount, 'Diff', tokenBuySellDiff);
+      tradesAmount++;
+    }
+  });
+  await listenToChanges();
 }
 
 async function storeRecentBlockhashes() {
