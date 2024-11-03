@@ -27,7 +27,7 @@ let ws: WebSocket | undefined = undefined;
 let lastBlocks: Block[] = [];
 let processedTokens: string[] = [];
 let workerPool: WorkerPool | undefined = undefined;
-
+let softExit = false;
 let isProcessing = false;
 const getProvider = () => {
   const walletAnchor = new Wallet(wallet);
@@ -135,6 +135,7 @@ async function subscribeToSlotUpdates() {
   // Handle updates
   stream.on('data', async (data) => {
     // if (isProcessing) return;
+    if (softExit) return;
     const ins = data.transaction?.transaction?.meta?.innerInstructions;
     if (!ins) return;
     const signatureString = bs58.encode(data.transaction.transaction.signature);
@@ -454,6 +455,7 @@ async function summaryPrint() {
   const balance = await solanaConnection.getBalance(wallet.publicKey);
   const newWalletBalance = balance / 1_000_000_000;
   console.log('Wallet balance (in SOL):', newWalletBalance);
+  if (newWalletBalance > 2) softExit = true;
   console.log(
     newWalletBalance - initialWalletBalance > 0 ? 'Trade won' : 'Trade loss',
     'Diff',
