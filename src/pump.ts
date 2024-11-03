@@ -262,23 +262,23 @@ export default async function snipe(): Promise<void> {
   sdk = new PumpFunSDK(provider);
   globalAccount = await sdk.getGlobalAccount();
   buyAmountSol = BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL);
+  console.log(calculateBuy(3500000000n));
+  // const balance = await solanaConnection.getBalance(wallet.publicKey);
+  // initialWalletBalance = balance / 1_000_000_000;
+  // console.log('Wallet balance (in SOL):', initialWalletBalance);
+  // // Call the subscription function
+  // subscribeToSlotUpdates();
 
-  const balance = await solanaConnection.getBalance(wallet.publicKey);
-  initialWalletBalance = balance / 1_000_000_000;
-  console.log('Wallet balance (in SOL):', initialWalletBalance);
-  // Call the subscription function
-  subscribeToSlotUpdates();
-
-  let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
-    if (event.mint.toString() === mintAccount) {
-      if (event.user.toString() === wallet.publicKey.toString()) return;
-      logger.info(signature);
-      tokenBuySellDiff = event.isBuy ? tokenBuySellDiff + event.solAmount : tokenBuySellDiff - event.solAmount;
-      console.log('tradeEvent', event.isBuy ? 'Buy' : 'Sell', event.solAmount, 'Diff', tokenBuySellDiff);
-      tradesAmount++;
-    }
-  });
-  await listenToChanges();
+  // let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
+  //   if (event.mint.toString() === mintAccount) {
+  //     if (event.user.toString() === wallet.publicKey.toString()) return;
+  //     logger.info(signature);
+  //     tokenBuySellDiff = event.isBuy ? tokenBuySellDiff + event.solAmount : tokenBuySellDiff - event.solAmount;
+  //     console.log('tradeEvent', event.isBuy ? 'Buy' : 'Sell', event.solAmount, 'Diff', tokenBuySellDiff);
+  //     tradesAmount++;
+  //   }
+  // });
+  // await listenToChanges();
 }
 
 async function storeRecentBlockhashes() {
@@ -455,42 +455,6 @@ async function summaryPrint() {
   );
   initialWalletBalance = newWalletBalance;
 }
-
-// async function sellToken(currentMint: string) {
-//   console.log('Selling');
-//   existingTokenAccounts = await getTokenAccounts(
-//     solanaConnection,
-//     wallet.publicKey,
-//     process.env.COMMITMENT as Commitment,
-//   );
-//   let tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === currentMint)!;
-//   if (!tokenAccount || !tokenAccount.accountInfo) {
-//     console.log('curmint', currentMint);
-//     logger.warn('Unknown token');
-//     existingTokenAccounts = await getTokenAccounts(
-//       solanaConnection,
-//       wallet.publicKey,
-//       process.env.COMMITMENT as Commitment,
-//     );
-//     tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === currentMint)!;
-//     logger.warn('Unknown token2');
-//     console.log(tokenAccount);
-//     if (!tokenAccount || !tokenAccount.accountInfo) return true;
-//   }
-//   const bigInt = BigInt(tokenAccount.accountInfo.amount);
-//   console.log(bigInt);
-//   if (bigInt === 0n) return true;
-//   await sellPump(
-//     wallet,
-//     tokenAccount.accountInfo.mint,
-//     bigInt,
-//     globalAccount!,
-//     provider!,
-//     associatedCurve!,
-//     lastBlocks[lastBlocks.length - 1],
-//   );
-//   return false;
-// }
 
 async function listenToChanges() {
   const walletSubscriptionId = solanaConnection.onProgramAccountChange(
