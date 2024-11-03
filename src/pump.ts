@@ -79,6 +79,7 @@ function getAmountWeBuyBasedOnOther(otherPersonBuy: bigint) {
       return buyAmountSol! - (buyAmountSol! * discountStep) / 100n;
     }
   }
+  console.log(discountStep, otherPersonBuy, initialStep, discountThreshold);
   return buyAmountSol! - (buyAmountSol! * discountStep) / 100n;
 }
 
