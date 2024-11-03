@@ -177,7 +177,10 @@ async function subscribeToSlotUpdates() {
     console.log('curve');
     console.log(curve);
     oldCurves.push({ curve: curve, mint: mint.toString() });
-    const weBuySol = getAmountWeBuyBasedOnOther(otherpersonBuyValue);
+    let weBuySol = getAmountWeBuyBasedOnOther(otherpersonBuyValue);
+    if (initialWalletBalance < 1) {
+      weBuySol = weBuySol / 2n;
+    }
     logger.info('Started listening');
     await buyPump(
       wallet,
@@ -188,6 +191,7 @@ async function subscribeToSlotUpdates() {
       provider!,
       curve,
       lastBlocks[lastBlocks.length - 1],
+      initialWalletBalance < 1,
     );
     logger.info('Sent buy');
     // const localBoughtTokens = boughtTokens;
