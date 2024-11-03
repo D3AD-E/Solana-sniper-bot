@@ -124,7 +124,7 @@ async function subscribeToSlotUpdates() {
 
   // Handle updates
   stream.on('data', async (data) => {
-    if (isProcessing) return;
+    // if (isProcessing) return;
     const ins = data.transaction?.transaction?.meta?.innerInstructions;
     if (!ins) return;
     const signatureString = bs58.encode(data.transaction.transaction.signature);
@@ -155,8 +155,8 @@ async function subscribeToSlotUpdates() {
       logger.warn('Blacklisted');
       return;
     }
-    if (isProcessing) return;
-    isProcessing = true;
+    // if (isProcessing) return;
+    // isProcessing = true;
 
     const mintAddress = ins[0].instructions[0].accounts[1];
     const mint = pkKeys[mintAddress];
@@ -180,14 +180,14 @@ async function subscribeToSlotUpdates() {
       lastBlocks[lastBlocks.length - 1],
     );
     logger.info('Sent buy');
-    const localBoughtTokens = boughtTokens;
-    await new Promise((resolve) => setTimeout(resolve, 3000));
-    //fix boughttokens
-    console.log('Failbuy check', !gotTokenData, localBoughtTokens === boughtTokens);
-    if (!gotTokenData && localBoughtTokens === boughtTokens) {
-      logger.warn('Buy failed');
-      clearState();
-    }
+    // const localBoughtTokens = boughtTokens;
+    // await new Promise((resolve) => setTimeout(resolve, 3000));
+    // //fix boughttokens
+    // console.log('Failbuy check', !gotTokenData, localBoughtTokens === boughtTokens);
+    // if (!gotTokenData && localBoughtTokens === boughtTokens) {
+    //   logger.warn('Buy failed');
+    //   clearState();
+    // }
   });
   // Create subscribe request based on provided arguments.
   const request: SubscribeRequest = {
@@ -338,7 +338,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey)
   console.log(total);
   if (total === 0n) return true;
   const firstPart = total / 2n;
-  await new Promise((resolve) => setTimeout(resolve, 2700));
+  await new Promise((resolve) => setTimeout(resolve, 2500));
   await sellPump(
     wallet,
     tokenAccount.accountInfo.mint,

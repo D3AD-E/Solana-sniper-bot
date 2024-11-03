@@ -54,7 +54,7 @@ export async function buyPump(
     associatedBondingCurve,
   );
   try {
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 3; i++) {
       const tipAccount = getRandomAccount();
       const initialPrice = 1020010;
 
