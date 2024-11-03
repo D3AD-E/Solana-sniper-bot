@@ -55,7 +55,6 @@ let boughtTokens = 0;
 let tradesAmount = 0;
 let initialWalletBalance = 0;
 let tokenBuySellDiff = 0n;
-let otherPersonBuySol = 0n;
 
 const blackList = [
   '4RAxiPpuxjKFnp1vUBGV8G8pubujLffktWxSkBxWU6SQ',
@@ -66,6 +65,25 @@ const blackList = [
   'HTMnamSDgtkpHVBGA4ouQduJK5qBBGtGMoNqVJ8gt29',
   '75vDwFcZ4msM6ztSnmqhvgxdMr6qk7iy3RLQGNdkeSry',
 ];
+
+function getAmountWeBuyBasedOnOther(otherPersonBuy: bigint) {
+  if (otherPersonBuy <= 500_000_000n)
+    //0.5 sol
+    return buyAmountSol!;
+  if (otherPersonBuy <= 1_000_000_000n)
+    //1 sol
+    return buyAmountSol! - buyAmountSol! / 10n; //10% off
+  if (otherPersonBuy <= 1_500_000_000n)
+    //1 5 sol
+    return buyAmountSol! - buyAmountSol! / 5n; //20% off
+  if (otherPersonBuy <= 2_000_000_000n)
+    //2 sol
+    return buyAmountSol! - (buyAmountSol! * 3n) / 10n; //30% off
+  if (otherPersonBuy <= 2_500_000_000n)
+    //2 5 sol
+    return buyAmountSol! - (buyAmountSol! * 4n) / 10n; //40% off
+  return buyAmountSol! - (buyAmountSol! * 5n) / 10n; //50% off
+}
 
 function findCommonElement(array1: string[], array2: string[]) {
   for (let i = 0; i < array1.length; i++) {
@@ -79,24 +97,18 @@ function findCommonElement(array1: string[], array2: string[]) {
   return false;
 }
 
-function isBuyDataOk(data: any) {
+function getOtherBuyValue(data: any) {
   try {
     const amountBuffer = data.slice(4);
     const reversedAmountBuffer = Buffer.from(amountBuffer).reverse();
 
     const buyValue = new BN(reversedAmountBuffer); // Use the relevant slice for the value
     console.log('Parsed BigNumber3:', buyValue.toString());
-    otherPersonBuySol = buyValue;
-
-    if (buyValue < 400000000n) {
-      logger.warn('Buy wrong');
-      return false;
-    } else return true;
+    return buyValue;
   } catch (e) {
     console.log(e);
   }
-  otherPersonBuySol = 0n;
-  return false;
+  return 0n;
 }
 // Example of subscribing to slot updates
 async function subscribeToSlotUpdates() {
@@ -137,13 +149,13 @@ async function subscribeToSlotUpdates() {
     )
       return;
     let tr2 = data.transaction?.transaction?.meta?.innerInstructions[2].instructions;
-
+    let otherpersonBuyValue = 0n;
     for (const t of tr2) {
       const dataBuffer = Buffer.from(t.data, 'base64');
       const opcode = dataBuffer.readUInt8(0); // First byte (should be 0x02 for transfer)
       if (opcode === 2) {
-        if (isBuyDataOk(dataBuffer)) break;
-        else return;
+        otherpersonBuyValue = getOtherBuyValue(dataBuffer);
+        break;
       }
     }
     const pkKeys: PublicKey[] = data.transaction?.transaction?.transaction?.message?.accountKeys.map(
@@ -154,8 +166,6 @@ async function subscribeToSlotUpdates() {
       logger.warn('Blacklisted');
       return;
     }
-    // if (isProcessing) return;
-    // isProcessing = true;
 
     const mintAddress = ins[0].instructions[0].accounts[1];
     const mint = pkKeys[mintAddress];
@@ -167,12 +177,13 @@ async function subscribeToSlotUpdates() {
     console.log('curve');
     console.log(curve);
     oldCurves.push({ curve: curve, mint: mint.toString() });
+    const weBuySol = getAmountWeBuyBasedOnOther(otherpersonBuyValue);
     logger.info('Started listening');
     await buyPump(
       wallet,
       mint,
-      buyAmountSol!,
-      calculateBuy(otherPersonBuySol)!,
+      weBuySol!,
+      calculateBuy(otherpersonBuyValue, weBuySol)!,
       globalAccount!,
       provider!,
       curve,
@@ -235,11 +246,10 @@ function clearState() {
   gotTokenData = false;
   tradesAmount = 0;
 }
-function calculateBuy(otherPersonBuyAmount: bigint) {
-  logger.info('Calcbuy');
+function calculateBuy(otherPersonBuyAmount: bigint, weBuySol: bigint) {
   const otherPersonCorrected = BigInt(otherPersonBuyAmount);
   const otherBuy = globalAccount!.getInitialBuyPrice(otherPersonCorrected);
-  const buyAmountTotal = globalAccount!.getInitialBuyPrice(otherPersonCorrected + buyAmountSol!);
+  const buyAmountTotal = globalAccount!.getInitialBuyPrice(otherPersonCorrected + weBuySol);
   return buyAmountTotal - otherBuy;
 }
 
