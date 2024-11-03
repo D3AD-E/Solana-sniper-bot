@@ -56,7 +56,6 @@ export async function buyPump(
   try {
     for (let i = 0; i < 3; i++) {
       const tipAccount = getRandomAccount();
-      const initialPrice = 1020010;
 
       const tipInstruction = SystemProgram.transfer({
         fromPubkey: wallet.publicKey,
@@ -67,7 +66,6 @@ export async function buyPump(
         payerKey: wallet.publicKey,
         recentBlockhash: block.blockhash,
         instructions: [
-          ComputeBudgetProgram.setComputeUnitPrice({ microLamports: initialPrice - i * 100000 }),
           ComputeBudgetProgram.setComputeUnitLimit({ units: 72000 }),
           ...buyTx.instructions,
           tipInstruction,
