@@ -60,7 +60,7 @@ export async function buyPump(
       const tipInstruction = SystemProgram.transfer({
         fromPubkey: wallet.publicKey,
         toPubkey: tipAccount,
-        lamports: isEconom ? tipAmount / 4 : tipAmount,
+        lamports: isEconom ? tipAmount / 12 : tipAmount,
       });
       const messageV0 = new TransactionMessage({
         payerKey: wallet.publicKey,
@@ -111,7 +111,7 @@ export async function sellPump(
   const tipInstruction = SystemProgram.transfer({
     fromPubkey: wallet.publicKey,
     toPubkey: tipAccount,
-    lamports: isEconom ? tipAmount / 4 : tipAmount,
+    lamports: isEconom ? tipAmount / 12 : tipAmount,
   });
   const messageV0 = new TransactionMessage({
     payerKey: wallet.publicKey,
