@@ -186,7 +186,7 @@ async function subscribeToSlotUpdates() {
     console.log(curve);
     oldCurves.push({ curve: curve, mint: mint.toString() });
     let weBuySol = getAmountWeBuyBasedOnOther(otherpersonBuyValue);
-    if (initialWalletBalance < 1) {
+    if (initialWalletBalance < 2) {
       weBuySol = weBuySol / 2n;
     }
     if (weBuySol === 0n) return;
@@ -207,7 +207,7 @@ async function subscribeToSlotUpdates() {
       provider!,
       curve,
       lastBlocks[lastBlocks.length - 1],
-      initialWalletBalance < 1,
+      initialWalletBalance < 2,
     );
     logger.info('Sent buy');
     // const localBoughtTokens = boughtTokens;
@@ -377,7 +377,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey)
     provider!,
     associatedCurve!,
     lastBlocks[lastBlocks.length - 1],
-    initialWalletBalance < 1,
+    initialWalletBalance < 2,
   );
   logger.info('Sold all');
   await summaryPrint();
@@ -477,7 +477,10 @@ async function summaryPrint() {
   const balance = await solanaConnection.getBalance(wallet.publicKey);
   const newWalletBalance = balance / 1_000_000_000;
   console.log('Wallet balance (in SOL):', newWalletBalance);
-  if (newWalletBalance > 1) softExit = true;
+  if (newWalletBalance > 1.2) {
+    sendMessage('Done');
+    softExit = true;
+  }
   console.log(
     newWalletBalance - initialWalletBalance > 0 ? 'Trade won' : 'Trade loss',
     'Diff',
