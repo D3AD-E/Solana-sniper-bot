@@ -351,7 +351,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey)
   console.log(total);
   if (total === 0n) return true;
   const firstPart = total / 2n;
-  await new Promise((resolve) => setTimeout(resolve, 4200));
+  await new Promise((resolve) => setTimeout(resolve, 3600));
   await sellPump(
     wallet,
     tokenAccount.accountInfo.mint,
@@ -360,6 +360,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey)
     provider!,
     associatedCurve!,
     lastBlocks[lastBlocks.length - 1],
+    initialWalletBalance < 1,
   );
   logger.info('Sold all');
   await summaryPrint();
@@ -433,27 +434,27 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey)
   // return false;
 }
 
-async function sellAll(currentMint: string, associatedCurve: PublicKey) {
-  existingTokenAccounts = await getTokenAccounts(
-    solanaConnection,
-    wallet.publicKey,
-    process.env.COMMITMENT as Commitment,
-  );
-  const tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === currentMint)!;
-  const newTotal = BigInt(tokenAccount.accountInfo.amount);
-  console.log(newTotal);
+// async function sellAll(currentMint: string, associatedCurve: PublicKey) {
+//   existingTokenAccounts = await getTokenAccounts(
+//     solanaConnection,
+//     wallet.publicKey,
+//     process.env.COMMITMENT as Commitment,
+//   );
+//   const tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === currentMint)!;
+//   const newTotal = BigInt(tokenAccount.accountInfo.amount);
+//   console.log(newTotal);
 
-  await sellPump(
-    wallet,
-    tokenAccount.accountInfo.mint,
-    newTotal,
-    globalAccount!,
-    provider!,
-    associatedCurve!,
-    lastBlocks[lastBlocks.length - 1],
-  );
-  logger.info('Sold all');
-}
+//   await sellPump(
+//     wallet,
+//     tokenAccount.accountInfo.mint,
+//     newTotal,
+//     globalAccount!,
+//     provider!,
+//     associatedCurve!,
+//     lastBlocks[lastBlocks.length - 1],
+//   );
+//   logger.info('Sold all');
+// }
 async function summaryPrint() {
   await new Promise((resolve) => setTimeout(resolve, 5000));
   const balance = await solanaConnection.getBalance(wallet.publicKey);
