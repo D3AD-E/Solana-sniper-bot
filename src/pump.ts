@@ -67,6 +67,7 @@ const blackList = [
 ];
 
 function getAmountWeBuyBasedOnOther(otherPersonBuy: bigint) {
+  if (otherPersonBuy >= 3_500_000_000n) return 0n;
   return buyAmountSol!;
   const initialStep = 500_000_000n;
   if (otherPersonBuy <= initialStep) return buyAmountSol!;
