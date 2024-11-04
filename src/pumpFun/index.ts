@@ -54,13 +54,13 @@ export async function buyPump(
     associatedBondingCurve,
   );
   try {
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 2; i++) {
       const tipAccount = getRandomAccount();
 
       const tipInstruction = SystemProgram.transfer({
         fromPubkey: wallet.publicKey,
         toPubkey: tipAccount,
-        lamports: isEconom ? tipAmount / 12 : tipAmount,
+        lamports: isEconom ? tipAmount / 2 : tipAmount,
       });
       const messageV0 = new TransactionMessage({
         payerKey: wallet.publicKey,
@@ -106,22 +106,32 @@ export async function sellPump(
     provider,
     associatedBondingCurve,
   );
-  const tipAccount = getRandomAccount();
 
-  const tipInstruction = SystemProgram.transfer({
-    fromPubkey: wallet.publicKey,
-    toPubkey: tipAccount,
-    lamports: isEconom ? tipAmount / 12 : tipAmount,
-  });
-  const messageV0 = new TransactionMessage({
-    payerKey: wallet.publicKey,
-    recentBlockhash: block.blockhash,
-    instructions: [...sellTx.instructions, tipInstruction],
-  }).compileToV0Message();
-
-  const transaction = new VersionedTransaction(messageV0);
-  transaction.sign([wallet]);
   logger.info('selling');
+
+  for (let i = 0; i < 1; i++) {
+    const tipAccount = getRandomAccount();
+
+    const tipInstruction = SystemProgram.transfer({
+      fromPubkey: wallet.publicKey,
+      toPubkey: tipAccount,
+      lamports: isEconom ? tipAmount / 2 : tipAmount,
+    });
+    const messageV0 = new TransactionMessage({
+      payerKey: wallet.publicKey,
+      recentBlockhash: block.blockhash,
+      instructions: [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 72000 }),
+        ...sellTx.instructions,
+        tipInstruction,
+      ],
+    }).compileToV0Message();
+
+    const transaction = new VersionedTransaction(messageV0);
+    transaction.sign([wallet]);
+    logger.info('sending');
+    sendBundles(wallet, transaction, block.blockhash);
+  }
 
   const messageV0NoTip = new TransactionMessage({
     payerKey: wallet.publicKey,
@@ -139,11 +149,6 @@ export async function sellPump(
     skipPreflight: true,
   });
   console.log(txid);
-  try {
-    sendBundles(wallet, transaction, block.blockhash);
-  } catch (e) {
-    console.error(e);
-  }
   return;
 }
 
