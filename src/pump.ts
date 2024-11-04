@@ -51,7 +51,7 @@ let globalAccount: GlobalAccount | undefined = undefined;
 let provider: AnchorProvider | undefined = undefined;
 let isSelling = false;
 let buyAmountSol: bigint | undefined = undefined;
-let boughtTokens = 0;
+let tokensSeen = 0;
 let tradesAmount = 0;
 let initialWalletBalance = 0;
 let tokenBuySellDiff = 0n;
@@ -65,6 +65,12 @@ const blackList = [
   'HTMnamSDgtkpHVBGA4ouQduJK5qBBGtGMoNqVJ8gt29',
   '75vDwFcZ4msM6ztSnmqhvgxdMr6qk7iy3RLQGNdkeSry',
 ];
+
+function calculateTokenAverage() {
+  logger.info(`${tokensSeen} tokens`);
+  sendMessage(`${tokensSeen} tokens`);
+  tokensSeen = 0;
+}
 
 function getAmountWeBuyBasedOnOther(otherPersonBuy: bigint) {
   if (otherPersonBuy >= 3_500_000_000n) return 0n;
@@ -149,6 +155,7 @@ async function subscribeToSlotUpdates() {
       !data.transaction?.transaction?.meta?.innerInstructions[2]
     )
       return;
+    tokensSeen++;
     let tr2 = data.transaction?.transaction?.meta?.innerInstructions[2].instructions;
     let otherpersonBuyValue = 0n;
     for (const t of tr2) {
@@ -268,6 +275,7 @@ function calculateBuy(otherPersonBuyAmount: bigint, weBuySol: bigint) {
 
 export default async function snipe(): Promise<void> {
   setInterval(storeRecentBlockhashes, 700);
+  setInterval(calculateTokenAverage, 1000 * 60);
   sendMessage(`Started`);
 
   await new Promise((resolve) => setTimeout(resolve, 5000));
@@ -316,8 +324,8 @@ async function storeRecentBlockhashes() {
 }
 
 async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey) {
-  console.log('Monitoring partial sell');
-  sendMessage(`Monitoring partial sell for ${currentMint}`);
+  console.log('Monitoring sell');
+  sendMessage(`Monitoring sell for ${currentMint}`);
 
   existingTokenAccounts = await getTokenAccounts(
     solanaConnection,
@@ -474,9 +482,6 @@ async function summaryPrint() {
     newWalletBalance - initialWalletBalance > 0 ? 'Trade won' : 'Trade loss',
     'Diff',
     newWalletBalance - initialWalletBalance,
-  );
-  sendMessage(
-    `${newWalletBalance - initialWalletBalance > 0 ? 'Trade won' : 'Trade loss'} ${newWalletBalance - initialWalletBalance}`,
   );
   initialWalletBalance = newWalletBalance;
 }
