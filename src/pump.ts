@@ -23,7 +23,7 @@ const quoteToken = Token.WSOL;
 let swapAmount: TokenAmount;
 
 let ws: WebSocket | undefined = undefined;
-
+let lastRequestDate = new Date().getTime();
 let lastBlocks: Block[] = [];
 let processedTokens: string[] = [];
 let workerPool: WorkerPool | undefined = undefined;
@@ -182,7 +182,15 @@ async function subscribeToSlotUpdates() {
     if (initialWalletBalance < 1) {
       weBuySol = weBuySol / 2n;
     }
+    if (weBuySol === 0n) return;
     logger.info('Started listening');
+    const now = new Date();
+    if (now.getTime() - lastRequestDate < 1 * 1000) {
+      //1 sec rate limit
+      logger.warn('Rate limit');
+      return;
+    }
+    lastRequestDate = now.getTime();
     await buyPump(
       wallet,
       mint,
