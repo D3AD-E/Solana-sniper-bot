@@ -461,7 +461,7 @@ async function summaryPrint() {
   const balance = await solanaConnection.getBalance(wallet.publicKey);
   const newWalletBalance = balance / 1_000_000_000;
   console.log('Wallet balance (in SOL):', newWalletBalance);
-  if (newWalletBalance > 2.5) softExit = true;
+  if (newWalletBalance > 1) softExit = true;
   console.log(
     newWalletBalance - initialWalletBalance > 0 ? 'Trade won' : 'Trade loss',
     'Diff',
