@@ -198,11 +198,13 @@ async function subscribeToSnipeUpdates() {
       const opcode = dataBuffer.readUInt8(0); // First byte (should be 0x02 for transfer)
       if (opcode === 2) {
         const pumpBuy = getOtherBuyValue(dataBuffer);
-        if (pumpBuy >= 600_000_000) {
+        console.log(pumpBuy);
+        if (pumpBuy >= 600_000_000n) {
           buyEvents.push({ timestamp: new Date().getTime() });
           const now = Date.now();
           const filteredEvents = buyEvents.filter((event) => now - event.timestamp <= 120000);
           console.log(filteredEvents);
+          console.log(buyEvents);
         }
         break;
       }
