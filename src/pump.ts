@@ -28,6 +28,7 @@ import { struct, u32, u8 } from '@solana/buffer-layout';
 import eventEmitter from './eventEmitter';
 import { USER_STOP_EVENT } from './eventEmitter/eventEmitter.consts';
 import { writeFile } from 'fs/promises';
+import { LEADERS_FILE_NAME } from './constants';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
@@ -422,10 +423,11 @@ export default async function snipe(): Promise<void> {
       const token = oldCurves.find((x) => x.mint === event.mint.toString());
       if (token) {
         buyValues.push(token.otherPersonBuyAmount.toString());
-        if (buyValues.length % 10) {
+        if (buyValues.length % 10 === 0) {
           try {
             console.log('Writing');
-            await writeFile('resultbuys.json', JSON.stringify(buyValues));
+            console.log(buyValues);
+            await writeFile(LEADERS_FILE_NAME, JSON.stringify(buyValues));
           } catch (e) {}
         }
       }
@@ -494,7 +496,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey)
   console.log(total);
   if (total === 0n) return true;
   const firstPart = total / 2n;
-  await new Promise((resolve) => setTimeout(resolve, 2500));
+  await new Promise((resolve) => setTimeout(resolve, 2800));
   await sellPump(
     wallet,
     tokenAccount.accountInfo.mint,
