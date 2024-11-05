@@ -308,7 +308,6 @@ async function subscribeToSlotUpdates() {
       (x: any) => new PublicKey(x),
     );
     const pkKeysStr = pkKeys.map((x) => x.toString().toLowerCase());
-    console.log(pkKeysStr);
     if (findCommonElement(pkKeysStr, blackList)) {
       logger.warn('Blacklisted');
       return;
