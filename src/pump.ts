@@ -161,7 +161,7 @@ async function subscribeToSnipeUpdates() {
     console.log(ins);
     console.log(ins.map((x: any) => x.instructions));
     if (ins.length !== 2) return;
-    const instweIntrested = ins[1];
+    const instweIntrested = ins[1].instructions;
     for (const t of instweIntrested) {
       const dataBuffer = Buffer.from(t.data, 'base64');
       const opcode = dataBuffer.readUInt8(0); // First byte (should be 0x02 for transfer)
