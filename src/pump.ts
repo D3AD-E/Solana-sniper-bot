@@ -96,10 +96,6 @@ let jitoData: {
   [key: string]: SlotList;
 };
 
-export interface SlotList {
-  slots: number[];
-}
-
 eventEmitter.on(USER_STOP_EVENT, (data) => {
   softExit = true;
   console.log(softExit);
