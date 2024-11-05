@@ -1,6 +1,14 @@
 import { TokenAmount, Token, TokenAccount, TOKEN_PROGRAM_ID } from '@raydium-io/raydium-sdk';
 import { AccountLayout } from '@solana/spl-token';
-import { Commitment, LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js';
+import {
+  Commitment,
+  ComputeBudgetProgram,
+  LAMPORTS_PER_SOL,
+  PublicKey,
+  SystemProgram,
+  TransactionMessage,
+  VersionedTransaction,
+} from '@solana/web3.js';
 import { u64 } from '@solana/buffer-layout-utils';
 import { getTokenAccounts } from './cryptoQueries';
 import logger from './utils/logger';
@@ -28,6 +36,7 @@ let lastBlocks: Block[] = [];
 let processedTokens: string[] = [];
 let workerPool: WorkerPool | undefined = undefined;
 let softExit = false;
+let secondWallet: PublicKey | undefined = undefined;
 let isProcessing = false;
 const getProvider = () => {
   const walletAnchor = new Wallet(wallet);
@@ -116,7 +125,76 @@ function getOtherBuyValue(data: any) {
   }
   return 0n;
 }
-// Example of subscribing to slot updates
+
+async function subscribeToSnipeUpdates() {
+  const client = new Client('http://localhost:10000', 'args.xToken', {
+    'grpc.max_receive_message_length': 64 * 1024 * 1024, // 64MiB
+  });
+
+  // Subscribe for events
+  const stream = await client.subscribe();
+
+  // Create `error` / `end` handler
+  const streamClosed = new Promise<void>((resolve, reject) => {
+    stream.on('error', (error) => {
+      reject(error);
+      stream.end();
+    });
+    stream.on('end', () => {
+      resolve();
+    });
+    stream.on('close', () => {
+      resolve();
+    });
+  });
+
+  // Handle updates
+  stream.on('data', async (data) => {
+    // if (isProcessing) return;
+    if (softExit) return;
+    const ins = data.transaction?.transaction?.meta?.innerInstructions;
+    if (!ins) return;
+    const signatureString = bs58.encode(data.transaction.transaction.signature);
+    logger.info('Signature');
+    console.log(signatureString);
+    console.log('pump');
+    console.log(ins);
+  });
+  // Create subscribe request based on provided arguments.
+  const request: SubscribeRequest = {
+    slots: {},
+    accounts: {},
+    transactions: {
+      serum: {
+        vote: false,
+        accountInclude: [],
+        accountExclude: [],
+        accountRequired: ['12BRrNxzJYMx7cRhuBdhA71AchuxWRcvGydNnDoZpump'],
+      },
+    },
+    blocks: {},
+    blocksMeta: {},
+    accountsDataSlice: [],
+    transactionsStatus: {},
+    entry: {},
+  };
+  // Send subscribe request
+  await new Promise<void>((resolve, reject) => {
+    stream.write(request, (err: any) => {
+      if (err === null || err === undefined) {
+        resolve();
+      } else {
+        reject(err);
+      }
+    });
+  }).catch((reason) => {
+    console.error(reason);
+    throw reason;
+  });
+
+  await streamClosed;
+}
+
 async function subscribeToSlotUpdates() {
   const client = new Client('http://localhost:10000', 'args.xToken', {
     'grpc.max_receive_message_length': 64 * 1024 * 1024, // 64MiB
@@ -198,26 +276,18 @@ async function subscribeToSlotUpdates() {
       return;
     }
     lastRequestDate = now.getTime();
-    await buyPump(
-      wallet,
-      mint,
-      weBuySol!,
-      calculateBuy(otherpersonBuyValue, weBuySol)!,
-      globalAccount!,
-      provider!,
-      curve,
-      lastBlocks[lastBlocks.length - 1],
-      initialWalletBalance < 2,
-    );
-    logger.info('Sent buy');
-    // const localBoughtTokens = boughtTokens;
-    // await new Promise((resolve) => setTimeout(resolve, 3000));
-    // //fix boughttokens
-    // console.log('Failbuy check', !gotTokenData, localBoughtTokens === boughtTokens);
-    // if (!gotTokenData && localBoughtTokens === boughtTokens) {
-    //   logger.warn('Buy failed');
-    //   clearState();
-    // }
+    // await buyPump(
+    //   wallet,
+    //   mint,
+    //   weBuySol!,
+    //   calculateBuy(otherpersonBuyValue, weBuySol)!,
+    //   globalAccount!,
+    //   provider!,
+    //   curve,
+    //   lastBlocks[lastBlocks.length - 1],
+    //   initialWalletBalance < 2,
+    // );
+    // logger.info('Sent buy');
   });
   // Create subscribe request based on provided arguments.
   const request: SubscribeRequest = {
@@ -282,7 +352,7 @@ export default async function snipe(): Promise<void> {
   const client = await JitoClient.getInstance();
   logger.info('Starting');
   provider = getProvider();
-
+  secondWallet = new PublicKey(process.env.SECOND_WALLET);
   existingTokenAccounts = await getTokenAccounts(
     solanaConnection,
     wallet.publicKey,
@@ -299,7 +369,7 @@ export default async function snipe(): Promise<void> {
   console.log('Wallet balance (in SOL):', initialWalletBalance);
   // Call the subscription function
   subscribeToSlotUpdates();
-
+  subscribeToSnipeUpdates();
   let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
     if (event.mint.toString() === mintAccount) {
       if (event.user.toString() === wallet.publicKey.toString()) return;
@@ -384,102 +454,36 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey)
   clearState();
 
   return false;
-  // await sellPump(
-  //   wallet,
-  //   tokenAccount.accountInfo.mint,
-  //   firstPart,
-  //   globalAccount!,
-  //   provider!,
-  //   associatedCurve!,
-  //   lastBlocks[lastBlocks.length - 1],
-  // );
-  // //sell 1/5 later
-  // const secondPart = total / 5n;
-  // await new Promise((resolve) => setTimeout(resolve, 15000));
-  // logger.info('Sell 2/4');
-
-  // await sellPump(
-  //   wallet,
-  //   tokenAccount.accountInfo.mint,
-  //   secondPart,
-  //   globalAccount!,
-  //   provider!,
-  //   associatedCurve!,
-  //   lastBlocks[lastBlocks.length - 1],
-  // );
-
-  // await new Promise((resolve) => setTimeout(resolve, 3900 * 60));
-  // logger.info('Sell 3/4');
-
-  // const thirdPart = total / 10n;
-  // console.log(tradesAmount);
-  // if (tradesAmount < 5) {
-  //   logger.warn('Inactive pair');
-  //   await sellAll(currentMint);
-  //   await summaryPrint();
-  //   clearState();
-
-  //   return false;
-  // }
-  // await sellPump(
-  //   wallet,
-  //   tokenAccount.accountInfo.mint,
-  //   thirdPart,
-  //   globalAccount!,
-  //   provider!,
-  //   associatedCurve!,
-  //   lastBlocks[lastBlocks.length - 1],
-  // );
-  // await new Promise((resolve) => setTimeout(resolve, 1800 * 60));
-  // logger.info('Sell 4/4');
-
-  // const forthPart = total / 20n;
-  // await sellPump(
-  //   wallet,
-  //   tokenAccount.accountInfo.mint,
-  //   forthPart,
-  //   globalAccount!,
-  //   provider!,
-  //   associatedCurve!,
-  //   lastBlocks[lastBlocks.length - 1],
-  // );
-  // await new Promise((resolve) => setTimeout(resolve, 1800 * 60));
-  // //all
-  // await sellAll(currentMint);
-  // await summaryPrint();
-  // clearState();
-  // return false;
 }
 
-// async function sellAll(currentMint: string, associatedCurve: PublicKey) {
-//   existingTokenAccounts = await getTokenAccounts(
-//     solanaConnection,
-//     wallet.publicKey,
-//     process.env.COMMITMENT as Commitment,
-//   );
-//   const tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === currentMint)!;
-//   const newTotal = BigInt(tokenAccount.accountInfo.amount);
-//   console.log(newTotal);
+async function transferFunds() {
+  const sendInstruction = SystemProgram.transfer({
+    fromPubkey: wallet.publicKey,
+    toPubkey: secondWallet!,
+    lamports: 500_000_000n,
+  });
+  const messageV0 = new TransactionMessage({
+    payerKey: wallet.publicKey,
+    recentBlockhash: lastBlocks[lastBlocks.length - 1].blockhash,
+    instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: 72000 }), sendInstruction],
+  }).compileToV0Message();
 
-//   await sellPump(
-//     wallet,
-//     tokenAccount.accountInfo.mint,
-//     newTotal,
-//     globalAccount!,
-//     provider!,
-//     associatedCurve!,
-//     lastBlocks[lastBlocks.length - 1],
-//   );
-//   logger.info('Sold all');
-// }
+  const transaction = new VersionedTransaction(messageV0);
+  transaction.sign([wallet]);
+  const txid = await solanaConnection.sendTransaction(transaction, {
+    skipPreflight: true,
+  });
+  console.log(txid);
+}
+
 async function summaryPrint() {
   await new Promise((resolve) => setTimeout(resolve, 5000));
   const balance = await solanaConnection.getBalance(wallet.publicKey);
   const newWalletBalance = balance / 1_000_000_000;
   console.log('Wallet balance (in SOL):', newWalletBalance);
-  if (newWalletBalance > 1.2) {
+  if (newWalletBalance > 3) {
     sendMessage('Done');
-    softExit = true;
+    await transferFunds();
   }
   console.log(
     newWalletBalance - initialWalletBalance > 0 ? 'Trade won' : 'Trade loss',
