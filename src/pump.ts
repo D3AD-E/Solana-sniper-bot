@@ -352,7 +352,7 @@ export default async function snipe(): Promise<void> {
   const client = await JitoClient.getInstance();
   logger.info('Starting');
   provider = getProvider();
-  secondWallet = new PublicKey(process.env.SECOND_WALLET);
+  secondWallet = new PublicKey(process.env.SECOND_WALLET!);
   existingTokenAccounts = await getTokenAccounts(
     solanaConnection,
     wallet.publicKey,
