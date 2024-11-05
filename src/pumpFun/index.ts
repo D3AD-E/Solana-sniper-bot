@@ -42,7 +42,7 @@ export async function buyPump(
   provider: Provider,
   associatedBondingCurve: PublicKey,
   block: Block,
-  isEconom: boolean,
+  jitoTip: bigint,
 ) {
   let buyTx = await getBuyInstructions(
     buyer.publicKey,
@@ -59,7 +59,7 @@ export async function buyPump(
     const tipInstruction = SystemProgram.transfer({
       fromPubkey: wallet.publicKey,
       toPubkey: tipAccount,
-      lamports: isEconom ? tipAmount : tipAmount,
+      lamports: jitoTip,
     });
     const messageV0 = new TransactionMessage({
       payerKey: wallet.publicKey,
@@ -90,7 +90,7 @@ export async function sellPump(
   provider: Provider,
   associatedBondingCurve: PublicKey,
   block: Block,
-  isEconom: boolean,
+  jitoTip: bigint,
 ) {
   let sellTx = await getSellInstructions(
     buyer.publicKey,
@@ -109,7 +109,7 @@ export async function sellPump(
     const tipInstruction = SystemProgram.transfer({
       fromPubkey: wallet.publicKey,
       toPubkey: tipAccount,
-      lamports: isEconom ? tipAmount / 2 : tipAmount,
+      lamports: jitoTip,
     });
     const messageV0 = new TransactionMessage({
       payerKey: wallet.publicKey,

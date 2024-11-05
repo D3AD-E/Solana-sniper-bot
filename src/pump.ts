@@ -42,6 +42,7 @@ let workerPool: WorkerPool | undefined = undefined;
 let softExit = false;
 let secondWallet: PublicKey | undefined = undefined;
 let isProcessing = false;
+let latestJitoTip: bigint | undefined = undefined;
 const getProvider = () => {
   const walletAnchor = new Wallet(wallet);
   const provider = new AnchorProvider(solanaConnection, walletAnchor, {
@@ -162,7 +163,6 @@ function getOtherBuyValue(data: any) {
     const reversedAmountBuffer = Buffer.from(amountBuffer).reverse();
 
     const buyValue = new BN(reversedAmountBuffer); // Use the relevant slice for the value
-    console.log('Parsed BigNumber3:', buyValue.toString());
     return buyValue;
   } catch (e) {
     console.log(e);
@@ -203,24 +203,28 @@ async function subscribeToSnipeUpdates() {
     console.log(signatureString);
     if (ins.length !== 2) return;
     const instweIntrested = ins[1].instructions;
-    for (const t of instweIntrested) {
-      const dataBuffer = Buffer.from(t.data, 'base64');
-      const opcode = dataBuffer.readUInt8(0); // First byte (should be 0x02 for transfer)
-      if (opcode === 2) {
-        const metaInstruction = data.transaction.transaction.transaction.message.instructions;
-        const jitoTransfer = metaInstruction[metaInstruction.length - 1];
-        const jitoBuffer = Buffer.from(jitoTransfer.data, 'base64');
-        const jitoTip = getOtherBuyValue(jitoBuffer);
-        console.log(jitoTip.toString());
-        const pumpBuy = getOtherBuyValue(dataBuffer);
-        if (pumpBuy >= 600_000_000n) {
-          buyEvents.push({ timestamp: new Date().getTime() });
+    try {
+      for (const t of instweIntrested) {
+        const dataBuffer = Buffer.from(t.data, 'base64');
+        const opcode = dataBuffer.readUInt8(0); // First byte (should be 0x02 for transfer)
+        if (opcode === 2) {
+          const metaInstruction = data.transaction.transaction.transaction.message.instructions;
+          const jitoTransfer = metaInstruction[metaInstruction.length - 1];
+          const jitoBuffer = Buffer.from(jitoTransfer.data, 'base64');
+          const jitoTip = getOtherBuyValue(jitoBuffer);
+          const pumpBuy = getOtherBuyValue(dataBuffer);
+          if (pumpBuy >= 600_000_000n) {
+            buyEvents.push({ timestamp: new Date().getTime() });
+            latestJitoTip = jitoTip;
+          }
+          const now = Date.now();
+          const filteredEvents = buyEvents.filter((event) => now - event.timestamp <= 120000);
+          shouldWeBuy = filteredEvents.length >= 2;
+          break;
         }
-        const now = Date.now();
-        const filteredEvents = buyEvents.filter((event) => now - event.timestamp <= 120000);
-        shouldWeBuy = filteredEvents.length >= 2;
-        break;
       }
+    } catch (e) {
+      console.error(e);
     }
   });
   // Create subscribe request based on provided arguments.
@@ -335,17 +339,17 @@ async function subscribeToSlotUpdates() {
     let weBuySol = getAmountWeBuyBasedOnOther(otherpersonBuyValue);
     if (weBuySol === 0n) return;
     logger.info('Started listening');
-    // await buyPump(
-    //   wallet,
-    //   mint,
-    //   weBuySol!,
-    //   calculateBuy(otherpersonBuyValue, weBuySol)!,
-    //   globalAccount!,
-    //   provider!,
-    //   curve,
-    //   lastBlocks[lastBlocks.length - 1],
-    //   false,
-    // );
+    await buyPump(
+      wallet,
+      mint,
+      weBuySol!,
+      calculateBuy(otherpersonBuyValue, weBuySol)!,
+      globalAccount!,
+      provider!,
+      curve,
+      lastBlocks[lastBlocks.length - 1],
+      latestJitoTip! + 1000n,
+    );
     logger.info('Sent buy');
   });
   // Create subscribe request based on provided arguments.
@@ -515,7 +519,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey,
     provider!,
     associatedCurve!,
     lastBlocks[lastBlocks.length - 1],
-    false,
+    latestJitoTip! + 1000n,
   );
   logger.info('Sold all');
   await summaryPrint(otherPersonAddress);
