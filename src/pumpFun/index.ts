@@ -44,6 +44,8 @@ export async function buyPump(
   block: Block,
   jitoTip: bigint,
 ) {
+  console.log(jitoTip.toString());
+  console.log(tipAmount);
   let buyTx = await getBuyInstructions(
     buyer.publicKey,
     mint,
