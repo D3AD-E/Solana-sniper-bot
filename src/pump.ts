@@ -199,7 +199,6 @@ async function subscribeToSnipeUpdates() {
     const ins = data.transaction?.transaction?.meta?.innerInstructions;
     if (!ins) return;
     const signatureString = bs58.encode(data.transaction.transaction.signature);
-    console.log(data.transaction.transaction);
     logger.info('Signature');
     console.log(signatureString);
     if (ins.length !== 2) return;
@@ -208,6 +207,9 @@ async function subscribeToSnipeUpdates() {
       const dataBuffer = Buffer.from(t.data, 'base64');
       const opcode = dataBuffer.readUInt8(0); // First byte (should be 0x02 for transfer)
       if (opcode === 2) {
+        console.log(data.transaction.transaction);
+        console.log(data.transaction.transaction.transaction.message);
+
         const pumpBuy = getOtherBuyValue(dataBuffer);
         if (pumpBuy >= 600_000_000n) {
           buyEvents.push({ timestamp: new Date().getTime() });
