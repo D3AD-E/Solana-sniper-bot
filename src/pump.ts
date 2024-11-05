@@ -46,9 +46,22 @@ const getProvider = () => {
   return provider;
 };
 
+type BuyEvent = {
+  timestamp: number;
+};
+
 type CurveMint = {
   mint: string;
   curve: PublicKey;
+};
+type TipsData = {
+  time: string; // ISO timestamp as a string
+  landed_tips_25th_percentile: number;
+  landed_tips_50th_percentile: number;
+  landed_tips_75th_percentile: number;
+  landed_tips_95th_percentile: number;
+  landed_tips_99th_percentile: number;
+  ema_landed_tips_50th_percentile: number;
 };
 
 let oldCurves: CurveMint[] = [];
@@ -58,12 +71,14 @@ let gotTokenData = false;
 let mintAccount = '';
 let globalAccount: GlobalAccount | undefined = undefined;
 let provider: AnchorProvider | undefined = undefined;
-let isSelling = false;
+let shouldWeBuy = false;
 let buyAmountSol: bigint | undefined = undefined;
 let tokensSeen = 0;
 let tradesAmount = 0;
 let initialWalletBalance = 0;
 let tokenBuySellDiff = 0n;
+let buyEvents: BuyEvent[] = [];
+let currentTips: TipsData | undefined = undefined;
 
 const blackList = [
   '4RAxiPpuxjKFnp1vUBGV8G8pubujLffktWxSkBxWU6SQ',
@@ -79,6 +94,23 @@ function calculateTokenAverage() {
   logger.info(`${tokensSeen} tokens`);
   sendMessage(`${tokensSeen} tokens`);
   tokensSeen = 0;
+}
+
+async function fetchTipsData(): Promise<void> {
+  try {
+    const response = await fetch('http://bundles-api-rest.jito.wtf/api/v1/bundles/tip_floor');
+
+    if (!response.ok) {
+      console.error('Failed to fetch data:', response.statusText);
+      return;
+    }
+
+    const data: TipsData[] = await response.json();
+    currentTips = data[0];
+    console.log(currentTips);
+  } catch (error) {
+    console.error('Error fetching tips data:', error);
+  }
 }
 
 function getAmountWeBuyBasedOnOther(otherPersonBuy: bigint) {
@@ -253,6 +285,10 @@ async function subscribeToSlotUpdates() {
       const opcode = dataBuffer.readUInt8(0); // First byte (should be 0x02 for transfer)
       if (opcode === 2) {
         otherpersonBuyValue = getOtherBuyValue(dataBuffer);
+        buyEvents.push({ timestamp: new Date().getTime() });
+        const now = Date.now();
+        const filteredEvents = buyEvents.filter((event) => now - event.timestamp <= 120000);
+        console.log(filteredEvents);
         break;
       }
     }
@@ -281,13 +317,6 @@ async function subscribeToSlotUpdates() {
     }
     if (weBuySol === 0n) return;
     logger.info('Started listening');
-    const now = new Date();
-    if (now.getTime() - lastRequestDate < 1 * 1000) {
-      //1 sec rate limit
-      logger.warn('Rate limit');
-      return;
-    }
-    lastRequestDate = now.getTime();
     // await buyPump(
     //   wallet,
     //   mint,
@@ -357,6 +386,7 @@ function calculateBuy(otherPersonBuyAmount: bigint, weBuySol: bigint) {
 
 export default async function snipe(): Promise<void> {
   setInterval(storeRecentBlockhashes, 700);
+  setInterval(fetchTipsData, 500);
   setInterval(calculateTokenAverage, 1000 * 60);
   sendMessage(`Started`);
 
