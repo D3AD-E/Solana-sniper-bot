@@ -58,6 +58,7 @@ type CurveMint = {
   mint: string;
   curve: PublicKey;
   otherPersonBuyAmount: bigint;
+  otherPersonAddress: string;
 };
 type TipsData = {
   time: string; // ISO timestamp as a string
@@ -321,7 +322,12 @@ async function subscribeToSlotUpdates() {
     const curve = pkKeys[curveAddress];
     console.log('curve');
     console.log(curve);
-    oldCurves.push({ curve: curve, mint: mint.toString(), otherPersonBuyAmount: otherpersonBuyValue });
+    oldCurves.push({
+      curve: curve,
+      mint: mint.toString(),
+      otherPersonBuyAmount: otherpersonBuyValue,
+      otherPersonAddress: pkKeysStr[0],
+    });
     let weBuySol = getAmountWeBuyBasedOnOther(otherpersonBuyValue);
     if (weBuySol === 0n) return;
     logger.info('Started listening');
@@ -451,7 +457,7 @@ async function storeRecentBlockhashes() {
   }
 }
 
-async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey) {
+async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey, otherPersonAddress: string) {
   console.log('Monitoring sell');
   sendMessage(`Monitoring sell for ${currentMint}`);
 
@@ -508,7 +514,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey)
     false,
   );
   logger.info('Sold all');
-  await summaryPrint(tokenAccount.accountInfo.mint.toString());
+  await summaryPrint(otherPersonAddress);
   clearState();
 
   return false;
@@ -577,10 +583,10 @@ async function listenToChanges() {
         // if (gotTokenData) return;
         // gotTokenData = true;
         const curve = oldCurves.find((x) => x.mint === accountData.mint.toString());
-        if (curve) await monitorSellLogic(accountData.mint.toString(), curve.curve);
+        if (curve) await monitorSellLogic(accountData.mint.toString(), curve.curve, curve.otherPersonAddress);
       } else {
         const curve = oldCurves.find((x) => x.mint === accountData.mint.toString());
-        if (curve) await monitorSellLogic(accountData.mint.toString(), curve.curve);
+        if (curve) await monitorSellLogic(accountData.mint.toString(), curve.curve, curve.otherPersonAddress);
       }
       // if (!workerPool!.doesTokenExist(accountData.mint.toString())) {
       //   logger.warn('Got unknown token in wallet');
