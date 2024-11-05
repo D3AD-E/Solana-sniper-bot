@@ -361,10 +361,10 @@ async function subscribeToSlotUpdates() {
     });
     let weBuySol = getAmountWeBuyBasedOnOther(otherpersonBuyValue);
     if (weBuySol === 0n) return;
-    if (!hasSlotInRange(jitoData, currentSlot + 10, 3)) {
-      logger.warn('No slot');
-      return;
-    }
+    // if (!hasSlotInRange(jitoData, currentSlot + 10, 3)) {
+    //   logger.warn('No slot');
+    //   return;
+    // }
     logger.info('Started listening');
     await buyPump(
       wallet,
@@ -436,11 +436,12 @@ function calculateBuy(otherPersonBuyAmount: bigint, weBuySol: bigint) {
 export default async function snipe(): Promise<void> {
   setInterval(storeRecentBlockhashes, 700);
   // setInterval(fetchTipsData, 500);
-  setInterval(refreshCurrentSlot, 500);
-  setInterval(getJitoLeaders, 1000 * 60 * 5);
+  // setInterval(refreshCurrentSlot, 500);
+  // setInterval(getJitoLeaders, 1000 * 60 * 5);
   setInterval(calculateTokenAverage, 1000 * 60);
   sendMessage(`Started`);
   blackList = JSON.parse((await readFile(BLACKLIST_FILE_NAME)).toString()) as string[];
+  console.log(blackList);
   await getJitoLeaders();
   await new Promise((resolve) => setTimeout(resolve, 5000));
   const client = await JitoClient.getInstance();
