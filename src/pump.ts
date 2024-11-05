@@ -28,12 +28,15 @@ import { struct, u32, u8 } from '@solana/buffer-layout';
 import eventEmitter from './eventEmitter';
 import { USER_STOP_EVENT } from './eventEmitter/eventEmitter.consts';
 import { readFile, writeFile } from 'fs/promises';
-import { LEADERS_FILE_NAME } from './constants';
+import { BLACKLIST_FILE_NAME, LEADERS_FILE_NAME } from './constants';
+import { SlotList } from 'jito-ts/dist/gen/block-engine/searcher';
+import { readLeaders, refreshLeaders } from './jito/leaders';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
 let swapAmount: TokenAmount;
 
+let currentSlot = 0;
 let ws: WebSocket | undefined = undefined;
 let lastRequestDate = new Date().getTime();
 let lastBlocks: Block[] = [];
@@ -89,6 +92,13 @@ let currentTips: TipsData | undefined = undefined;
 let buyValues: string[] = [];
 const pumpWallet = '12BRrNxzJYMx7cRhuBdhA71AchuxWRcvGydNnDoZpump';
 let blackList: string[] = [];
+let jitoData: {
+  [key: string]: SlotList;
+};
+
+export interface SlotList {
+  slots: number[];
+}
 
 eventEmitter.on(USER_STOP_EVENT, (data) => {
   softExit = true;
@@ -99,6 +109,31 @@ function calculateTokenAverage() {
   logger.info(`${tokensSeen} tokens`);
   sendMessage(`${tokensSeen} tokens`);
   tokensSeen = 0;
+}
+
+function hasSlotInRange(jitoData: { [key: string]: SlotList }, target: number, tolerance: number): boolean {
+  const lowerBound = target - tolerance;
+  const upperBound = target + tolerance;
+
+  for (const key in jitoData) {
+    const slotList = jitoData[key].slots;
+    for (const slot of slotList) {
+      if (slot >= lowerBound && slot <= upperBound) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+async function refreshCurrentSlot() {
+  currentSlot = await solanaConnection.getSlot();
+}
+
+async function getJitoLeaders() {
+  await refreshLeaders();
+  jitoData = await readLeaders();
 }
 
 async function fetchTipsData(): Promise<void> {
@@ -329,6 +364,10 @@ async function subscribeToSlotUpdates() {
     });
     let weBuySol = getAmountWeBuyBasedOnOther(otherpersonBuyValue);
     if (weBuySol === 0n) return;
+    if (!hasSlotInRange(jitoData, currentSlot + 10, 1)) {
+      logger.warn('No slot');
+      return;
+    }
     logger.info('Started listening');
     await buyPump(
       wallet,
@@ -399,11 +438,13 @@ function calculateBuy(otherPersonBuyAmount: bigint, weBuySol: bigint) {
 
 export default async function snipe(): Promise<void> {
   setInterval(storeRecentBlockhashes, 700);
-  setInterval(fetchTipsData, 500);
+  // setInterval(fetchTipsData, 500);
+  setInterval(refreshCurrentSlot, 500);
+  setInterval(getJitoLeaders, 1000 * 60 * 5);
   setInterval(calculateTokenAverage, 1000 * 60);
   sendMessage(`Started`);
-  blackList = JSON.parse((await readFile(LEADERS_FILE_NAME)).toString()) as string[];
-
+  blackList = JSON.parse((await readFile(BLACKLIST_FILE_NAME)).toString()) as string[];
+  await getJitoLeaders();
   await new Promise((resolve) => setTimeout(resolve, 5000));
   const client = await JitoClient.getInstance();
   logger.info('Starting');
@@ -558,7 +599,7 @@ async function summaryPrint(mint: string) {
   if (newWalletBalance - initialWalletBalance < -0.02) {
     try {
       blackList.push(mint);
-      await writeFile(LEADERS_FILE_NAME, JSON.stringify(blackList));
+      await writeFile(BLACKLIST_FILE_NAME, JSON.stringify(blackList));
     } catch (e) {}
   }
   initialWalletBalance = newWalletBalance;
