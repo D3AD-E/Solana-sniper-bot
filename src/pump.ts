@@ -86,7 +86,7 @@ let buyEvents: BuyEvent[] = [];
 let currentTips: TipsData | undefined = undefined;
 let buyValues: string[] = [];
 const pumpWallet = '12BRrNxzJYMx7cRhuBdhA71AchuxWRcvGydNnDoZpump';
-const blackList = [
+let blackList = [
   '4RAxiPpuxjKFnp1vUBGV8G8pubujLffktWxSkBxWU6SQ',
   '5LAiMexZHGtWkkcw3uhLDNt263HFYazaZHJtKjq1duxk',
   '62GTFDBV2FjsBFTjEhMjRBW5AzjUKK8ycY7tq1teBLkY',
@@ -94,6 +94,7 @@ const blackList = [
   '9Hb6DRHm4vaZRfqKN71qR7aNHirG7d5g86a4hm5xDVFt',
   'HTMnamSDgtkpHVBGA4ouQduJK5qBBGtGMoNqVJ8gt29',
   '75vDwFcZ4msM6ztSnmqhvgxdMr6qk7iy3RLQGNdkeSry',
+  'BkWtnmXwHppKyG6arwQXLwxMJooBWyuezawSgHxBpzVR',
 ];
 
 eventEmitter.on(USER_STOP_EVENT, (data) => {
@@ -124,7 +125,7 @@ async function fetchTipsData(): Promise<void> {
 }
 
 function getAmountWeBuyBasedOnOther(otherPersonBuy: bigint) {
-  if (otherPersonBuy >= 3_500_000_000n) return 0n;
+  if (otherPersonBuy > 5_000_000_000n) return 0n;
   return buyAmountSol!;
   const initialStep = 500_000_000n;
   if (otherPersonBuy <= initialStep) return buyAmountSol!;
@@ -418,23 +419,23 @@ export default async function snipe(): Promise<void> {
   // Call the subscription function
   subscribeToSlotUpdates();
   subscribeToSnipeUpdates();
-  let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
-    if (event.user.toString().toLowerCase() === pumpWallet.toLowerCase()) {
-      const token = oldCurves.find((x) => x.mint === event.mint.toString());
-      if (token) {
-        buyValues.push(token.otherPersonBuyAmount.toString());
-        try {
-          console.log('Writing');
-          console.log(buyValues);
-          await writeFile(LEADERS_FILE_NAME, JSON.stringify(buyValues));
-        } catch (e) {}
-      }
-    }
-    // logger.info(signature);
-    // tokenBuySellDiff = event.isBuy ? tokenBuySellDiff + event.solAmount : tokenBuySellDiff - event.solAmount;
-    // console.log('tradeEvent', event.isBuy ? 'Buy' : 'Sell', event.solAmount, 'Diff', tokenBuySellDiff);
-    // tradesAmount++;
-  });
+  // let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
+  //   if (event.user.toString().toLowerCase() === pumpWallet.toLowerCase()) {
+  //     const token = oldCurves.find((x) => x.mint === event.mint.toString());
+  //     if (token) {
+  //       buyValues.push(token.otherPersonBuyAmount.toString());
+  //       try {
+  //         console.log('Writing');
+  //         console.log(buyValues);
+  //         await writeFile(LEADERS_FILE_NAME, JSON.stringify(buyValues));
+  //       } catch (e) {}
+  //     }
+  //   }
+  //   // logger.info(signature);
+  //   // tokenBuySellDiff = event.isBuy ? tokenBuySellDiff + event.solAmount : tokenBuySellDiff - event.solAmount;
+  //   // console.log('tradeEvent', event.isBuy ? 'Buy' : 'Sell', event.solAmount, 'Diff', tokenBuySellDiff);
+  //   // tradesAmount++;
+  // });
   await listenToChanges();
 }
 
@@ -506,7 +507,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey)
     false,
   );
   logger.info('Sold all');
-  await summaryPrint();
+  await summaryPrint(tokenAccount.accountInfo.mint.toString());
   clearState();
 
   return false;
@@ -532,7 +533,7 @@ async function transferFunds() {
   console.log(txid);
 }
 
-async function summaryPrint() {
+async function summaryPrint(mint: string) {
   await new Promise((resolve) => setTimeout(resolve, 5000));
   const balance = await solanaConnection.getBalance(wallet.publicKey);
   const newWalletBalance = balance / 1_000_000_000;
@@ -546,6 +547,13 @@ async function summaryPrint() {
     'Diff',
     newWalletBalance - initialWalletBalance,
   );
+
+  if (newWalletBalance - initialWalletBalance < -0.02) {
+    try {
+      blackList.push(mint);
+      await writeFile(LEADERS_FILE_NAME, JSON.stringify(blackList));
+    } catch (e) {}
+  }
   initialWalletBalance = newWalletBalance;
 }
 
