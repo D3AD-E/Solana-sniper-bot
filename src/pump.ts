@@ -519,7 +519,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey,
     provider!,
     associatedCurve!,
     lastBlocks[lastBlocks.length - 1],
-    latestJitoTip! + 1000n,
+    latestJitoTip!,
   );
   logger.info('Sold all');
   await summaryPrint(otherPersonAddress);
