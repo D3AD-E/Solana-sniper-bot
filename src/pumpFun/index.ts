@@ -107,29 +107,23 @@ export async function sellPump(
 
   logger.info('selling');
 
-  for (let i = 0; i < 1; i++) {
-    const tipAccount = getRandomAccount();
+  const tipAccount = getRandomAccount();
 
-    const tipInstruction = SystemProgram.transfer({
-      fromPubkey: wallet.publicKey,
-      toPubkey: tipAccount,
-      lamports: raisedTip,
-    });
-    const messageV0 = new TransactionMessage({
-      payerKey: wallet.publicKey,
-      recentBlockhash: block.blockhash,
-      instructions: [
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 72000 }),
-        ...sellTx.instructions,
-        tipInstruction,
-      ],
-    }).compileToV0Message();
+  const tipInstruction = SystemProgram.transfer({
+    fromPubkey: wallet.publicKey,
+    toPubkey: tipAccount,
+    lamports: raisedTip,
+  });
+  const messageV0 = new TransactionMessage({
+    payerKey: wallet.publicKey,
+    recentBlockhash: block.blockhash,
+    instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: 72000 }), ...sellTx.instructions, tipInstruction],
+  }).compileToV0Message();
 
-    const transaction = new VersionedTransaction(messageV0);
-    transaction.sign([wallet]);
-    logger.info('sending');
-    sendBundles(wallet, transaction, block.blockhash);
-  }
+  const transaction = new VersionedTransaction(messageV0);
+  transaction.sign([wallet]);
+  logger.info('sending');
+  sendBundles(wallet, transaction, block.blockhash);
 
   const messageV0NoTip = new TransactionMessage({
     payerKey: wallet.publicKey,
