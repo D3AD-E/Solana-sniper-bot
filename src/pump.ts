@@ -199,6 +199,7 @@ async function subscribeToSnipeUpdates() {
     const ins = data.transaction?.transaction?.meta?.innerInstructions;
     if (!ins) return;
     const signatureString = bs58.encode(data.transaction.transaction.signature);
+    console.log(data.transaction.transaction);
     logger.info('Signature');
     console.log(signatureString);
     if (ins.length !== 2) return;
@@ -331,17 +332,17 @@ async function subscribeToSlotUpdates() {
     let weBuySol = getAmountWeBuyBasedOnOther(otherpersonBuyValue);
     if (weBuySol === 0n) return;
     logger.info('Started listening');
-    await buyPump(
-      wallet,
-      mint,
-      weBuySol!,
-      calculateBuy(otherpersonBuyValue, weBuySol)!,
-      globalAccount!,
-      provider!,
-      curve,
-      lastBlocks[lastBlocks.length - 1],
-      false,
-    );
+    // await buyPump(
+    //   wallet,
+    //   mint,
+    //   weBuySol!,
+    //   calculateBuy(otherpersonBuyValue, weBuySol)!,
+    //   globalAccount!,
+    //   provider!,
+    //   curve,
+    //   lastBlocks[lastBlocks.length - 1],
+    //   false,
+    // );
     logger.info('Sent buy');
   });
   // Create subscribe request based on provided arguments.
