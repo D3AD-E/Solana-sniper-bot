@@ -94,6 +94,7 @@ const blackList = [
 
 eventEmitter.on(USER_STOP_EVENT, (data) => {
   softExit = true;
+  console.log(softExit);
 });
 
 function calculateTokenAverage() {
