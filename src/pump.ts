@@ -375,7 +375,7 @@ async function subscribeToSlotUpdates() {
       provider!,
       curve,
       lastBlocks[lastBlocks.length - 1],
-      latestJitoTip! + latestJitoTip! / BigInt(100),
+      latestJitoTip! + latestJitoTip! / BN(100),
     );
     logger.info('Sent buy');
   });
