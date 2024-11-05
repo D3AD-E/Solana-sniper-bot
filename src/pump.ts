@@ -331,18 +331,18 @@ async function subscribeToSlotUpdates() {
     let weBuySol = getAmountWeBuyBasedOnOther(otherpersonBuyValue);
     if (weBuySol === 0n) return;
     logger.info('Started listening');
-    // await buyPump(
-    //   wallet,
-    //   mint,
-    //   weBuySol!,
-    //   calculateBuy(otherpersonBuyValue, weBuySol)!,
-    //   globalAccount!,
-    //   provider!,
-    //   curve,
-    //   lastBlocks[lastBlocks.length - 1],
-    //   false,
-    // );
-    // logger.info('Sent buy');
+    await buyPump(
+      wallet,
+      mint,
+      weBuySol!,
+      calculateBuy(otherpersonBuyValue, weBuySol)!,
+      globalAccount!,
+      provider!,
+      curve,
+      lastBlocks[lastBlocks.length - 1],
+      false,
+    );
+    logger.info('Sent buy');
   });
   // Create subscribe request based on provided arguments.
   const request: SubscribeRequest = {
