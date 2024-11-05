@@ -107,7 +107,6 @@ async function fetchTipsData(): Promise<void> {
 
     const data: TipsData[] = await response.json();
     currentTips = data[0];
-    console.log(currentTips);
   } catch (error) {
     console.error('Error fetching tips data:', error);
   }
