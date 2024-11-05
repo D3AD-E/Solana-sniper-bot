@@ -27,7 +27,7 @@ import { JitoClient } from './jito/searcher';
 import { struct, u32, u8 } from '@solana/buffer-layout';
 import eventEmitter from './eventEmitter';
 import { USER_STOP_EVENT } from './eventEmitter/eventEmitter.consts';
-import { writeFile } from 'fs/promises';
+import { readFile, writeFile } from 'fs/promises';
 import { LEADERS_FILE_NAME } from './constants';
 let existingTokenAccounts: TokenAccount[] = [];
 
@@ -88,16 +88,7 @@ let buyEvents: BuyEvent[] = [];
 let currentTips: TipsData | undefined = undefined;
 let buyValues: string[] = [];
 const pumpWallet = '12BRrNxzJYMx7cRhuBdhA71AchuxWRcvGydNnDoZpump';
-let blackList = [
-  '4RAxiPpuxjKFnp1vUBGV8G8pubujLffktWxSkBxWU6SQ',
-  '5LAiMexZHGtWkkcw3uhLDNt263HFYazaZHJtKjq1duxk',
-  '62GTFDBV2FjsBFTjEhMjRBW5AzjUKK8ycY7tq1teBLkY',
-  'Gwc7ky7XDPvpCS9zzcaqnAYHAczMFmrpvNT4PZDLEF6e',
-  '9Hb6DRHm4vaZRfqKN71qR7aNHirG7d5g86a4hm5xDVFt',
-  'HTMnamSDgtkpHVBGA4ouQduJK5qBBGtGMoNqVJ8gt29',
-  '75vDwFcZ4msM6ztSnmqhvgxdMr6qk7iy3RLQGNdkeSry',
-  'BkWtnmXwHppKyG6arwQXLwxMJooBWyuezawSgHxBpzVR',
-];
+let blackList: string[] = [];
 
 eventEmitter.on(USER_STOP_EVENT, (data) => {
   softExit = true;
@@ -411,6 +402,7 @@ export default async function snipe(): Promise<void> {
   setInterval(fetchTipsData, 500);
   setInterval(calculateTokenAverage, 1000 * 60);
   sendMessage(`Started`);
+  blackList = JSON.parse((await readFile(LEADERS_FILE_NAME)).toString()) as string[];
 
   await new Promise((resolve) => setTimeout(resolve, 5000));
   const client = await JitoClient.getInstance();
