@@ -188,9 +188,6 @@ async function subscribeToSnipeUpdates() {
     const signatureString = bs58.encode(data.transaction.transaction.signature);
     logger.info('Signature');
     console.log(signatureString);
-    console.log('pump');
-    console.log(ins);
-    console.log(ins.map((x: any) => x.instructions));
     if (ins.length !== 2) return;
     const instweIntrested = ins[1].instructions;
     for (const t of instweIntrested) {
@@ -203,8 +200,7 @@ async function subscribeToSnipeUpdates() {
           buyEvents.push({ timestamp: new Date().getTime() });
           const now = Date.now();
           const filteredEvents = buyEvents.filter((event) => now - event.timestamp <= 120000);
-          console.log(filteredEvents);
-          console.log(buyEvents);
+          shouldWeBuy = filteredEvents.length >= 2;
         }
         break;
       }
@@ -271,6 +267,7 @@ async function subscribeToSlotUpdates() {
   stream.on('data', async (data) => {
     // if (isProcessing) return;
     if (softExit) return;
+    if (!shouldWeBuy) return;
     const ins = data.transaction?.transaction?.meta?.innerInstructions;
     if (!ins) return;
     const signatureString = bs58.encode(data.transaction.transaction.signature);
@@ -314,22 +311,19 @@ async function subscribeToSlotUpdates() {
     console.log(curve);
     oldCurves.push({ curve: curve, mint: mint.toString() });
     let weBuySol = getAmountWeBuyBasedOnOther(otherpersonBuyValue);
-    if (initialWalletBalance < 2) {
-      weBuySol = weBuySol / 2n;
-    }
     if (weBuySol === 0n) return;
     logger.info('Started listening');
-    // await buyPump(
-    //   wallet,
-    //   mint,
-    //   weBuySol!,
-    //   calculateBuy(otherpersonBuyValue, weBuySol)!,
-    //   globalAccount!,
-    //   provider!,
-    //   curve,
-    //   lastBlocks[lastBlocks.length - 1],
-    //   initialWalletBalance < 2,
-    // );
+    await buyPump(
+      wallet,
+      mint,
+      weBuySol!,
+      calculateBuy(otherpersonBuyValue, weBuySol)!,
+      globalAccount!,
+      provider!,
+      curve,
+      lastBlocks[lastBlocks.length - 1],
+      false,
+    );
     // logger.info('Sent buy');
   });
   // Create subscribe request based on provided arguments.
@@ -491,7 +485,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey)
     provider!,
     associatedCurve!,
     lastBlocks[lastBlocks.length - 1],
-    initialWalletBalance < 2,
+    false,
   );
   logger.info('Sold all');
   await summaryPrint();
