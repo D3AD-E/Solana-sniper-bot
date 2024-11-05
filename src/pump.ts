@@ -596,6 +596,7 @@ async function summaryPrint(mint: string) {
       await writeFile(BLACKLIST_FILE_NAME, JSON.stringify(blackList));
     } catch (e) {}
   }
+  softExit = true;
   initialWalletBalance = newWalletBalance;
 }
 
