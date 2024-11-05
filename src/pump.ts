@@ -27,6 +27,7 @@ import { JitoClient } from './jito/searcher';
 import { struct, u32, u8 } from '@solana/buffer-layout';
 import eventEmitter from './eventEmitter';
 import { USER_STOP_EVENT } from './eventEmitter/eventEmitter.consts';
+import { writeFile } from 'fs/promises';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
@@ -55,6 +56,7 @@ type BuyEvent = {
 type CurveMint = {
   mint: string;
   curve: PublicKey;
+  otherPersonBuyAmount: bigint;
 };
 type TipsData = {
   time: string; // ISO timestamp as a string
@@ -81,7 +83,8 @@ let initialWalletBalance = 0;
 let tokenBuySellDiff = 0n;
 let buyEvents: BuyEvent[] = [];
 let currentTips: TipsData | undefined = undefined;
-
+let buyValues: string[] = [];
+const pumpWallet = '12BRrNxzJYMx7cRhuBdhA71AchuxWRcvGydNnDoZpump';
 const blackList = [
   '4RAxiPpuxjKFnp1vUBGV8G8pubujLffktWxSkBxWU6SQ',
   '5LAiMexZHGtWkkcw3uhLDNt263HFYazaZHJtKjq1duxk',
@@ -221,7 +224,7 @@ async function subscribeToSnipeUpdates() {
         vote: false,
         accountInclude: [],
         accountExclude: [],
-        accountRequired: ['12BRrNxzJYMx7cRhuBdhA71AchuxWRcvGydNnDoZpump'],
+        accountRequired: [pumpWallet],
       },
     },
     blocks: {},
@@ -315,7 +318,7 @@ async function subscribeToSlotUpdates() {
     const curve = pkKeys[curveAddress];
     console.log('curve');
     console.log(curve);
-    oldCurves.push({ curve: curve, mint: mint.toString() });
+    oldCurves.push({ curve: curve, mint: mint.toString(), otherPersonBuyAmount: otherpersonBuyValue });
     let weBuySol = getAmountWeBuyBasedOnOther(otherpersonBuyValue);
     if (weBuySol === 0n) return;
     logger.info('Started listening');
@@ -415,13 +418,21 @@ export default async function snipe(): Promise<void> {
   subscribeToSlotUpdates();
   subscribeToSnipeUpdates();
   let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
-    if (event.mint.toString() === mintAccount) {
-      if (event.user.toString() === wallet.publicKey.toString()) return;
-      logger.info(signature);
-      tokenBuySellDiff = event.isBuy ? tokenBuySellDiff + event.solAmount : tokenBuySellDiff - event.solAmount;
-      console.log('tradeEvent', event.isBuy ? 'Buy' : 'Sell', event.solAmount, 'Diff', tokenBuySellDiff);
-      tradesAmount++;
+    if (event.user.toString().toLowerCase() === pumpWallet.toLowerCase()) {
+      const token = oldCurves.find((x) => x.mint === event.mint.toString());
+      if (token) {
+        buyValues.push(token.otherPersonBuyAmount.toString());
+        if (buyValues.length % 10) {
+          try {
+            await writeFile('resultbuys.json', JSON.stringify(buyValues));
+          } catch (e) {}
+        }
+      }
     }
+    // logger.info(signature);
+    // tokenBuySellDiff = event.isBuy ? tokenBuySellDiff + event.solAmount : tokenBuySellDiff - event.solAmount;
+    // console.log('tradeEvent', event.isBuy ? 'Buy' : 'Sell', event.solAmount, 'Diff', tokenBuySellDiff);
+    // tradesAmount++;
   });
   await listenToChanges();
 }
