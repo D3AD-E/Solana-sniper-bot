@@ -83,6 +83,7 @@ let provider: AnchorProvider | undefined = undefined;
 let shouldWeBuy = false;
 // let buyAmountSol: bigint | undefined = undefined;
 let tokensSeen = 0;
+let currentlyTradingTokens = 0;
 let tradesAmount = 0;
 let initialWalletBalance = 0;
 let tokenBuySellDiff = 0n;
@@ -586,13 +587,10 @@ async function summaryPrint(mint: string) {
     sendMessage('Done');
     await transferFunds();
   }
-  console.log(
-    newWalletBalance - initialWalletBalance > 0 ? 'Trade won' : 'Trade loss',
-    'Diff',
-    newWalletBalance - initialWalletBalance,
-  );
+  const diff = newWalletBalance - initialWalletBalance;
+  console.log(diff > 0 ? 'Trade won' : 'Trade loss', 'Diff', diff);
 
-  if (newWalletBalance - initialWalletBalance < -0.02) {
+  if (diff < -0.05 && diff > -0.3) {
     try {
       blackList.push(mint);
       await writeFile(BLACKLIST_FILE_NAME, JSON.stringify(blackList));
