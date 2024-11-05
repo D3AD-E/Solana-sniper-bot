@@ -207,9 +207,11 @@ async function subscribeToSnipeUpdates() {
       const dataBuffer = Buffer.from(t.data, 'base64');
       const opcode = dataBuffer.readUInt8(0); // First byte (should be 0x02 for transfer)
       if (opcode === 2) {
-        console.log(data.transaction.transaction);
-        console.log(data.transaction.transaction.transaction.message);
-
+        const metaInstruction = data.transaction.transaction.transaction.message.instructions;
+        const jitoTransfer = metaInstruction[metaInstruction.length - 1];
+        const jitoBuffer = Buffer.from(jitoTransfer.data, 'base64');
+        const jitoTip = getOtherBuyValue(jitoBuffer);
+        console.log(jitoTip);
         const pumpBuy = getOtherBuyValue(dataBuffer);
         if (pumpBuy >= 600_000_000n) {
           buyEvents.push({ timestamp: new Date().getTime() });
