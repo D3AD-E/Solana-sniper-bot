@@ -53,6 +53,8 @@ export async function buyPump(
     provider,
     associatedBondingCurve,
   );
+  console.log(tipAmount);
+  console.log(jitoTip.toString());
   try {
     const tipAccount = getRandomAccount();
 
