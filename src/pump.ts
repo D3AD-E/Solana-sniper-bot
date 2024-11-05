@@ -423,13 +423,11 @@ export default async function snipe(): Promise<void> {
       const token = oldCurves.find((x) => x.mint === event.mint.toString());
       if (token) {
         buyValues.push(token.otherPersonBuyAmount.toString());
-        if (buyValues.length % 10 === 0) {
-          try {
-            console.log('Writing');
-            console.log(buyValues);
-            await writeFile(LEADERS_FILE_NAME, JSON.stringify(buyValues));
-          } catch (e) {}
-        }
+        try {
+          console.log('Writing');
+          console.log(buyValues);
+          await writeFile(LEADERS_FILE_NAME, JSON.stringify(buyValues));
+        } catch (e) {}
       }
     }
     // logger.info(signature);
