@@ -159,6 +159,7 @@ async function subscribeToSnipeUpdates() {
     console.log(signatureString);
     console.log('pump');
     console.log(ins);
+    console.log(ins.map((x: any) => x.instructions));
   });
   // Create subscribe request based on provided arguments.
   const request: SubscribeRequest = {
