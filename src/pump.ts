@@ -110,7 +110,8 @@ function calculateTokenAverage() {
 function hasSlotInRange(jitoData: { [key: string]: SlotList }, target: number, tolerance: number): boolean {
   const lowerBound = target - tolerance;
   const upperBound = target + tolerance;
-
+  console.log(target);
+  console.log(currentSlot);
   for (const key in jitoData) {
     const slotList = jitoData[key].slots;
     for (const slot of slotList) {
