@@ -171,7 +171,7 @@ function getAmountWeBuyBasedOnOther(otherPersonBuy: bigint) {
 function findCommonElement(array1: string[], array2: string[]) {
   for (let i = 0; i < array1.length; i++) {
     for (let j = 0; j < array2.length; j++) {
-      if (array1[i] === array2[j]) {
+      if (array1[i].toLowerCase() === array2[j].toLowerCase()) {
         return true;
       }
     }
@@ -361,7 +361,7 @@ async function subscribeToSlotUpdates() {
     });
     let weBuySol = getAmountWeBuyBasedOnOther(otherpersonBuyValue);
     if (weBuySol === 0n) return;
-    if (!hasSlotInRange(jitoData, currentSlot + 10, 1)) {
+    if (!hasSlotInRange(jitoData, currentSlot + 10, 3)) {
       logger.warn('No slot');
       return;
     }
