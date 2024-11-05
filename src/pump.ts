@@ -322,17 +322,17 @@ async function subscribeToSlotUpdates() {
     let weBuySol = getAmountWeBuyBasedOnOther(otherpersonBuyValue);
     if (weBuySol === 0n) return;
     logger.info('Started listening');
-    await buyPump(
-      wallet,
-      mint,
-      weBuySol!,
-      calculateBuy(otherpersonBuyValue, weBuySol)!,
-      globalAccount!,
-      provider!,
-      curve,
-      lastBlocks[lastBlocks.length - 1],
-      false,
-    );
+    // await buyPump(
+    //   wallet,
+    //   mint,
+    //   weBuySol!,
+    //   calculateBuy(otherpersonBuyValue, weBuySol)!,
+    //   globalAccount!,
+    //   provider!,
+    //   curve,
+    //   lastBlocks[lastBlocks.length - 1],
+    //   false,
+    // );
     // logger.info('Sent buy');
   });
   // Create subscribe request based on provided arguments.
@@ -424,6 +424,7 @@ export default async function snipe(): Promise<void> {
         buyValues.push(token.otherPersonBuyAmount.toString());
         if (buyValues.length % 10) {
           try {
+            console.log('Writing');
             await writeFile('resultbuys.json', JSON.stringify(buyValues));
           } catch (e) {}
         }
