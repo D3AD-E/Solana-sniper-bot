@@ -38,14 +38,13 @@ let swapAmount: TokenAmount;
 
 let currentSlot = 0;
 let ws: WebSocket | undefined = undefined;
-let lastRequestDate = new Date().getTime();
 let lastBlocks: Block[] = [];
-let processedTokens: string[] = [];
 let workerPool: WorkerPool | undefined = undefined;
 let softExit = false;
 let secondWallet: PublicKey | undefined = undefined;
-let isProcessing = false;
 let latestJitoTip: bigint | undefined = undefined;
+let latestBuy: bigint | undefined = undefined;
+
 const getProvider = () => {
   const walletAnchor = new Wallet(wallet);
   const provider = new AnchorProvider(solanaConnection, walletAnchor, {
@@ -82,7 +81,7 @@ let mintAccount = '';
 let globalAccount: GlobalAccount | undefined = undefined;
 let provider: AnchorProvider | undefined = undefined;
 let shouldWeBuy = false;
-let buyAmountSol: bigint | undefined = undefined;
+// let buyAmountSol: bigint | undefined = undefined;
 let tokensSeen = 0;
 let tradesAmount = 0;
 let initialWalletBalance = 0;
@@ -151,21 +150,21 @@ async function fetchTipsData(): Promise<void> {
 
 function getAmountWeBuyBasedOnOther(otherPersonBuy: bigint) {
   if (otherPersonBuy > 3_000_000_000n) return 0n;
-  return buyAmountSol!;
-  const initialStep = 500_000_000n;
-  if (otherPersonBuy <= initialStep) return buyAmountSol!;
+  return latestBuy!;
+  // const initialStep = 500_000_000n;
+  // if (otherPersonBuy <= initialStep) return buyAmountSol!;
 
-  let discountThreshold = initialStep;
-  let discountStep = 0n;
-  while (otherPersonBuy > discountThreshold) {
-    discountThreshold += initialStep;
-    discountStep = discountStep + 10n;
-    if (discountStep === 90n) {
-      return buyAmountSol! - (buyAmountSol! * discountStep) / 100n;
-    }
-  }
-  console.log(discountStep, otherPersonBuy, initialStep, discountThreshold);
-  return buyAmountSol! - (buyAmountSol! * discountStep) / 100n;
+  // let discountThreshold = initialStep;
+  // let discountStep = 0n;
+  // while (otherPersonBuy > discountThreshold) {
+  //   discountThreshold += initialStep;
+  //   discountStep = discountStep + 10n;
+  //   if (discountStep === 90n) {
+  //     return buyAmountSol! - (buyAmountSol! * discountStep) / 100n;
+  //   }
+  // }
+  // console.log(discountStep, otherPersonBuy, initialStep, discountThreshold);
+  // return buyAmountSol! - (buyAmountSol! * discountStep) / 100n;
 }
 
 function findCommonElement(array1: string[], array2: string[]) {
@@ -239,6 +238,7 @@ async function subscribeToSnipeUpdates() {
           if (pumpBuy >= 600_000_000n) {
             buyEvents.push({ timestamp: new Date().getTime() });
             latestJitoTip = jitoTip;
+            latestBuy = BigInt(pumpBuy);
           }
           const now = Date.now();
           const filteredEvents = buyEvents.filter((event) => now - event.timestamp <= 120000);
@@ -315,8 +315,6 @@ async function subscribeToSlotUpdates() {
     const ins = data.transaction?.transaction?.meta?.innerInstructions;
     if (!ins) return;
     const signatureString = bs58.encode(data.transaction.transaction.signature);
-    logger.info('Signature');
-    console.log(signatureString);
     const instructionWithCurve = ins.find((x: any) => x.index === 5) ?? ins.find((x: any) => x.index === 4);
     if (!instructionWithCurve) return;
     if (
@@ -324,6 +322,8 @@ async function subscribeToSlotUpdates() {
       !data.transaction?.transaction?.meta?.innerInstructions[2]
     )
       return;
+    logger.info('Signature');
+    console.log(signatureString);
     tokensSeen++;
     let tr2 = data.transaction?.transaction?.meta?.innerInstructions[2].instructions;
     let otherpersonBuyValue = 0n;
@@ -365,7 +365,6 @@ async function subscribeToSlotUpdates() {
     //   logger.warn('No slot');
     //   return;
     // }
-    logger.info('Started listening');
     await buyPump(
       wallet,
       mint,
@@ -375,7 +374,7 @@ async function subscribeToSlotUpdates() {
       provider!,
       curve,
       lastBlocks[lastBlocks.length - 1],
-      latestJitoTip! + latestJitoTip! / BN(100),
+      latestJitoTip!,
     );
     logger.info('Sent buy');
   });
@@ -422,7 +421,6 @@ async function subscribeToSlotUpdates() {
 function clearState() {
   console.log('Clearing state');
   mintAccount = '';
-  isProcessing = false;
   gotTokenData = false;
   tradesAmount = 0;
 }
@@ -457,7 +455,7 @@ export default async function snipe(): Promise<void> {
 
   sdk = new PumpFunSDK(provider);
   globalAccount = await sdk.getGlobalAccount();
-  buyAmountSol = BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL);
+  // buyAmountSol = BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL);
 
   const balance = await solanaConnection.getBalance(wallet.publicKey);
   initialWalletBalance = balance / 1_000_000_000;

@@ -44,8 +44,8 @@ export async function buyPump(
   block: Block,
   jitoTip: bigint,
 ) {
-  console.log(jitoTip.toString());
-  console.log(tipAmount);
+  const actualTip = Number(jitoTip.toString());
+  const raisedTip = Math.floor(actualTip * 1.01);
   let buyTx = await getBuyInstructions(
     buyer.publicKey,
     mint,
@@ -61,7 +61,7 @@ export async function buyPump(
     const tipInstruction = SystemProgram.transfer({
       fromPubkey: wallet.publicKey,
       toPubkey: tipAccount,
-      lamports: jitoTip,
+      lamports: raisedTip,
     });
     const messageV0 = new TransactionMessage({
       payerKey: wallet.publicKey,
@@ -94,6 +94,8 @@ export async function sellPump(
   block: Block,
   jitoTip: bigint,
 ) {
+  const actualTip = Number(jitoTip.toString());
+  const raisedTip = Math.floor(actualTip * 1.01);
   let sellTx = await getSellInstructions(
     buyer.publicKey,
     mint,
@@ -111,7 +113,7 @@ export async function sellPump(
     const tipInstruction = SystemProgram.transfer({
       fromPubkey: wallet.publicKey,
       toPubkey: tipAccount,
-      lamports: jitoTip,
+      lamports: raisedTip,
     });
     const messageV0 = new TransactionMessage({
       payerKey: wallet.publicKey,
