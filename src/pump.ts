@@ -25,6 +25,8 @@ import Client, { SubscribeRequest } from '@triton-one/yellowstone-grpc';
 import { bs58 } from '@coral-xyz/anchor/dist/cjs/utils/bytes';
 import { JitoClient } from './jito/searcher';
 import { struct, u32, u8 } from '@solana/buffer-layout';
+import eventEmitter from './eventEmitter';
+import { USER_STOP_EVENT } from './eventEmitter/eventEmitter.consts';
 let existingTokenAccounts: TokenAccount[] = [];
 
 const quoteToken = Token.WSOL;
@@ -89,6 +91,10 @@ const blackList = [
   'HTMnamSDgtkpHVBGA4ouQduJK5qBBGtGMoNqVJ8gt29',
   '75vDwFcZ4msM6ztSnmqhvgxdMr6qk7iy3RLQGNdkeSry',
 ];
+
+eventEmitter.on(USER_STOP_EVENT, (data) => {
+  softExit = true;
+});
 
 function calculateTokenAverage() {
   logger.info(`${tokensSeen} tokens`);
@@ -195,13 +201,12 @@ async function subscribeToSnipeUpdates() {
       const opcode = dataBuffer.readUInt8(0); // First byte (should be 0x02 for transfer)
       if (opcode === 2) {
         const pumpBuy = getOtherBuyValue(dataBuffer);
-        console.log(pumpBuy);
         if (pumpBuy >= 600_000_000n) {
           buyEvents.push({ timestamp: new Date().getTime() });
-          const now = Date.now();
-          const filteredEvents = buyEvents.filter((event) => now - event.timestamp <= 120000);
-          shouldWeBuy = filteredEvents.length >= 2;
         }
+        const now = Date.now();
+        const filteredEvents = buyEvents.filter((event) => now - event.timestamp <= 120000);
+        shouldWeBuy = filteredEvents.length >= 2;
         break;
       }
     }
