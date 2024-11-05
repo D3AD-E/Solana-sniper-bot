@@ -160,6 +160,17 @@ async function subscribeToSnipeUpdates() {
     console.log('pump');
     console.log(ins);
     console.log(ins.map((x: any) => x.instructions));
+    if (ins.length !== 2) return;
+    const instweIntrested = ins[1];
+    for (const t of instweIntrested) {
+      const dataBuffer = Buffer.from(t.data, 'base64');
+      const opcode = dataBuffer.readUInt8(0); // First byte (should be 0x02 for transfer)
+      if (opcode === 2) {
+        const pumpBuy = getOtherBuyValue(dataBuffer);
+        console.log(pumpBuy);
+        break;
+      }
+    }
   });
   // Create subscribe request based on provided arguments.
   const request: SubscribeRequest = {
