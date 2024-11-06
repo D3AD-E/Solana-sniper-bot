@@ -238,7 +238,10 @@ async function subscribeToSnipeUpdates() {
           const pumpBuy = getOtherBuyValue(dataBuffer);
           latestJitoTip = jitoTip;
           latestBuy = BigInt(pumpBuy);
-          shouldWeBuy = true;
+          if (!shouldWeBuy) {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            shouldWeBuy = true;
+          }
 
           const now = Date.now();
           const filteredEvents = buyEvents.filter((event) => now - event.timestamp <= 120000);
