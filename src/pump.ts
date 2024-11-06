@@ -80,7 +80,7 @@ let gotTokenData = false;
 let mintAccount = '';
 let globalAccount: GlobalAccount | undefined = undefined;
 let provider: AnchorProvider | undefined = undefined;
-let shouldWeBuy = true;
+let shouldWeBuy = false;
 // let buyAmountSol: bigint | undefined = undefined;
 let tokensSeen = 0;
 let currentlyTradingTokens = 0;
@@ -238,6 +238,8 @@ async function subscribeToSnipeUpdates() {
           const pumpBuy = getOtherBuyValue(dataBuffer);
           latestJitoTip = jitoTip;
           latestBuy = BigInt(pumpBuy);
+          shouldWeBuy = true;
+
           const now = Date.now();
           const filteredEvents = buyEvents.filter((event) => now - event.timestamp <= 120000);
           // shouldWeBuy = filteredEvents.length >= 2;
