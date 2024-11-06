@@ -236,7 +236,7 @@ async function subscribeToSnipeUpdates() {
           const jitoBuffer = Buffer.from(jitoTransfer.data, 'base64');
           const jitoTip = getOtherBuyValue(jitoBuffer);
           const pumpBuy = getOtherBuyValue(dataBuffer);
-          if (pumpBuy >= 600_000_000n) {
+          if (pumpBuy >= 1_000_000_000n) {
             buyEvents.push({ timestamp: new Date().getTime() });
             latestJitoTip = jitoTip;
             latestBuy = BigInt(pumpBuy);
@@ -583,7 +583,7 @@ async function summaryPrint(mint: string) {
   const balance = await solanaConnection.getBalance(wallet.publicKey);
   const newWalletBalance = balance / 1_000_000_000;
   console.log('Wallet balance (in SOL):', newWalletBalance);
-  if (newWalletBalance > 3) {
+  if (newWalletBalance > 5) {
     sendMessage('Done');
     await transferFunds();
   }
