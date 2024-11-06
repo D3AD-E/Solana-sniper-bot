@@ -236,14 +236,11 @@ async function subscribeToSnipeUpdates() {
           const jitoBuffer = Buffer.from(jitoTransfer.data, 'base64');
           const jitoTip = getOtherBuyValue(jitoBuffer);
           const pumpBuy = getOtherBuyValue(dataBuffer);
-          if (pumpBuy >= 1_000_000_000n) {
-            buyEvents.push({ timestamp: new Date().getTime() });
-            latestJitoTip = jitoTip;
-            latestBuy = BigInt(pumpBuy);
-          }
+          latestJitoTip = jitoTip;
+          latestBuy = BigInt(pumpBuy);
           const now = Date.now();
           const filteredEvents = buyEvents.filter((event) => now - event.timestamp <= 120000);
-          shouldWeBuy = filteredEvents.length >= 2;
+          // shouldWeBuy = filteredEvents.length >= 2;
           break;
         }
       }
@@ -562,7 +559,7 @@ async function transferFunds() {
   const sendInstruction = SystemProgram.transfer({
     fromPubkey: wallet.publicKey,
     toPubkey: secondWallet!,
-    lamports: 500_000_000n,
+    lamports: 1_000_000_000n,
   });
   const messageV0 = new TransactionMessage({
     payerKey: wallet.publicKey,
@@ -583,7 +580,7 @@ async function summaryPrint(mint: string) {
   const balance = await solanaConnection.getBalance(wallet.publicKey);
   const newWalletBalance = balance / 1_000_000_000;
   console.log('Wallet balance (in SOL):', newWalletBalance);
-  if (newWalletBalance > 5) {
+  if (newWalletBalance > 5.5) {
     sendMessage('Done');
     await transferFunds();
   }
