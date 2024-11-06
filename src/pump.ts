@@ -150,7 +150,7 @@ async function fetchTipsData(): Promise<void> {
 }
 
 function getAmountWeBuyBasedOnOther(otherPersonBuy: bigint) {
-  if (otherPersonBuy > 3_000_000_000n) return 0n;
+  if (otherPersonBuy >= 3_000_000_000n) return 0n;
   return latestBuy!;
   // const initialStep = 500_000_000n;
   // if (otherPersonBuy <= initialStep) return buyAmountSol!;
@@ -542,7 +542,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey,
   console.log(total);
   if (total === 0n) return true;
   const firstPart = total / 2n;
-  await new Promise((resolve) => setTimeout(resolve, 3300));
+  await new Promise((resolve) => setTimeout(resolve, 3100));
   await sellPump(
     wallet,
     tokenAccount.accountInfo.mint,
