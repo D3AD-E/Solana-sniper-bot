@@ -236,20 +236,18 @@ async function subscribeToSnipeUpdates() {
           const jitoBuffer = Buffer.from(jitoTransfer.data, 'base64');
           const jitoTip = getOtherBuyValue(jitoBuffer);
           const pumpBuy = getOtherBuyValue(dataBuffer);
-          latestJitoTip = jitoTip;
-          latestBuy = BigInt(pumpBuy);
-          if (latestBuy > 1_000_000_000n) {
+          if (pumpBuy > 1_000_000_000n) {
             shouldWeBuy = false;
             return;
           }
-          if (!shouldWeBuy) {
-            await new Promise((resolve) => setTimeout(resolve, 1000));
-            shouldWeBuy = true;
+          if (pumpBuy >= 600_000_000n) {
+            buyEvents.push({ timestamp: new Date().getTime() });
+            latestJitoTip = jitoTip;
+            latestBuy = BigInt(pumpBuy);
           }
-
           const now = Date.now();
           const filteredEvents = buyEvents.filter((event) => now - event.timestamp <= 120000);
-          // shouldWeBuy = filteredEvents.length >= 2;
+          shouldWeBuy = filteredEvents.length >= 2;
           break;
         }
       }
@@ -547,7 +545,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey,
   console.log(total);
   if (total === 0n) return true;
   const firstPart = total / 2n;
-  await new Promise((resolve) => setTimeout(resolve, 3000));
+  await new Promise((resolve) => setTimeout(resolve, 2800));
   await sellPump(
     wallet,
     tokenAccount.accountInfo.mint,
