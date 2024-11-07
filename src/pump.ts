@@ -150,7 +150,7 @@ async function fetchTipsData(): Promise<void> {
 }
 
 function getAmountWeBuyBasedOnOther(otherPersonBuy: bigint) {
-  if (otherPersonBuy > 2_000_000_000n) return 0n;
+  if (otherPersonBuy > 3_000_000_000n) return 0n;
   if (otherPersonBuy > 985_000_000n && otherPersonBuy < 988_000_000n) return 0n;
   return latestBuy!;
   // const initialStep = 500_000_000n;
@@ -242,8 +242,8 @@ async function subscribeToSnipeUpdates() {
           }
           if (pumpBuy >= 600_000_000n) {
             buyEvents.push({ timestamp: new Date().getTime() });
-            latestJitoTip = BigInt(jitoTip) / 10n;
-            latestBuy = BigInt(pumpBuy) / 2n;
+            latestJitoTip = BigInt(jitoTip);
+            latestBuy = BigInt(pumpBuy);
           }
           const now = Date.now();
           const filteredEvents = buyEvents.filter((event) => now - event.timestamp <= 120000);
@@ -545,7 +545,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey,
   console.log(total);
   if (total === 0n) return true;
   const firstPart = total / 2n;
-  await new Promise((resolve) => setTimeout(resolve, 2500));
+  await new Promise((resolve) => setTimeout(resolve, 2800));
   await sellPump(
     wallet,
     tokenAccount.accountInfo.mint,
@@ -554,7 +554,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey,
     provider!,
     associatedCurve!,
     lastBlocks[lastBlocks.length - 1],
-    latestJitoTip! / 20n,
+    latestJitoTip! / 10n,
   );
   logger.info('Sold all');
   await summaryPrint(otherPersonAddress);
