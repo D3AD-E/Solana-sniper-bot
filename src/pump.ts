@@ -588,7 +588,7 @@ async function summaryPrint(mint: string) {
   const balance = await solanaConnection.getBalance(wallet.publicKey);
   const newWalletBalance = balance / 1_000_000_000;
   console.log('Wallet balance (in SOL):', newWalletBalance);
-  if (newWalletBalance > 3.5) {
+  if (newWalletBalance > 4.5) {
     sendMessage('Done');
     await transferFunds();
   }
