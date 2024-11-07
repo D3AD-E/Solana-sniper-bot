@@ -350,6 +350,7 @@ async function subscribeToSlotUpdates() {
     const mintAddress = ins[0].instructions[0].accounts[1];
     const mint = pkKeys[mintAddress];
     console.log('mint');
+    if (mint === undefined) return;
     console.log(mint.toString());
     mintAccount = mint.toString();
     const curveAddress = instructionWithCurve.instructions[0].accounts[0];
@@ -542,7 +543,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey,
   console.log(total);
   if (total === 0n) return true;
   const firstPart = total / 2n;
-  await new Promise((resolve) => setTimeout(resolve, 3100));
+  await new Promise((resolve) => setTimeout(resolve, 3000));
   await sellPump(
     wallet,
     tokenAccount.accountInfo.mint,
@@ -564,7 +565,7 @@ async function transferFunds() {
   const sendInstruction = SystemProgram.transfer({
     fromPubkey: wallet.publicKey,
     toPubkey: secondWallet!,
-    lamports: 1_000_000_000n,
+    lamports: 500_000_000n,
   });
   const messageV0 = new TransactionMessage({
     payerKey: wallet.publicKey,
@@ -585,7 +586,7 @@ async function summaryPrint(mint: string) {
   const balance = await solanaConnection.getBalance(wallet.publicKey);
   const newWalletBalance = balance / 1_000_000_000;
   console.log('Wallet balance (in SOL):', newWalletBalance);
-  if (newWalletBalance > 5.5) {
+  if (newWalletBalance > 3.5) {
     sendMessage('Done');
     await transferFunds();
   }
