@@ -545,7 +545,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey,
   console.log(total);
   if (total === 0n) return true;
   const firstPart = total / 2n;
-  await new Promise((resolve) => setTimeout(resolve, 2200));
+  await new Promise((resolve) => setTimeout(resolve, 2000));
   await sellPump(
     wallet,
     tokenAccount.accountInfo.mint,
