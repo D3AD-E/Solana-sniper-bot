@@ -238,6 +238,10 @@ async function subscribeToSnipeUpdates() {
           const pumpBuy = getOtherBuyValue(dataBuffer);
           latestJitoTip = jitoTip;
           latestBuy = BigInt(pumpBuy);
+          if (latestBuy > 1_000_000_000n) {
+            shouldWeBuy = false;
+            return;
+          }
           if (!shouldWeBuy) {
             await new Promise((resolve) => setTimeout(resolve, 1000));
             shouldWeBuy = true;
