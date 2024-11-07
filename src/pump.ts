@@ -545,7 +545,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey,
   console.log(total);
   if (total === 0n) return true;
   const firstPart = total / 2n;
-  await new Promise((resolve) => setTimeout(resolve, 2800));
+  await new Promise((resolve) => setTimeout(resolve, 2200));
   await sellPump(
     wallet,
     tokenAccount.accountInfo.mint,
@@ -588,7 +588,7 @@ async function summaryPrint(mint: string) {
   const balance = await solanaConnection.getBalance(wallet.publicKey);
   const newWalletBalance = balance / 1_000_000_000;
   console.log('Wallet balance (in SOL):', newWalletBalance);
-  if (newWalletBalance > 4.5) {
+  if (newWalletBalance > 3.5) {
     sendMessage('Done');
     await transferFunds();
   }
