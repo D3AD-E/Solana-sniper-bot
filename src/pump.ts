@@ -243,7 +243,7 @@ async function subscribeToSnipeUpdates() {
           if (pumpBuy >= 600_000_000n) {
             buyEvents.push({ timestamp: new Date().getTime() });
             latestJitoTip = BigInt(jitoTip) / 2n;
-            latestBuy = BigInt(pumpBuy) / 2n;
+            latestBuy = BigInt(pumpBuy) / 4n;
           }
           const now = Date.now();
           const filteredEvents = buyEvents.filter((event) => now - event.timestamp <= 120000);
