@@ -241,7 +241,7 @@ async function subscribeToSnipeUpdates() {
           }
           if (pumpBuy >= 600_000_000n) {
             buyEvents.push({ timestamp: new Date().getTime() });
-            latestJitoTip = BigInt(jitoTip) / 2n;
+            latestJitoTip = BigInt(jitoTip);
             latestBuy = BigInt(pumpBuy);
           }
           const now = Date.now();
@@ -553,7 +553,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey,
     provider!,
     associatedCurve!,
     lastBlocks[lastBlocks.length - 1],
-    latestJitoTip!,
+    latestJitoTip! / 10n,
   );
   logger.info('Sold all');
   await summaryPrint(otherPersonAddress);
