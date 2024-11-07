@@ -236,7 +236,7 @@ async function subscribeToSnipeUpdates() {
           const jitoBuffer = Buffer.from(jitoTransfer.data, 'base64');
           const jitoTip = getOtherBuyValue(jitoBuffer);
           const pumpBuy = getOtherBuyValue(dataBuffer);
-          if (pumpBuy > 1_000_000_000n) {
+          if (pumpBuy > 8_000_000_000n) {
             shouldWeBuy = false;
             return;
           }
