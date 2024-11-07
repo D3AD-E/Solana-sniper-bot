@@ -236,8 +236,7 @@ async function subscribeToSnipeUpdates() {
           const jitoBuffer = Buffer.from(jitoTransfer.data, 'base64');
           const jitoTip = getOtherBuyValue(jitoBuffer);
           const pumpBuy = getOtherBuyValue(dataBuffer);
-          if (pumpBuy > 8_000_000_000n) {
-            shouldWeBuy = false;
+          if (pumpBuy > 800_000_000n) {
             return;
           }
           if (pumpBuy >= 600_000_000n) {
@@ -545,7 +544,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey,
   console.log(total);
   if (total === 0n) return true;
   const firstPart = total / 2n;
-  await new Promise((resolve) => setTimeout(resolve, 2000));
+  await new Promise((resolve) => setTimeout(resolve, 1800));
   await sellPump(
     wallet,
     tokenAccount.accountInfo.mint,
