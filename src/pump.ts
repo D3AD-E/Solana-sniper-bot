@@ -379,7 +379,7 @@ async function subscribeToSlotUpdates() {
       provider!,
       curve,
       lastBlocks[lastBlocks.length - 1],
-      latestJitoTip!,
+      latestJitoTip! / 2n,
     );
     logger.info('Sent buy');
   });
@@ -553,7 +553,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey,
     provider!,
     associatedCurve!,
     lastBlocks[lastBlocks.length - 1],
-    latestJitoTip! / 10n,
+    latestJitoTip! / 20n,
   );
   logger.info('Sold all');
   await summaryPrint(otherPersonAddress);
