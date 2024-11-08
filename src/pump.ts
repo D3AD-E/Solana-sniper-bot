@@ -239,8 +239,11 @@ async function subscribeToSnipeUpdates() {
           const pumpBuy = getOtherBuyValue(dataBuffer);
 
           if (pumpBuy >= 100_000_000n) {
+            if (pumpBuy >= 800_000_000n) {
+              return;
+            }
             buyEvents.push({ timestamp: new Date().getTime() });
-            latestJitoTip = BigInt(jitoTip);
+            latestJitoTip = BigInt(jitoTip) - BigInt(jitoTip) / 3n;
             latestBuy = BigInt(pumpBuy);
           }
           const now = Date.now();
