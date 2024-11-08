@@ -239,12 +239,12 @@ async function subscribeToSnipeUpdates() {
           const pumpBuy = getOtherBuyValue(dataBuffer);
 
           if (pumpBuy >= 100_000_000n) {
-            if (pumpBuy >= 800_000_000n) {
-              return;
-            }
+            // if (pumpBuy >= 800_000_000n) {
+            //   return;
+            // }
             buyEvents.push({ timestamp: new Date().getTime() });
-            latestJitoTip = BigInt(jitoTip) / 80n;
-            latestBuy = BigInt(pumpBuy) / 10n;
+            // latestJitoTip = BigInt(jitoTip) / 80n;
+            // latestBuy = BigInt(pumpBuy) / 10n;
           }
           const now = Date.now();
           const filteredEvents = buyEvents.filter((event) => now - event.timestamp <= 120000);
@@ -477,8 +477,9 @@ export default async function snipe(): Promise<void> {
   //   }
   // }
   console.log('Sold');
-  // buyAmountSol = BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL);
-
+  const buyAmountSol = BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL);
+  latestBuy = buyAmountSol;
+  latestJitoTip = BigInt(54321);
   const balance = await solanaConnection.getBalance(wallet.publicKey);
   initialWalletBalance = balance / 1_000_000_000;
   console.log('Wallet balance (in SOL):', initialWalletBalance);
@@ -570,7 +571,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey,
     provider!,
     associatedCurve!,
     lastBlocks[lastBlocks.length - 1],
-    latestJitoTip! / 10n,
+    latestJitoTip! / 5n,
   );
   logger.info('Sold all');
   await summaryPrint(otherPersonAddress);
