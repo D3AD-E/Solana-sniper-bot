@@ -243,6 +243,8 @@ async function subscribeToSnipeUpdates() {
             //   return;
             // }
             buyEvents.push({ timestamp: new Date().getTime() });
+            console.log(BigInt(jitoTip).toString());
+            console.log(jitoTip.toString());
             // latestJitoTip = BigInt(jitoTip) / 80n;
             // latestBuy = BigInt(pumpBuy) / 10n;
           }
@@ -345,10 +347,10 @@ async function subscribeToSlotUpdates() {
       (x: any) => new PublicKey(x),
     );
     const pkKeysStr = pkKeys.map((x) => x.toString().toLowerCase());
-    if (findCommonElement(pkKeysStr, blackList)) {
-      logger.warn('Blacklisted');
-      return;
-    }
+    // if (findCommonElement(pkKeysStr, blackList)) {
+    //   logger.warn('Blacklisted');
+    //   return;
+    // }
 
     const mintAddress = ins[0].instructions[0].accounts[1];
     const mint = pkKeys[mintAddress];
