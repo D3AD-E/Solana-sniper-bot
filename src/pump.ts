@@ -461,7 +461,10 @@ export default async function snipe(): Promise<void> {
   sdk = new PumpFunSDK(provider);
   globalAccount = await sdk.getGlobalAccount();
   for (const tokenAccount of existingTokenAccounts) {
-    if (tokenAccount.accountInfo.mint.toString().toLowerCase().endsWith('pump')) {
+    if (
+      tokenAccount.accountInfo.mint.toString().toLowerCase().endsWith('pump') &&
+      tokenAccount.accountInfo.amount > 0
+    ) {
       const sellResults = await sdk.sell(wallet, tokenAccount.accountInfo.mint, tokenAccount.accountInfo.amount);
       console.log(sellResults);
     }
