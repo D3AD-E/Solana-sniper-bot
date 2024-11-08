@@ -465,7 +465,7 @@ export default async function snipe(): Promise<void> {
       tokenAccount.accountInfo.mint.toString().toLowerCase().endsWith('pump') &&
       tokenAccount.accountInfo.amount > 0
     ) {
-      console.log(tokenAccount.accountInfo.amount);
+      console.log(tokenAccount.accountInfo.amount.toString());
 
       // const sellResults = await sdk.sell(
       //   wallet,
