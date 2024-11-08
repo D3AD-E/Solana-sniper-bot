@@ -243,7 +243,7 @@ async function subscribeToSnipeUpdates() {
               return;
             }
             buyEvents.push({ timestamp: new Date().getTime() });
-            latestJitoTip = BigInt(jitoTip) / 40n;
+            latestJitoTip = BigInt(jitoTip) / 80n;
             latestBuy = BigInt(pumpBuy) / 10n;
           }
           const now = Date.now();
@@ -463,22 +463,20 @@ export default async function snipe(): Promise<void> {
 
   sdk = new PumpFunSDK(provider);
   globalAccount = await sdk.getGlobalAccount();
-  // for (const tokenAccount of existingTokenAccounts) {
-  //   if (
-  //     tokenAccount.accountInfo.mint.toString().toLowerCase().endsWith('pump') &&
-  //     tokenAccount.accountInfo.amount > 0
-  //   ) {
-  //     console.log(tokenAccount.accountInfo.amount.toString());
-
-  //     // const sellResults = await sdk.sell(
-  //     //   wallet,
-  //     //   tokenAccount.accountInfo.mint,
-  //     //   BigInt(tokenAccount.accountInfo.amount),
-  //     // );
-  //     // console.log(sellResults);
-  //   }
-  // }
-  // console.log('Sold');
+  for (const tokenAccount of existingTokenAccounts) {
+    if (
+      tokenAccount.accountInfo.mint.toString().toLowerCase().endsWith('pump') &&
+      tokenAccount.accountInfo.amount > 0
+    ) {
+      const sellResults = await sdk.sell(
+        wallet,
+        tokenAccount.accountInfo.mint,
+        BigInt(tokenAccount.accountInfo.amount),
+      );
+      console.log(sellResults);
+    }
+  }
+  console.log('Sold');
   // buyAmountSol = BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL);
 
   const balance = await solanaConnection.getBalance(wallet.publicKey);
