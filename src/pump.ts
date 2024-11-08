@@ -466,6 +466,7 @@ export default async function snipe(): Promise<void> {
       console.log(sellResults);
     }
   }
+  console.log('Sold');
   // buyAmountSol = BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL);
 
   const balance = await solanaConnection.getBalance(wallet.publicKey);
