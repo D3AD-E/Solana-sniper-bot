@@ -460,30 +460,30 @@ export default async function snipe(): Promise<void> {
 
   sdk = new PumpFunSDK(provider);
   globalAccount = await sdk.getGlobalAccount();
-  for (const tokenAccount of existingTokenAccounts) {
-    if (
-      tokenAccount.accountInfo.mint.toString().toLowerCase().endsWith('pump') &&
-      tokenAccount.accountInfo.amount > 0
-    ) {
-      console.log(tokenAccount.accountInfo.amount.toString());
+  // for (const tokenAccount of existingTokenAccounts) {
+  //   if (
+  //     tokenAccount.accountInfo.mint.toString().toLowerCase().endsWith('pump') &&
+  //     tokenAccount.accountInfo.amount > 0
+  //   ) {
+  //     console.log(tokenAccount.accountInfo.amount.toString());
 
-      // const sellResults = await sdk.sell(
-      //   wallet,
-      //   tokenAccount.accountInfo.mint,
-      //   BigInt(tokenAccount.accountInfo.amount),
-      // );
-      // console.log(sellResults);
-    }
-  }
-  console.log('Sold');
+  //     // const sellResults = await sdk.sell(
+  //     //   wallet,
+  //     //   tokenAccount.accountInfo.mint,
+  //     //   BigInt(tokenAccount.accountInfo.amount),
+  //     // );
+  //     // console.log(sellResults);
+  //   }
+  // }
+  // console.log('Sold');
   // buyAmountSol = BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL);
 
   const balance = await solanaConnection.getBalance(wallet.publicKey);
   initialWalletBalance = balance / 1_000_000_000;
   console.log('Wallet balance (in SOL):', initialWalletBalance);
   // Call the subscription function
-  // subscribeToSlotUpdates();
-  // subscribeToSnipeUpdates();
+  subscribeToSlotUpdates();
+  subscribeToSnipeUpdates();
   // let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
   //   if (event.user.toString().toLowerCase() === pumpWallet.toLowerCase()) {
   //     const token = oldCurves.find((x) => x.mint === event.mint.toString());
