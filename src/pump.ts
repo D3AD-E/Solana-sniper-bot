@@ -243,7 +243,7 @@ async function subscribeToSnipeUpdates() {
               return;
             }
             buyEvents.push({ timestamp: new Date().getTime() });
-            latestJitoTip = BigInt(jitoTip) / 20n;
+            latestJitoTip = BigInt(jitoTip) / 40n;
             latestBuy = BigInt(pumpBuy) / 10n;
           }
           const now = Date.now();
