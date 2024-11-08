@@ -150,7 +150,6 @@ async function fetchTipsData(): Promise<void> {
 }
 
 function getAmountWeBuyBasedOnOther(otherPersonBuy: bigint) {
-  if (otherPersonBuy > 3_000_000_000n) return 0n;
   if (otherPersonBuy > 985_000_000n && otherPersonBuy < 988_000_000n) return 0n;
   return latestBuy!;
   // const initialStep = 500_000_000n;
