@@ -330,7 +330,7 @@ async function subscribeToSlotUpdates() {
     )
       return;
     logger.info('Signature');
-    console.log(signatureString);
+    logger.info(signatureString);
     tokensSeen++;
     let tr2 = data.transaction?.transaction?.meta?.innerInstructions[2].instructions;
     let otherpersonBuyValue = 0n;
