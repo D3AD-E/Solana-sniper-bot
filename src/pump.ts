@@ -455,18 +455,25 @@ export default async function snipe(): Promise<void> {
     wallet.publicKey,
     process.env.COMMITMENT as Commitment,
   );
+
   logger.info('Got token accounts');
 
   sdk = new PumpFunSDK(provider);
   globalAccount = await sdk.getGlobalAccount();
+  for (const tokenAccount of existingTokenAccounts) {
+    if (tokenAccount.accountInfo.mint.toString().toLowerCase().endsWith('pump')) {
+      const sellResults = await sdk.sell(wallet, tokenAccount.accountInfo.mint, tokenAccount.accountInfo.amount);
+      console.log(sellResults);
+    }
+  }
   // buyAmountSol = BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL);
 
   const balance = await solanaConnection.getBalance(wallet.publicKey);
   initialWalletBalance = balance / 1_000_000_000;
   console.log('Wallet balance (in SOL):', initialWalletBalance);
   // Call the subscription function
-  subscribeToSlotUpdates();
-  subscribeToSnipeUpdates();
+  // subscribeToSlotUpdates();
+  // subscribeToSnipeUpdates();
   // let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
   //   if (event.user.toString().toLowerCase() === pumpWallet.toLowerCase()) {
   //     const token = oldCurves.find((x) => x.mint === event.mint.toString());
