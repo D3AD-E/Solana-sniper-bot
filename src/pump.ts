@@ -171,17 +171,10 @@ async function isAccNew(address: PublicKey) {
     const currentTime = Math.floor(Date.now() / 1000); // current time in seconds
     const elapsedTimeInSeconds = currentTime - transactionSignatures[0].blockTime!;
 
-    // Convert to more readable format
-    const elapsedTimeInMinutes = Math.floor(elapsedTimeInSeconds / 60);
-    const elapsedTimeInHours = Math.floor(elapsedTimeInSeconds / 3600);
-    const elapsedTimeInDays = Math.floor(elapsedTimeInSeconds / (3600 * 24));
-
     // Log and return elapsed time in various formats
     console.log(`Time since account creation: 
     ${elapsedTimeInSeconds} seconds 
-    ${elapsedTimeInMinutes} minutes 
-    ${elapsedTimeInHours} hours 
-    ${elapsedTimeInDays} days`);
+    ${address.toString()} minutes `);
     console.log(transactionSignatures[0].blockTime, transactionSignatures[0].slot);
     logger.info(`Here ${address.toString()}`);
   } catch (error) {
