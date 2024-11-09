@@ -156,7 +156,6 @@ async function isAccNew(address: PublicKey) {
   try {
     // Step 1: Fetch the first transaction for the wallet
     const transactionSignatures = await solanaConnection.getSignaturesForAddress(address, {}, 'finalized');
-    console.log(transactionSignatures);
     if (transactionSignatures.length === 0) {
       console.log('No transactions found for this wallet');
       return false; // No transactions found, so no way to check if it's from Binance
@@ -423,7 +422,7 @@ async function subscribeToSlotUpdates() {
       otherPersonBuyAmount: otherpersonBuyValue,
       otherPersonAddress: pkKeysStr[0],
     });
-    await isAccNew(new PublicKey('CagF26EiddAmrnLhC5narPFB3FjVU53XjA1vVcK9JvnB'));
+    await isAccNew(pkKeys[0]);
     const buySol = getAmountWeBuyBasedOnWalletFunds(balance);
     let weBuySol = getAmountWeBuyBasedOnOther(otherpersonBuyValue, buySol!);
     if (weBuySol === 0n) return;
