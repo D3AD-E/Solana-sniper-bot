@@ -160,8 +160,9 @@ async function isAccOld(address: PublicKey) {
       return false; // No transactions found, so no way to check if it's from Binance
     }
     // Calculate the time difference in seconds
+    const sortedSign = transactionSignatures.sort((x, y) => x.blockTime! - y.blockTime!);
     const currentTime = Math.floor(Date.now() / 1000); // current time in seconds
-    const elapsedTimeInSeconds = currentTime - transactionSignatures[transactionSignatures.length - 1].blockTime!;
+    const elapsedTimeInSeconds = currentTime - sortedSign[0].blockTime!;
 
     // Log and return elapsed time in various formats
     console.log(`Time since account creation: 
