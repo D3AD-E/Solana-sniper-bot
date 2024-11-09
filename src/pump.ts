@@ -154,7 +154,7 @@ function findCommonElement(array1: string[], array2: string[]) {
 async function isAccOld(address: PublicKey) {
   try {
     // Step 1: Fetch the first transaction for the wallet
-    const transactionSignatures = await solanaConnection.getSignaturesForAddress(address, {}, 'finalized');
+    const transactionSignatures = await solanaConnection.getSignaturesForAddress(address, { limit: 200 }, 'finalized');
     if (transactionSignatures.length === 0) {
       console.log('No transactions found for this wallet');
       return false; // No transactions found, so no way to check if it's from Binance
@@ -370,8 +370,8 @@ async function subscribeToSlotUpdates() {
 
   // Handle updates
   stream.on('data', async (data) => {
-    if (softExit || new Date().getTime() > wasWonSeenTimeout) return;
-    if (!shouldWeBuy) return;
+    // if (softExit || new Date().getTime() > wasWonSeenTimeout) return;
+    // if (!shouldWeBuy) return;
     const ins = data.transaction?.transaction?.meta?.innerInstructions;
     if (!ins) return;
     const signatureString = bs58.encode(data.transaction.transaction.signature);
@@ -425,17 +425,17 @@ async function subscribeToSlotUpdates() {
     const buySol = getAmountWeBuyBasedOnWalletFunds(balance);
     let weBuySol = getAmountWeBuyBasedOnOther(otherpersonBuyValue, buySol!);
     if (weBuySol === 0n) return;
-    await buyPump(
-      wallet,
-      mint,
-      weBuySol!,
-      calculateBuy(otherpersonBuyValue, weBuySol)!,
-      globalAccount!,
-      provider!,
-      curve,
-      lastBlocks[lastBlocks.length - 1],
-      latestJitoTip!,
-    );
+    // await buyPump(
+    //   wallet,
+    //   mint,
+    //   weBuySol!,
+    //   calculateBuy(otherpersonBuyValue, weBuySol)!,
+    //   globalAccount!,
+    //   provider!,
+    //   curve,
+    //   lastBlocks[lastBlocks.length - 1],
+    //   latestJitoTip!,
+    // );
     logger.info('Sent buy');
   });
   // Create subscribe request based on provided arguments.
