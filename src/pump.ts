@@ -193,7 +193,7 @@ async function subscribeToSnipeWonTransferUpdates() {
   stream.on('data', async (data) => {
     if (data.transaction !== undefined) {
       console.log(data);
-      wasWonSeenTimeout = new Date().getTime() + 30 * 60 * 1000;
+      wasWonSeenTimeout = new Date().getTime() + 20 * 60 * 1000;
       sendMessage('Started buy');
     }
   });
