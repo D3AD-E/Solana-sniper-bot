@@ -168,8 +168,8 @@ async function isAccNew(address: PublicKey) {
     console.log(`Time since account creation: 
     ${elapsedTimeInSeconds} seconds 
     ${address.toString()} minutes `);
-    console.log(transactionSignatures[0].blockTime, transactionSignatures[transactionSignatures.length - 1].slot);
-    logger.info(`Here ${address.toString()}`);
+    console.log(elapsedTimeInSeconds > 60 * 60);
+    return elapsedTimeInSeconds > 60 * 60;
   } catch (error) {
     console.error('Error checking transaction:', error);
     return false;
