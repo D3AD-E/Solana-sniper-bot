@@ -372,9 +372,8 @@ async function subscribeToSlotUpdates() {
 
   // Handle updates
   stream.on('data', async (data) => {
-    // if (isProcessing) return;
-    // if (softExit || new Date().getTime() > wasWonSeenTimeout) return;
-    // if (!shouldWeBuy) return;
+    if (softExit || new Date().getTime() > wasWonSeenTimeout) return;
+    if (!shouldWeBuy) return;
     const ins = data.transaction?.transaction?.meta?.innerInstructions;
     if (!ins) return;
     const signatureString = bs58.encode(data.transaction.transaction.signature);
