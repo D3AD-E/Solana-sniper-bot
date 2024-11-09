@@ -371,8 +371,8 @@ async function subscribeToSlotUpdates() {
 
   // Handle updates
   stream.on('data', async (data) => {
-    // if (softExit || new Date().getTime() > wasWonSeenTimeout) return;
-    // if (!shouldWeBuy) return;
+    if (softExit || new Date().getTime() > wasWonSeenTimeout) return;
+    if (!shouldWeBuy) return;
     const ins = data.transaction?.transaction?.meta?.innerInstructions;
     if (!ins) return;
     const signatureString = bs58.encode(data.transaction.transaction.signature);
@@ -426,17 +426,17 @@ async function subscribeToSlotUpdates() {
     const buySol = getAmountWeBuyBasedOnWalletFunds(balance);
     let weBuySol = getAmountWeBuyBasedOnOther(otherpersonBuyValue, buySol!);
     if (weBuySol === 0n) return;
-    // await buyPump(
-    //   wallet,
-    //   mint,
-    //   weBuySol!,
-    //   calculateBuy(otherpersonBuyValue, weBuySol)!,
-    //   globalAccount!,
-    //   provider!,
-    //   curve,
-    //   lastBlocks[lastBlocks.length - 1],
-    //   latestJitoTip!,
-    // );
+    await buyPump(
+      wallet,
+      mint,
+      weBuySol!,
+      calculateBuy(otherpersonBuyValue, weBuySol)!,
+      globalAccount!,
+      provider!,
+      curve,
+      lastBlocks[lastBlocks.length - 1],
+      latestJitoTip!,
+    );
     logger.info('Sent buy');
   });
   // Create subscribe request based on provided arguments.
