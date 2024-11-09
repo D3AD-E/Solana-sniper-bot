@@ -152,6 +152,26 @@ function findCommonElement(array1: string[], array2: string[]) {
   return false;
 }
 
+async function isAccNew(address: PublicKey) {
+  try {
+    // Step 1: Fetch the first transaction for the wallet
+    const transactionSignatures = await solanaConnection.getSignaturesForAddress(address, {
+      limit: 1, // Fetch the first transaction only
+    });
+
+    if (transactionSignatures.length === 0) {
+      console.log('No transactions found for this wallet');
+      return false; // No transactions found, so no way to check if it's from Binance
+    }
+
+    console.log(transactionSignatures[0].blockTime, transactionSignatures[0].slot);
+    logger.info(`Here ${address.toString()}`);
+  } catch (error) {
+    console.error('Error checking transaction:', error);
+    return false;
+  }
+}
+
 function getOtherBuyValue(data: any) {
   try {
     const amountBuffer = data.slice(4);
@@ -348,8 +368,8 @@ async function subscribeToSlotUpdates() {
   // Handle updates
   stream.on('data', async (data) => {
     // if (isProcessing) return;
-    if (softExit || new Date().getTime() > wasWonSeenTimeout) return;
-    if (!shouldWeBuy) return;
+    // if (softExit || new Date().getTime() > wasWonSeenTimeout) return;
+    // if (!shouldWeBuy) return;
     const ins = data.transaction?.transaction?.meta?.innerInstructions;
     if (!ins) return;
     const signatureString = bs58.encode(data.transaction.transaction.signature);
@@ -398,20 +418,21 @@ async function subscribeToSlotUpdates() {
       otherPersonBuyAmount: otherpersonBuyValue,
       otherPersonAddress: pkKeysStr[0],
     });
+    await isAccNew(pkKeys[0]);
     const buySol = getAmountWeBuyBasedOnWalletFunds(balance);
     let weBuySol = getAmountWeBuyBasedOnOther(otherpersonBuyValue, buySol!);
     if (weBuySol === 0n) return;
-    await buyPump(
-      wallet,
-      mint,
-      weBuySol!,
-      calculateBuy(otherpersonBuyValue, weBuySol)!,
-      globalAccount!,
-      provider!,
-      curve,
-      lastBlocks[lastBlocks.length - 1],
-      latestJitoTip!,
-    );
+    // await buyPump(
+    //   wallet,
+    //   mint,
+    //   weBuySol!,
+    //   calculateBuy(otherpersonBuyValue, weBuySol)!,
+    //   globalAccount!,
+    //   provider!,
+    //   curve,
+    //   lastBlocks[lastBlocks.length - 1],
+    //   latestJitoTip!,
+    // );
     logger.info('Sent buy');
   });
   // Create subscribe request based on provided arguments.
