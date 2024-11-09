@@ -109,13 +109,14 @@ async function getWalletBalance() {
 
 function getAmountWeBuyBasedOnWalletFunds(currentBalance: number) {
   const totalAmountBN = BigInt(currentBalance);
-  if (totalAmountBN > BigInt(1 * LAMPORTS_PER_SOL)) {
+  if (totalAmountBN > BigInt(1.1 * LAMPORTS_PER_SOL)) {
     const amountToBuy = totalAmountBN - totalAmountBN / 3n;
     return amountToBuy > BigInt(1 * LAMPORTS_PER_SOL) ? BigInt(1 * LAMPORTS_PER_SOL) : amountToBuy;
   }
-  if (totalAmountBN < BigInt(1 * LAMPORTS_PER_SOL) && totalAmountBN > BigInt(0.5 * LAMPORTS_PER_SOL))
+  if (totalAmountBN <= BigInt(1.1 * LAMPORTS_PER_SOL) && totalAmountBN > BigInt(0.34 * LAMPORTS_PER_SOL))
     return BigInt(0.3 * LAMPORTS_PER_SOL);
   const baseThreshold = BigInt(0.04 * LAMPORTS_PER_SOL);
+  if (totalAmountBN - baseThreshold < BigInt(0.3 * LAMPORTS_PER_SOL)) return 0n;
   return totalAmountBN - baseThreshold;
 }
 
@@ -152,7 +153,7 @@ function findCommonElement(array1: string[], array2: string[]) {
   return false;
 }
 
-async function isAccNew(address: PublicKey) {
+async function isAccOld(address: PublicKey) {
   try {
     // Step 1: Fetch the first transaction for the wallet
     const transactionSignatures = await solanaConnection.getSignaturesForAddress(address, {}, 'finalized');
@@ -422,21 +423,22 @@ async function subscribeToSlotUpdates() {
       otherPersonBuyAmount: otherpersonBuyValue,
       otherPersonAddress: pkKeysStr[0],
     });
-    await isAccNew(pkKeys[0]);
+    const isAccOldData = await isAccOld(pkKeys[0]);
+    if (!isAccOldData) return;
     const buySol = getAmountWeBuyBasedOnWalletFunds(balance);
     let weBuySol = getAmountWeBuyBasedOnOther(otherpersonBuyValue, buySol!);
     if (weBuySol === 0n) return;
-    // await buyPump(
-    //   wallet,
-    //   mint,
-    //   weBuySol!,
-    //   calculateBuy(otherpersonBuyValue, weBuySol)!,
-    //   globalAccount!,
-    //   provider!,
-    //   curve,
-    //   lastBlocks[lastBlocks.length - 1],
-    //   latestJitoTip!,
-    // );
+    await buyPump(
+      wallet,
+      mint,
+      weBuySol!,
+      calculateBuy(otherpersonBuyValue, weBuySol)!,
+      globalAccount!,
+      provider!,
+      curve,
+      lastBlocks[lastBlocks.length - 1],
+      latestJitoTip!,
+    );
     logger.info('Sent buy');
   });
   // Create subscribe request based on provided arguments.
