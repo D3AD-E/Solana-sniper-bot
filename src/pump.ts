@@ -290,8 +290,8 @@ async function subscribeToSnipeUpdates() {
     const ins = data.transaction?.transaction?.meta?.innerInstructions;
     if (!ins) return;
     const signatureString = bs58.encode(data.transaction.transaction.signature);
-    logger.info('Snipe signature');
-    console.log(signatureString);
+    // logger.info('Snipe signature');
+    // console.log(signatureString);
     if (ins.length !== 2) return;
     const instweIntrested = ins[1].instructions;
     try {
