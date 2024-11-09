@@ -160,7 +160,7 @@ async function isAccNew(address: PublicKey) {
       {
         limit: 1,
       },
-      'confirmed',
+      'finalized',
     );
 
     if (transactionSignatures.length === 0) {
