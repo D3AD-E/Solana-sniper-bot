@@ -124,7 +124,7 @@ export async function sellPump(
   transaction.sign([wallet]);
   logger.info('sending');
   sendBundles(wallet, transaction, block.blockhash);
-
+  await new Promise((resolve) => setTimeout(resolve, 3000));
   const messageV0NoTip = new TransactionMessage({
     payerKey: wallet.publicKey,
     recentBlockhash: block.blockhash,
