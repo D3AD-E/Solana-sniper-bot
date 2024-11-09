@@ -45,7 +45,7 @@ export async function buyPump(
   jitoTip: bigint,
 ) {
   const actualTip = Number(jitoTip.toString());
-  const raisedTip = Math.floor(actualTip * 1.01);
+  const raisedTip = Math.floor(actualTip * 1.1);
   let buyTx = await getBuyInstructions(
     buyer.publicKey,
     mint,
