@@ -106,7 +106,7 @@ function calculateTokenAverage() {
 async function getWalletBalance() {
   balance = await solanaConnection.getBalance(wallet.publicKey);
   console.log(BigInt(balance));
-  console.log(BigInt(balance) < BigInt(0.3 * LAMPORTS_PER_SOL));
+  console.log(BigInt(0.3 * LAMPORTS_PER_SOL));
 }
 
 function getAmountWeBuyBasedOnWalletFunds(currentBalance: number) {
