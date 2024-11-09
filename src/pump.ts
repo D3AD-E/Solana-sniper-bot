@@ -122,7 +122,7 @@ function getAmountWeBuyBasedOnWalletFunds(currentBalance: number) {
 }
 
 function getAmountWeBuyBasedOnOther(otherPersonBuy: bigint, weWant: bigint) {
-  if (otherPersonBuy > 3_085_000_000n) return 0n;
+  if (otherPersonBuy >= 3_000_000_000n) return 0n;
   if (otherPersonBuy < 1_000_000_000n) return 0n;
   if (otherPersonBuy > 985_000_000n && otherPersonBuy < 988_000_000n) return 0n;
   return weWant!;
