@@ -155,9 +155,13 @@ function findCommonElement(array1: string[], array2: string[]) {
 async function isAccNew(address: PublicKey) {
   try {
     // Step 1: Fetch the first transaction for the wallet
-    const transactionSignatures = await solanaConnection.getSignaturesForAddress(address, {
-      limit: 1, // Fetch the first transaction only
-    });
+    const transactionSignatures = await solanaConnection.getSignaturesForAddress(
+      address,
+      {
+        limit: 1,
+      },
+      'confirmed',
+    );
 
     if (transactionSignatures.length === 0) {
       console.log('No transactions found for this wallet');
