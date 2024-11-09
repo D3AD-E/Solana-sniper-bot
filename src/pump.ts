@@ -109,12 +109,10 @@ async function getWalletBalance() {
 
 function getAmountWeBuyBasedOnWalletFunds(currentBalance: number) {
   const totalAmountBN = BigInt(currentBalance);
-  if (totalAmountBN > BigInt(1.1 * LAMPORTS_PER_SOL)) {
-    const amountToBuy = totalAmountBN - totalAmountBN / 3n;
+  if (totalAmountBN > BigInt(0.69 * LAMPORTS_PER_SOL)) {
+    const amountToBuy = BigInt(0.68 * LAMPORTS_PER_SOL);
     return amountToBuy > BigInt(1 * LAMPORTS_PER_SOL) ? BigInt(1 * LAMPORTS_PER_SOL) : amountToBuy;
   }
-  if (totalAmountBN <= BigInt(1.1 * LAMPORTS_PER_SOL) && totalAmountBN > BigInt(0.34 * LAMPORTS_PER_SOL))
-    return BigInt(0.3 * LAMPORTS_PER_SOL);
   const baseThreshold = BigInt(0.04 * LAMPORTS_PER_SOL);
   if (totalAmountBN - baseThreshold < BigInt(0.3 * LAMPORTS_PER_SOL)) return 0n;
   return totalAmountBN - baseThreshold;
