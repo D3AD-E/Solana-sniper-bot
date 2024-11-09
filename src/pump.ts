@@ -43,7 +43,7 @@ let workerPool: WorkerPool | undefined = undefined;
 let softExit = false;
 let secondWallet: PublicKey | undefined = undefined;
 let latestJitoTip: bigint | undefined = undefined;
-let latestBuy: bigint | undefined = undefined;
+let wasWonSeenTimeout = 0;
 
 const getProvider = () => {
   const walletAnchor = new Wallet(wallet);
@@ -81,20 +81,16 @@ let mintAccount = '';
 let globalAccount: GlobalAccount | undefined = undefined;
 let provider: AnchorProvider | undefined = undefined;
 let shouldWeBuy = false;
-// let buyAmountSol: bigint | undefined = undefined;
 let tokensSeen = 0;
-let currentlyTradingTokens = 0;
-let tradesAmount = 0;
 let initialWalletBalance = 0;
 let tokenBuySellDiff = 0n;
 let buyEvents: BuyEvent[] = [];
 let currentTips: TipsData | undefined = undefined;
 let buyValues: string[] = [];
 const pumpWallet = '12BRrNxzJYMx7cRhuBdhA71AchuxWRcvGydNnDoZpump';
+const pumpWalletProfit = '4woK7yYzNqXSopwvU3J7un26w8XhowRhnWBbETFLfcaK';
 let blackList: string[] = [];
-let jitoData: {
-  [key: string]: SlotList;
-};
+let balance = 0;
 
 eventEmitter.on(USER_STOP_EVENT, (data) => {
   softExit = true;
@@ -107,51 +103,31 @@ function calculateTokenAverage() {
   tokensSeen = 0;
 }
 
-function hasSlotInRange(jitoData: { [key: string]: SlotList }, target: number, tolerance: number): boolean {
-  const lowerBound = target - tolerance;
-  const upperBound = target + tolerance;
-  console.log(target);
-  console.log(currentSlot);
-  for (const key in jitoData) {
-    const slotList = jitoData[key].slots;
-    for (const slot of slotList) {
-      if (slot >= lowerBound && slot <= upperBound) {
-        return true;
-      }
-    }
-  }
-
-  return false;
+async function getWalletBalance() {
+  balance = await solanaConnection.getBalance(wallet.publicKey);
+  console.log(BigInt(balance));
+  console.log(BigInt(balance) < BigInt(0.3 * LAMPORTS_PER_SOL));
 }
 
-async function refreshCurrentSlot() {
-  currentSlot = await solanaConnection.getSlot();
+function getAmountWeBuyBasedOnWalletFunds(currentBalance: number) {
+  const totalAmountBN = BigInt(currentBalance);
+  const highestBuy =
+    totalAmountBN > BigInt(1 * LAMPORTS_PER_SOL) ? BigInt(0.68 * LAMPORTS_PER_SOL) : BigInt(0.5 * LAMPORTS_PER_SOL);
+  const lowestBuy = BigInt(0.3 * LAMPORTS_PER_SOL);
+  const baseThreshold = BigInt(0.04 * LAMPORTS_PER_SOL);
+  // 0 3 left
+  if (totalAmountBN < lowestBuy) return 0n;
+  // 1 left
+  if (totalAmountBN > highestBuy + baseThreshold) return highestBuy;
+  //we have 0.7 left
+  return totalAmountBN - baseThreshold;
 }
 
-async function getJitoLeaders() {
-  await refreshLeaders();
-  jitoData = await readLeaders();
-}
-
-async function fetchTipsData(): Promise<void> {
-  try {
-    const response = await fetch('http://bundles-api-rest.jito.wtf/api/v1/bundles/tip_floor');
-
-    if (!response.ok) {
-      console.error('Failed to fetch data:', response.statusText);
-      return;
-    }
-
-    const data: TipsData[] = await response.json();
-    currentTips = data[0];
-  } catch (error) {
-    console.error('Error fetching tips data:', error);
-  }
-}
-
-function getAmountWeBuyBasedOnOther(otherPersonBuy: bigint) {
+function getAmountWeBuyBasedOnOther(otherPersonBuy: bigint, weWant: bigint) {
+  if (otherPersonBuy > 3_085_000_000n) return 0n;
+  if (otherPersonBuy < 1_000_000_000n) return 0n;
   if (otherPersonBuy > 985_000_000n && otherPersonBuy < 988_000_000n) return 0n;
-  return latestBuy!;
+  return weWant!;
   // const initialStep = 500_000_000n;
   // if (otherPersonBuy <= initialStep) return buyAmountSol!;
 
@@ -191,6 +167,69 @@ function getOtherBuyValue(data: any) {
     console.log(e);
   }
   return 0n;
+}
+
+async function subscribeToSnipeWonTransferUpdates() {
+  const client = new Client('http://localhost:10000', 'args.xToken', {
+    'grpc.max_receive_message_length': 64 * 1024 * 1024, // 64MiB
+  });
+
+  // Subscribe for events
+  const stream = await client.subscribe();
+
+  // Create `error` / `end` handler
+  const streamClosed = new Promise<void>((resolve, reject) => {
+    stream.on('error', (error) => {
+      reject(error);
+      stream.end();
+    });
+    stream.on('end', () => {
+      resolve();
+    });
+    stream.on('close', () => {
+      resolve();
+    });
+  });
+
+  // Handle updates
+  stream.on('data', async (data) => {
+    console.log(data);
+    wasWonSeenTimeout = new Date().getTime() + 30 * 60 * 1000;
+    sendMessage('Started buy');
+  });
+  // Create subscribe request based on provided arguments.
+  const request: SubscribeRequest = {
+    slots: {},
+    accounts: {},
+    transactions: {
+      serum: {
+        vote: false,
+        accountInclude: [],
+        accountExclude: [],
+        accountRequired: [pumpWallet, pumpWalletProfit],
+      },
+    },
+    blocks: {},
+    blocksMeta: {},
+    accountsDataSlice: [],
+    transactionsStatus: {},
+    entry: {},
+  };
+  // Send subscribe request
+  await new Promise<void>((resolve, reject) => {
+    stream.write(request, (err: any) => {
+      if (err === null || err === undefined) {
+        resolve();
+      } else {
+        reject(err);
+      }
+    });
+  }).catch((reason) => {
+    console.error(reason);
+    throw reason;
+  });
+
+  await streamClosed;
 }
 
 async function subscribeToSnipeUpdates() {
@@ -237,19 +276,13 @@ async function subscribeToSnipeUpdates() {
           const jitoTip = getOtherBuyValue(jitoBuffer);
           const pumpBuy = getOtherBuyValue(dataBuffer);
 
-          if (pumpBuy >= 100_000_000n) {
-            // if (pumpBuy >= 800_000_000n) {
-            //   return;
-            // }
+          if (pumpBuy >= 600_000_000n) {
             buyEvents.push({ timestamp: new Date().getTime() });
-            console.log(BigInt(jitoTip).toString());
-            console.log(jitoTip.toString());
-            // latestJitoTip = BigInt(jitoTip) / 80n;
-            // latestBuy = BigInt(pumpBuy) / 10n;
+            latestJitoTip = BigInt(jitoTip);
           }
           const now = Date.now();
           const filteredEvents = buyEvents.filter((event) => now - event.timestamp <= 120000);
-          shouldWeBuy = filteredEvents.length >= 2;
+          shouldWeBuy = filteredEvents.length >= 4;
           break;
         }
       }
@@ -317,7 +350,7 @@ async function subscribeToSlotUpdates() {
   // Handle updates
   stream.on('data', async (data) => {
     // if (isProcessing) return;
-    if (softExit) return;
+    if (softExit || new Date().getTime() > wasWonSeenTimeout) return;
     if (!shouldWeBuy) return;
     const ins = data.transaction?.transaction?.meta?.innerInstructions;
     if (!ins) return;
@@ -367,12 +400,9 @@ async function subscribeToSlotUpdates() {
       otherPersonBuyAmount: otherpersonBuyValue,
       otherPersonAddress: pkKeysStr[0],
     });
-    let weBuySol = getAmountWeBuyBasedOnOther(otherpersonBuyValue);
+    const buySol = getAmountWeBuyBasedOnWalletFunds(balance);
+    let weBuySol = getAmountWeBuyBasedOnOther(otherpersonBuyValue, buySol!);
     if (weBuySol === 0n) return;
-    // if (!hasSlotInRange(jitoData, currentSlot + 10, 3)) {
-    //   logger.warn('No slot');
-    //   return;
-    // }
     await buyPump(
       wallet,
       mint,
@@ -430,7 +460,6 @@ function clearState() {
   console.log('Clearing state');
   mintAccount = '';
   gotTokenData = false;
-  tradesAmount = 0;
 }
 function calculateBuy(otherPersonBuyAmount: bigint, weBuySol: bigint) {
   const otherPersonCorrected = BigInt(otherPersonBuyAmount);
@@ -441,14 +470,12 @@ function calculateBuy(otherPersonBuyAmount: bigint, weBuySol: bigint) {
 
 export default async function snipe(): Promise<void> {
   setInterval(storeRecentBlockhashes, 700);
+  setInterval(getWalletBalance, 300);
   // setInterval(fetchTipsData, 500);
-  // setInterval(refreshCurrentSlot, 500);
-  // setInterval(getJitoLeaders, 1000 * 60 * 5);
   setInterval(calculateTokenAverage, 1000 * 60);
   sendMessage(`Started`);
   blackList = JSON.parse((await readFile(BLACKLIST_FILE_NAME)).toString()) as string[];
   console.log(blackList);
-  await getJitoLeaders();
   await new Promise((resolve) => setTimeout(resolve, 5000));
   const client = await JitoClient.getInstance();
   logger.info('Starting');
@@ -477,16 +504,14 @@ export default async function snipe(): Promise<void> {
   //     console.log(sellResults);
   //   }
   // }
-  console.log('Sold');
   const buyAmountSol = BigInt(Number(process.env.SWAP_SOL_AMOUNT!) * LAMPORTS_PER_SOL);
-  latestBuy = buyAmountSol;
-  latestJitoTip = BigInt(54321);
   const balance = await solanaConnection.getBalance(wallet.publicKey);
   initialWalletBalance = balance / 1_000_000_000;
   console.log('Wallet balance (in SOL):', initialWalletBalance);
   // Call the subscription function
   subscribeToSlotUpdates();
   subscribeToSnipeUpdates();
+  subscribeToSnipeWonTransferUpdates();
   // let tradeEvent = sdk!.addEventListener('tradeEvent', async (event, _, signature) => {
   //   if (event.user.toString().toLowerCase() === pumpWallet.toLowerCase()) {
   //     const token = oldCurves.find((x) => x.mint === event.mint.toString());
@@ -563,7 +588,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey,
   console.log(total);
   if (total === 0n) return true;
   const firstPart = total / 2n;
-  await new Promise((resolve) => setTimeout(resolve, 2000));
+  await new Promise((resolve) => setTimeout(resolve, 2200));
   await sellPump(
     wallet,
     tokenAccount.accountInfo.mint,
@@ -572,7 +597,7 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey,
     provider!,
     associatedCurve!,
     lastBlocks[lastBlocks.length - 1],
-    latestJitoTip! / 5n,
+    latestJitoTip! / 10n,
   );
   logger.info('Sold all');
   await summaryPrint(otherPersonAddress);
@@ -606,7 +631,7 @@ async function summaryPrint(mint: string) {
   const balance = await solanaConnection.getBalance(wallet.publicKey);
   const newWalletBalance = balance / 1_000_000_000;
   console.log('Wallet balance (in SOL):', newWalletBalance);
-  if (newWalletBalance > 4.5) {
+  if (newWalletBalance > 3.5) {
     sendMessage('Done');
     await transferFunds();
   }
