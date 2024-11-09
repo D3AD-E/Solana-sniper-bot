@@ -191,9 +191,11 @@ async function subscribeToSnipeWonTransferUpdates() {
 
   // Handle updates
   stream.on('data', async (data) => {
-    console.log(data);
-    wasWonSeenTimeout = new Date().getTime() + 30 * 60 * 1000;
-    sendMessage('Started buy');
+    if (data.transaction !== undefined) {
+      console.log(data);
+      wasWonSeenTimeout = new Date().getTime() + 30 * 60 * 1000;
+      sendMessage('Started buy');
+    }
   });
   // Create subscribe request based on provided arguments.
   const request: SubscribeRequest = {
@@ -469,7 +471,6 @@ function calculateBuy(otherPersonBuyAmount: bigint, weBuySol: bigint) {
 export default async function snipe(): Promise<void> {
   setInterval(storeRecentBlockhashes, 700);
   setInterval(getWalletBalance, 300);
-  // setInterval(fetchTipsData, 500);
   setInterval(calculateTokenAverage, 1000 * 60);
   sendMessage(`Started`);
   blackList = JSON.parse((await readFile(BLACKLIST_FILE_NAME)).toString()) as string[];
