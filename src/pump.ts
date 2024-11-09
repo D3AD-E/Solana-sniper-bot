@@ -163,13 +163,13 @@ async function isAccNew(address: PublicKey) {
     }
     // Calculate the time difference in seconds
     const currentTime = Math.floor(Date.now() / 1000); // current time in seconds
-    const elapsedTimeInSeconds = currentTime - transactionSignatures[0].blockTime!;
+    const elapsedTimeInSeconds = currentTime - transactionSignatures[transactionSignatures.length - 1].blockTime!;
 
     // Log and return elapsed time in various formats
     console.log(`Time since account creation: 
     ${elapsedTimeInSeconds} seconds 
     ${address.toString()} minutes `);
-    console.log(transactionSignatures[0].blockTime, transactionSignatures[0].slot);
+    console.log(transactionSignatures[0].blockTime, transactionSignatures[transactionSignatures.length - 1].slot);
     logger.info(`Here ${address.toString()}`);
   } catch (error) {
     console.error('Error checking transaction:', error);
