@@ -109,15 +109,13 @@ async function getWalletBalance() {
 
 function getAmountWeBuyBasedOnWalletFunds(currentBalance: number) {
   const totalAmountBN = BigInt(currentBalance);
-  const highestBuy =
-    totalAmountBN > BigInt(1 * LAMPORTS_PER_SOL) ? BigInt(0.68 * LAMPORTS_PER_SOL) : BigInt(0.5 * LAMPORTS_PER_SOL);
-  const lowestBuy = BigInt(0.3 * LAMPORTS_PER_SOL);
+  if (totalAmountBN > BigInt(1 * LAMPORTS_PER_SOL)) {
+    const amountToBuy = totalAmountBN - totalAmountBN / 3n;
+    return amountToBuy > BigInt(1 * LAMPORTS_PER_SOL) ? BigInt(1 * LAMPORTS_PER_SOL) : amountToBuy;
+  }
+  if (totalAmountBN < BigInt(1 * LAMPORTS_PER_SOL) && totalAmountBN > BigInt(0.5 * LAMPORTS_PER_SOL))
+    return BigInt(0.3 * LAMPORTS_PER_SOL);
   const baseThreshold = BigInt(0.04 * LAMPORTS_PER_SOL);
-  // 0 3 left
-  if (totalAmountBN < lowestBuy) return 0n;
-  // 1 left
-  if (totalAmountBN > highestBuy + baseThreshold) return highestBuy;
-  //we have 0.7 left
   return totalAmountBN - baseThreshold;
 }
 
@@ -598,6 +596,26 @@ async function monitorSellLogic(currentMint: string, associatedCurve: PublicKey,
     lastBlocks[lastBlocks.length - 1],
     latestJitoTip! / 10n,
   );
+
+  await new Promise((resolve) => setTimeout(resolve, 5000));
+  existingTokenAccounts = await getTokenAccounts(
+    solanaConnection,
+    wallet.publicKey,
+    process.env.COMMITMENT as Commitment,
+  );
+  tokenAccount = existingTokenAccounts.find((acc) => acc.accountInfo.mint.toString() === currentMint)!;
+  if (tokenAccount !== undefined && tokenAccount.accountInfo.amount !== undefined) {
+    await sellPump(
+      wallet,
+      tokenAccount.accountInfo.mint,
+      total,
+      globalAccount!,
+      provider!,
+      associatedCurve!,
+      lastBlocks[lastBlocks.length - 1],
+      latestJitoTip! / 10n,
+    );
+  }
   logger.info('Sold all');
   await summaryPrint(otherPersonAddress);
   clearState();
