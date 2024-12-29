@@ -217,7 +217,7 @@ async function sellOnActionGeyser(account: RawAccount) {
         wallet.publicKey,
         workerData.COMMITMENT as Commitment,
       );
-      const tokenAccount = existingTokenAccounts.find(
+      let tokenAccount = existingTokenAccounts.find(
         (acc) => acc.accountInfo.mint.toString() === account.mint.toString(),
       );
       if (!tokenAccount) {
@@ -225,8 +225,9 @@ async function sellOnActionGeyser(account: RawAccount) {
         clearAfterSell();
         return;
       }
+
       const signature = await sell(
-        tokenAccount.accountInfo.amount,
+        tokenAccount!.accountInfo.amount,
         minimalAccount!,
         quoteTokenAssociatedAddress,
         account.mint.toString(),

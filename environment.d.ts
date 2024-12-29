@@ -21,6 +21,7 @@ declare global {
       MIN_POOL_SIZE: number;
       ENABLE_PROTECTION: string;
       WORKER_AMOUNT: number;
+      SECOND_WALLET: string;
     }
   }
 }

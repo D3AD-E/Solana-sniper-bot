@@ -16,12 +16,16 @@ export const sendBundles = async (wallet: Keypair, transactions: VersionedTransa
   // }
 
   // const maybeBundle = b.addTipTx(wallet, 100_000, tipAccount, blockHash);
-
-  if (isError(b)) {
-    throw b;
-  }
-
-  const resp = await client.sendBundle(b);
-  logger.info('resp: ' + resp);
-  return resp;
+  client.sendBundle(b).catch((e) => console.error(e));
+  // if (isError(b)) {
+  //   throw b;
+  // }
+  // try {
+  //   const resp = await client.sendBundle(b);
+  //   logger.info('resp: ' + resp);
+  //   return resp;
+  // } catch (e) {
+  //   console.log(e);
+  //   return 'Failed';
+  // }
 };
