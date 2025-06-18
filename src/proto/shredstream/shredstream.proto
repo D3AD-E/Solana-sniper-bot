@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package shredstream;
+
+import "google/protobuf/timestamp.proto";
+
+
+message Header {
+  google.protobuf.Timestamp ts = 1;
+}
+
+
+// Shredstream Proxy
+
+service ShredstreamProxy {
+  rpc SubscribeEntries(SubscribeEntriesRequest) returns (stream Entry);
+}
+
+message SubscribeEntriesRequest {
+  // tbd: we may want to add filters here
+}
+
+message Entry {
+  // the slot that the entry is from
+  uint64 slot = 1;
+
+  // Serialized bytes of Vec<Entry>: https://docs.rs/solana-entry/latest/solana_entry/entry/struct.Entry.html
+  repeated string entries = 2;
+}
