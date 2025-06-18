@@ -43,6 +43,7 @@ import { getRandomAccount } from '../jito/constants';
 import { Market, OpenOrders } from '@project-serum/serum';
 import { DEFAULT_TRANSACTION_COMMITMENT } from '../constants';
 import { Block } from '../listener.types';
+import { DEFAULT_BUY_AMOUNT } from '../slotTrade/constants';
 
 const tipAmount = Number(process.env.JITO_TIP!);
 
@@ -239,7 +240,7 @@ export async function buy(
   mint: PublicKey,
   block: Block,
 ) {
-  const quoteAmount = new TokenAmount(Token.WSOL, Number(process.env.SWAP_SOL_AMOUNT), false);
+  const quoteAmount = new TokenAmount(Token.WSOL, DEFAULT_BUY_AMOUNT, false);
   const market = await getMinimalMarketV3(solanaConnection, accountData.marketId, 'processed');
   const tokenAccount = saveTokenAccount(mint, market);
   tokenAccount.poolKeys = createPoolKeys(accountId, accountData, tokenAccount.market!, market);
@@ -282,130 +283,6 @@ export async function buy(
     tokenAccount,
   };
 }
-
-// export async function buyJito(
-//   accountId: PublicKey,
-//   accountData: LiquidityStateV4,
-//   existingTokenAccounts: Map<string, MinimalTokenAccountData>,
-//   quoteTokenAccountAddress: PublicKey,
-//   hash: string,
-// ): Promise<string | undefined> {
-//   const quoteAmount = new TokenAmount(Token.WSOL, Number(process.env.SWAP_SOL_AMOUNT), false);
-//   const market = await Market.load(
-//     solanaConnection,
-//     accountData.marketId,
-//     {
-//       skipPreflight: true,
-//       commitment: 'processed',
-//     },
-//     accountData.marketProgramId,
-//   );
-//   const tokenAccount = saveTokenAccount(accountData.baseMint, market);
-//   tokenAccount.poolKeys = createPoolKeys(accountId, accountData, tokenAccount.market!, market);
-//   existingTokenAccounts.set(accountData.baseMint.toString(), tokenAccount);
-
-//   const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
-//     {
-//       poolKeys: tokenAccount.poolKeys,
-//       userKeys: {
-//         tokenAccountIn: quoteTokenAccountAddress,
-//         tokenAccountOut: tokenAccount.address,
-//         owner: wallet.publicKey,
-//       },
-//       amountIn: quoteAmount.raw,
-//       minAmountOut: 0,
-//     },
-//     tokenAccount.poolKeys.version,
-//   );
-//   const tipAccount = getRandomAccount();
-
-//   const tipInstruction = SystemProgram.transfer({
-//     fromPubkey: wallet.publicKey,
-//     toPubkey: tipAccount,
-//     lamports: tipAmount,
-//   });
-
-//   const messageV0 = new TransactionMessage({
-//     payerKey: wallet.publicKey,
-//     recentBlockhash: hash,
-//     instructions: [
-//       // ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 421197 }),
-//       ComputeBudgetProgram.setComputeUnitLimit({ units: 999900 }),
-//       createAssociatedTokenAccountIdempotentInstruction(
-//         wallet.publicKey,
-//         tokenAccount.address,
-//         wallet.publicKey,
-//         accountData.baseMint,
-//       ),
-//       ...innerTransaction.instructions,
-//       tipInstruction,
-//     ],
-//   }).compileToV0Message();
-//   const transaction = new VersionedTransaction(messageV0);
-
-//   return await confirmTransactionJito(transaction, hash);
-// }
-
-// export async function sellJito(
-//   mint: PublicKey,
-//   amount: BigNumberish,
-//   existingTokenAccounts: Map<string, MinimalTokenAccountData>,
-//   quoteTokenAccountAddress: PublicKey,
-// ): Promise<string | undefined> {
-//   const tokenAccount = existingTokenAccounts.get(mint.toString());
-
-//   if (!tokenAccount) {
-//     return undefined;
-//   }
-
-//   if (!tokenAccount.poolKeys) {
-//     logger.warn('No pool keys found');
-//     return undefined;
-//   }
-
-//   if (amount === 0) {
-//     logger.warn(`Empty balance, can't sell`);
-//     return undefined;
-//   }
-//   const recentBlockhashForSwap = await solanaConnection.getLatestBlockhash('confirmed');
-
-//   const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
-//     {
-//       poolKeys: tokenAccount.poolKeys!,
-//       userKeys: {
-//         tokenAccountOut: quoteTokenAccountAddress,
-//         tokenAccountIn: tokenAccount.address,
-//         owner: wallet.publicKey,
-//       },
-//       amountIn: amount,
-//       minAmountOut: 0,
-//     },
-//     tokenAccount.poolKeys!.version,
-//   );
-
-//   const tipAccount = getRandomAccount();
-
-//   const tipInstruction = SystemProgram.transfer({
-//     fromPubkey: wallet.publicKey,
-//     toPubkey: tipAccount,
-//     lamports: tipAmount,
-//   });
-
-//   const messageV0 = new TransactionMessage({
-//     payerKey: wallet.publicKey,
-//     recentBlockhash: recentBlockhashForSwap.blockhash,
-//     instructions: [
-//       // ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 421197 }),
-//       ComputeBudgetProgram.setComputeUnitLimit({ units: 999900 }),
-//       ...innerTransaction.instructions,
-//       createCloseAccountInstruction(tokenAccount.address, wallet.publicKey, wallet.publicKey),
-//       tipInstruction,
-//     ],
-//   }).compileToV0Message();
-//   const transaction = new VersionedTransaction(messageV0);
-//   return await confirmTransactionJito(transaction, recentBlockhashForSwap.blockhash);
-// }
-//lastValidBlock
 
 export async function confirmTransactionInTimeframe(confimation: TransactionConfirmationStrategy, timeout = 30000) {
   const checkConfirmation = async () => {

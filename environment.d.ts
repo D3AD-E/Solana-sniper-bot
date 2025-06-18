@@ -13,7 +13,6 @@ declare global {
       BOT_TOKEN: string;
       COMMITMENT: Commitment;
       JITO_TIP: number;
-      SWAP_SOL_AMOUNT: number;
       CHAT_ID: number;
       SLOT_CONNECTION_KEY: string;
       NEXTBLOCK_CONNECTION_KEY: string;
