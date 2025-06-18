@@ -6,7 +6,7 @@ const body = JSON.stringify({
   method: 'getHealth',
 });
 
-const slotKey = process.env.SECOND_CONNECTION_KEY!;
+const slotKey = process.env.SLOT_CONNECTION_KEY!;
 const nextBlockKey = process.env.NEXTBLOCK_CONNECTION_KEY!;
 const nodeKey = process.env.NODE_ONE_KEY!;
 const astraKey = process.env.ASTRA_KEY!;

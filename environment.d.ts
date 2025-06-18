@@ -15,7 +15,7 @@ declare global {
       JITO_TIP: number;
       SWAP_SOL_AMOUNT: number;
       CHAT_ID: number;
-      SECOND_CONNECTION_KEY: string;
+      SLOT_CONNECTION_KEY: string;
       NEXTBLOCK_CONNECTION_KEY: string;
       NODE_ONE_ENDPOINT: string;
       NODE_ONE_KEY: string;
