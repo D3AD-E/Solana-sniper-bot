@@ -7,7 +7,6 @@
     "start": "ts-node index.ts snipe",
     "start:minimal": "ts-node index.ts snipe-minimal",
     "analyze": "ts-node index.ts analyze",
-    "shred": "ts-node index.ts shred",
     "prod": "npm run build &&  node  --use-largepages=on      --max-old-space-size=32768      --max-semi-space-size=128      dist/index.js snipe",
     "build": "tsc && cp rust-native/ dist/ -r && cp src/proto/ dist/src/proto/ -r && cp src/generated/ dist/src/generated -r",
     "build:napi": "cd rust-native && npx napi build --release"
