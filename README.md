@@ -1,7 +1,7 @@
 # Solana Sniper
 
 This Node.js TypeScript application facilitates the sniping new pairs on Pump.fun in 0 slot timings. Txs patched and sent to all providers in 5ms window.
-
+To be used with https://github.com/D3AD-E/jito-shred-mod
 **!!! I AM NOT RESPONSIBLE FOR RISKS AND FUNDS LOSS WHILE USING THIS TOOL !!!**
 
 Integration with 0slot, nextblock ,astra and node1 providers.
