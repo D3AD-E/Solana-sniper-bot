@@ -7,12 +7,12 @@ To be used with https://github.com/D3AD-E/jito-shred-mod
 **!!! I AM NOT RESPONSIBLE FOR RISKS AND FUNDS LOSS WHILE USING THIS TOOL !!!**
 
 Integration with 0slot, nextblock ,astra and node1 providers.
-Supports multiple region deployments (one node on the X region and replicas on Y regions)
-Required shred access for fast transactions
-You need to run your own node as well as redis (redis can be in docker)
-Supports keep alive connections for maximum speed
+Supports multiple region deployments (one node on the X region and replicas on Y regions).
+Required shred access for fast transactions.
+You need to run your own node as well as redis (redis can be in docker).
+Supports keep alive connections for maximum speed.
 
-PS. History purged bc I needed to push a lot of unredable commit messages to support running in multiple regions
+PS. History purged bc I needed to push a lot of unreadable commit messages to support running in multiple regions
 
 Set the environment variables in a `.env` file:
 
