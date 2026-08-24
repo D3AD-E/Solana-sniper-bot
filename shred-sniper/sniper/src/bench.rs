@@ -350,6 +350,45 @@ fn bench_channel_handoff() {
     let _ = h.join();
 }
 
+/// The write itself. A warm, connected, TCP_NODELAY socket to a local listener isolates the
+/// syscall from the network, which is what the sender pays before bytes leave the box.
+#[test]
+fn bench_socket_write() {
+    use std::io::Write;
+    use std::net::{TcpListener, TcpStream};
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let reader = std::thread::spawn(move || {
+        let (mut sock, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 8192];
+        loop {
+            match std::io::Read::read(&mut sock, &mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+        }
+    });
+
+    let mut sock = TcpStream::connect(addr).unwrap();
+    sock.set_nodelay(true).unwrap();
+    // a full request: head + json wrapped base64 transaction
+    let request = vec![0x41u8; 1500];
+
+    for _ in 0..1000 {
+        sock.write_all(&request).unwrap();
+    }
+    let mut s = Vec::with_capacity(ITERS);
+    for _ in 0..ITERS {
+        let t = Instant::now();
+        sock.write_all(&request).unwrap();
+        s.push(t.elapsed().as_nanos());
+    }
+    report("socket write, 1500 bytes", s);
+    drop(sock);
+    let _ = reader.join();
+}
+
 /// What the sender threads do, off the detect path but still worth knowing.
 #[test]
 fn bench_sender_stages() {

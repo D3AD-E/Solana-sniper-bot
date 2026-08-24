@@ -1303,6 +1303,25 @@ mod tests {
             hits
         );
 
+        // 4b. the streaming walk, on the segment that actually holds a create
+        let with_create: Vec<&Vec<u8>> = payloads
+            .iter()
+            .filter(|p| super::may_contain_pump_create(p))
+            .collect();
+        if !with_create.is_empty() {
+            let t = std::time::Instant::now();
+            let reps = 200;
+            for _ in 0..reps {
+                for p in &with_create {
+                    std::hint::black_box(super::creates_in_payload(p).ok());
+                }
+            }
+            println!(
+                "streaming walk:         {:>8}us per create segment (vs ~44us full deserialize)",
+                t.elapsed().as_micros() as f64 / (reps * with_create.len()) as f64
+            );
+        }
+
         // 5. parse_create over every decoded transaction
         let txs: Vec<_> = out
             .iter()
