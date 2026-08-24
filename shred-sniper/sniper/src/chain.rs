@@ -237,6 +237,16 @@ impl NoncePool {
         None
     }
 
+    /// Installs nonce values directly. Used by benchmarks, which must not touch a network.
+    #[doc(hidden)]
+    pub fn load_from_values(&self, values: Vec<[u8; 32]>) -> Result<(), String> {
+        if values.len() != self.accounts.len() {
+            return Err("value count must match account count".to_string());
+        }
+        self.values.store(Arc::new(values));
+        Ok(())
+    }
+
     /// Reads every nonce account and validates it before the sniper is allowed to arm.
     pub fn load_once(&self, rpc_url: &str, expected_authority: &Pubkey) -> Result<(), String> {
         let client =

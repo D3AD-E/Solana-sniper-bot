@@ -143,6 +143,11 @@ pub struct SniperConfig {
     /// nonce refresh interval
     #[serde(default = "SniperConfig::default_nonce_ms")]
     pub nonce_refresh_ms: u64,
+    /// How long a sender thread keeps spinning on its queue after the last job before it
+    /// parks. A parked thread costs the *detect* thread a ~6.4us kernel wake per provider;
+    /// a spinning one costs ~150ns but burns a core while it spins. 0 disables spinning.
+    #[serde(default = "SniperConfig::default_sender_spin_micros")]
+    pub sender_spin_micros: u64,
     /// dry run: build, patch and sign, but never write to a socket
     #[serde(default)]
     pub dry_run: bool,
@@ -164,6 +169,9 @@ impl SniperConfig {
     }
     fn default_nonce_ms() -> u64 {
         300
+    }
+    fn default_sender_spin_micros() -> u64 {
+        2_000_000
     }
 
     pub fn load(path: &Path) -> Result<Self, String> {

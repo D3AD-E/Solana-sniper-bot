@@ -8,6 +8,7 @@
 //! Everything the hot path reads is either owned by the calling thread or an `ArcSwap`
 //! updated in the background: whitelist, nonce values, fee recipients.
 
+mod bench;
 pub mod chain;
 pub mod config;
 pub mod providers;
@@ -126,7 +127,13 @@ impl Sniper {
         let mut threads = Vec::new();
         let mut providers = Vec::new();
         for p in cfg.providers.iter().filter(|p| p.enabled) {
-            let (handle, join) = sender::spawn(p.clone(), signing_key.clone(), cfg.dry_run, 64)?;
+            let (handle, join) = sender::spawn(
+                p.clone(),
+                signing_key.clone(),
+                cfg.dry_run,
+                64,
+                cfg.sender_spin_micros,
+            )?;
             info!(
                 "sniper: provider {} -> {}:{}{} tip {} across {} accounts, cu price {}",
                 p.name,
@@ -203,6 +210,9 @@ impl Sniper {
                 job: Job::default(),
                 seed_counter,
                 launch_counter: 0,
+                vault_cache: Box::new(
+                    [(Pubkey::default(), Pubkey::default()); VAULT_CACHE_SLOTS],
+                ),
             },
             threads,
         )
@@ -217,6 +227,20 @@ pub struct HotSniper {
     job: Job,
     seed_counter: u32,
     launch_counter: usize,
+    /// Direct-mapped cache of creator -> creator vault.
+    ///
+    /// `find_program_address` costs ~2.7us because every candidate bump has to be checked
+    /// against the ed25519 curve, and the same creators launch token after token, so the
+    /// hit rate is high. A wrong entry is impossible: the creator is compared in full.
+    vault_cache: Box<[(Pubkey, Pubkey); VAULT_CACHE_SLOTS]>,
+}
+
+const VAULT_CACHE_SLOTS: usize = 1024;
+
+#[inline(always)]
+fn vault_slot(creator: &Pubkey) -> usize {
+    let b = creator.as_ref();
+    (u16::from_le_bytes([b[0], b[1]]) as usize) % VAULT_CACHE_SLOTS
 }
 
 /// What a fired launch used. Handed to the non-hot side for bookkeeping and for selling:
@@ -289,7 +313,14 @@ impl HotSniper {
             Pubkey::create_with_seed(&self.shared.buyer, seed_str, &info.token_program)
                 .unwrap_or_default();
 
-        let creator_vault = pumpfun::creator_vault(&info.creator);
+        let slot = vault_slot(&info.creator);
+        let creator_vault = if self.vault_cache[slot].0 == info.creator {
+            self.vault_cache[slot].1
+        } else {
+            let v = pumpfun::creator_vault(&info.creator);
+            self.vault_cache[slot] = (info.creator, v);
+            v
+        };
         let bonding_curve_v2 = pumpfun::bonding_curve_v2(&info.mint);
 
         self.launch_counter = self.launch_counter.wrapping_add(1);

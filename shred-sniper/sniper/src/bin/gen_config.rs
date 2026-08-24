@@ -134,6 +134,7 @@ fn main() {
         "rpc_url": get_or("SNIPER_RPC_URL", &get_or("RPC_ENDPOINT", "http://127.0.0.1:8899")),
         "nonce_accounts": nonce_accounts,
         "nonce_refresh_ms": num("SNIPER_NONCE_REFRESH_MS", 300),
+        "sender_spin_micros": num("SNIPER_SENDER_SPIN_MICROS", 2_000_000),
         "buy_lamports": num("SNIPER_BUY_LAMPORTS", 1_000_000_000),
         "max_dev_buy_lamports": num("SNIPER_MAX_DEV_BUY_LAMPORTS", 2_900_000_000),
         "haircut_bps": num("SNIPER_HAIRCUT_BPS", 30),

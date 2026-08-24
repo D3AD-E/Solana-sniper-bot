@@ -21,11 +21,11 @@ use std::{
         Arc,
     },
     thread::{Builder, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use base64::{engine::general_purpose::STANDARD, Engine};
-use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 use ed25519_dalek::{Signer, SigningKey};
 use log::{debug, info, warn};
 
@@ -231,6 +231,7 @@ pub fn spawn(
     signing_key: SigningKey,
     dry_run: bool,
     queue_depth: usize,
+    spin_micros: u64,
 ) -> Result<(ProviderHandle, JoinHandle<()>), String> {
     let tip_accounts = cfg.tip_account_bytes()?;
     let endpoints = cfg.endpoints();
@@ -252,7 +253,7 @@ pub fn spawn(
 
     let join = Builder::new()
         .name(format!("snipeTx_{}", cfg.name))
-        .spawn(move || run(cfg, signing_key, dry_run, rx, metrics))
+        .spawn(move || run(cfg, signing_key, dry_run, rx, metrics, spin_micros))
         .expect("spawn sender thread");
 
     Ok((handle, join))
@@ -264,6 +265,7 @@ fn run(
     dry_run: bool,
     rx: Receiver<Job>,
     metrics: Arc<SenderMetrics>,
+    spin_micros: u64,
 ) {
     let mut endpoints = cfg
         .endpoints()
@@ -294,9 +296,31 @@ fn run(
         }
     }
 
+    // A receiver parked in `recv` has to be woken by the kernel, and that futex wake is
+    // charged to the *detect* thread: measured at ~6.4us per provider, against ~150ns when
+    // the receiver is already spinning. Spinning for a while after each job keeps bursts of
+    // launches on the cheap path, and parking afterwards stops an idle sniper from burning a
+    // core forever. `sender_spin_micros` in the config trades one against the other.
+    let spin_window = Duration::from_micros(spin_micros);
+    let mut spin_until = Instant::now() + spin_window;
+
     loop {
-        match rx.recv_timeout(Duration::from_secs(50)) {
+        let received = if spin_micros > 0 && Instant::now() < spin_until {
+            match rx.try_recv() {
+                Ok(job) => Ok(job),
+                Err(TryRecvError::Empty) => {
+                    std::hint::spin_loop();
+                    continue;
+                }
+                Err(TryRecvError::Disconnected) => Err(RecvTimeoutError::Disconnected),
+            }
+        } else {
+            rx.recv_timeout(Duration::from_secs(50))
+        };
+
+        match received {
             Ok(mut job) => {
+                spin_until = Instant::now() + spin_window;
                 let len = job.len as usize;
                 if len <= MSG_OFFSET || len > MAX_TX {
                     continue;
