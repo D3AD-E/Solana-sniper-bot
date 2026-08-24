@@ -38,3 +38,5 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
 sniper = { path = "../sniper" }
+memchr = "2"
+mimalloc = { version = "0.1", default-features = false }

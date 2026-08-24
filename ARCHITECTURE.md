@@ -51,6 +51,13 @@ where milliseconds do not matter.
 
 ## Building
 
+The repository path contains a space, which breaks `openssl-sys`'s vendored build (its
+Makefile does not quote paths). Build with a target directory that has none:
+
+```bash
+export CARGO_TARGET_DIR=$HOME/sniper-target
+```
+
 ```bash
 # rust side (needs the 1.87 toolchain pinned in shred-sniper/rust-toolchain.toml)
 cd shred-sniper
@@ -63,6 +70,13 @@ cargo run -p sniper --example dump_offsets               # byte patch table
 npm install
 npm run build:napi     # the native addon, must be rebuilt on the target OS
 npm run build
+```
+
+Enable the SIMD backend for ed25519 while you are at it — it is a build flag, not a code
+change, and takes several microseconds off every signature:
+
+```bash
+RUSTFLAGS="-C target-cpu=native" cargo build --release
 ```
 
 See `shred-sniper/SNIPER.md` for the transaction layout, provider table, sizing maths and

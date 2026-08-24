@@ -124,6 +124,8 @@ pub fn start_forwarder_threads(
                                 &mut highest_slot_seen,
                                 &rs_cache,
                                 &metrics,
+                                // only segments that can hold a launch are worth deserializing
+                                true,
                             );
 
                             deshredded_entries.drain(..).for_each(
@@ -586,6 +588,8 @@ pub struct ShredMetrics {
     pub pump_creates_emitted: AtomicU64,
     /// Number of launches the sniper actually fired on
     pub snipes_fired: AtomicU64,
+    /// Segments whose bincode deserialize was skipped because no create discriminator was present
+    pub deserialize_skipped_count: AtomicU64,
 
     // cumulative metrics (persist after reset)
     pub agg_received_cumulative: AtomicU64,
@@ -618,6 +622,7 @@ impl ShredMetrics {
             pump_creates_seen: Default::default(),
             pump_creates_emitted: Default::default(),
             snipes_fired: Default::default(),
+            deserialize_skipped_count: Default::default(),
             unknown_start_position_error_count: Default::default(),
             agg_received_cumulative: Default::default(),
             agg_success_forward_cumulative: Default::default(),
@@ -686,6 +691,11 @@ impl ShredMetrics {
                 (
                     "snipes_fired",
                     self.snipes_fired.swap(0, Ordering::Relaxed),
+                    i64
+                ),
+                (
+                    "deserialize_skipped_count",
+                    self.deserialize_skipped_count.swap(0, Ordering::Relaxed),
                     i64
                 ),
                 (

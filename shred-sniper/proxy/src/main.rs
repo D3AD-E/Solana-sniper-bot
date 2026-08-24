@@ -34,6 +34,12 @@ use crate::{
     forwarder::ShredMetrics, multicast_config::create_multicast_socket_on_device,
     token_authenticator::BlockEngineConnectionError,
 };
+/// Deshredding allocates heavily: every segment builds a `Vec<Entry>` of transactions, each
+/// with its own vectors of signatures, keys and instruction data. The system allocator is the
+/// bottleneck in that path, so the binary uses mimalloc.
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod deshred;
 pub mod forwarder;
 mod heartbeat;

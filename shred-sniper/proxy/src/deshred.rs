@@ -70,6 +70,10 @@ pub fn reconstruct_shreds(
     highest_slot_seen: &mut Slot,
     rs_cache: &ReedSolomonCache,
     metrics: &ShredMetrics,
+    // pump_only: skip the bincode deserialize for segments with no pump.fun create
+    // discriminator. Callers that need every entry (generic consumers, the upstream tests)
+    // pass false.
+    pump_only: bool,
 ) -> usize {
     deshredded_entries.clear();
     slot_fec_indexes_to_iterate.clear();
@@ -212,6 +216,53 @@ pub fn reconstruct_shreds(
                 continue;
             }
         };
+
+        // Skip the deserialize for segments that cannot hold a launch. Only done when the
+        // segment boundaries are known: when `unknown_start` is set, a deserialize failure is
+        // how a mis-bounded segment is detected and left for a later retry, so that signal
+        // has to be preserved.
+        if pump_only && !unknown_start && !may_contain_pump_create(&deshredded_payload) {
+            metrics
+                .deserialize_skipped_count
+                .fetch_add(1, Ordering::Relaxed);
+            deshredded_entries.push((*slot, Vec::new(), deshredded_payload));
+            to_deshred.iter().for_each(|shred| {
+                let Some(shred) = shred.as_ref() else {
+                    return;
+                };
+                state_tracker.already_recovered_fec_sets[shred.fec_set_index() as usize] = true;
+                state_tracker.already_deshredded[shred.index() as usize] = true;
+            });
+            continue;
+        }
+
+        // The segment holds a create. Walk it and keep only those transactions rather than
+        // materialising every transaction in the segment.
+        if pump_only {
+            if let Ok(txs) = creates_in_payload(&deshredded_payload) {
+                let entries = if txs.is_empty() {
+                    Vec::new()
+                } else {
+                    metrics
+                        .txn_count
+                        .fetch_add(txs.len() as u64, Ordering::Relaxed);
+                    vec![solana_entry::entry::Entry {
+                        num_hashes: 0,
+                        hash: solana_sdk::hash::Hash::default(),
+                        transactions: txs,
+                    }]
+                };
+                deshredded_entries.push((*slot, entries, deshredded_payload));
+                to_deshred.iter().for_each(|shred| {
+                    let Some(shred) = shred.as_ref() else {
+                        return;
+                    };
+                    state_tracker.already_recovered_fec_sets[shred.fec_set_index() as usize] = true;
+                    state_tracker.already_deshredded[shred.index() as usize] = true;
+                });
+                continue;
+            }
+        }
 
         let entries = match bincode::deserialize::<Vec<solana_entry::entry::Entry>>(
             &deshredded_payload,
@@ -441,6 +492,77 @@ fn update_state_tracker(shred: &Shred, state_tracker: &mut ShredsStateTracker) -
         }
     };
     Some(index)
+}
+
+
+/// True when the deshredded payload might contain a pump.fun create.
+///
+/// The payload here is already assembled and contiguous, so an instruction's 8 byte
+/// discriminator cannot be split the way a pubkey could be split across raw shreds — which
+/// is what made the old shred-level prefilter drop launches. Deserializing a segment costs
+/// ~54us and only about one segment in six hundred holds a create, so this scan pays for
+/// itself many times over.
+#[inline]
+fn may_contain_pump_create(payload: &[u8]) -> bool {
+    static CREATE_V2: std::sync::OnceLock<memchr::memmem::Finder<'static>> =
+        std::sync::OnceLock::new();
+    static CREATE: std::sync::OnceLock<memchr::memmem::Finder<'static>> =
+        std::sync::OnceLock::new();
+    let v2 = CREATE_V2.get_or_init(|| memchr::memmem::Finder::new(&sniper::pumpfun::DISC_CREATE_V2));
+    let v1 = CREATE.get_or_init(|| memchr::memmem::Finder::new(&sniper::pumpfun::DISC_CREATE));
+    v2.find(payload).is_some() || v1.find(payload).is_some()
+}
+
+
+/// Streams the segment and returns only the transactions that are pump.fun creates.
+///
+/// A full `Vec<Entry>` deserialize allocates a transaction — with its signatures, account
+/// keys and instruction data — for every transaction in the segment, and costs ~44us. The
+/// discriminator scan already tells us the offset of the *last* create in the payload, so
+/// the walk can stop there instead of decoding the tail. Every create is still seen: the
+/// stop point is the last hit, not the first.
+///
+/// Returns `Err(())` if the payload does not walk cleanly, and the caller falls back to the
+/// ordinary deserialize so a malformed segment is handled exactly as before.
+fn creates_in_payload(payload: &[u8]) -> Result<Vec<solana_sdk::transaction::VersionedTransaction>, ()> {
+    let last_hit = last_create_offset(payload).ok_or(())?;
+    let mut cur = std::io::Cursor::new(payload);
+    let entry_count: u64 = bincode::deserialize_from(&mut cur).map_err(|_| ())?;
+
+    let mut found = Vec::new();
+    for _ in 0..entry_count {
+        if cur.position() as usize > last_hit {
+            break;
+        }
+        let _num_hashes: u64 = bincode::deserialize_from(&mut cur).map_err(|_| ())?;
+        let mut hash = [0u8; 32];
+        std::io::Read::read_exact(&mut cur, &mut hash).map_err(|_| ())?;
+        let tx_count: u64 = bincode::deserialize_from(&mut cur).map_err(|_| ())?;
+        for _ in 0..tx_count {
+            let tx: solana_sdk::transaction::VersionedTransaction =
+                bincode::deserialize_from(&mut cur).map_err(|_| ())?;
+            if sniper::pumpfun::parse_create(&tx).is_some() {
+                found.push(tx);
+            }
+            if cur.position() as usize > last_hit {
+                return Ok(found);
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// Offset of the last create discriminator in the payload.
+#[inline]
+fn last_create_offset(payload: &[u8]) -> Option<usize> {
+    let v2 = memchr::memmem::rfind(payload, &sniper::pumpfun::DISC_CREATE_V2);
+    let v1 = memchr::memmem::rfind(payload, &sniper::pumpfun::DISC_CREATE);
+    match (v2, v1) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
 }
 
 const SLOT_LOOKBACK: Slot = 50;
@@ -693,6 +815,7 @@ mod tests {
             &mut highest_slot_seen,
             &rs_cache,
             &metrics,
+            false,
         );
 
         // debug_to_disk(&mut deshredded_entries);
@@ -750,6 +873,7 @@ mod tests {
             &mut highest_slot_seen,
             &rs_cache,
             &metrics,
+            false,
         );
 
         // debug_to_disk(&deshredded_entries, "new.txt");
@@ -870,6 +994,7 @@ mod tests {
             &mut highest_slot_seen,
             &rs_cache,
             &metrics,
+            false,
         );
 
         // debug_to_disk(&mut deshredded_entries);
@@ -927,6 +1052,7 @@ mod tests {
             &mut highest_slot_seen,
             &rs_cache,
             &metrics,
+            false,
         );
 
         // debug_to_disk(&deshredded_entries, "new.txt");
@@ -1015,6 +1141,7 @@ mod tests {
             &mut highest_slot_seen,
             &rs_cache,
             &metrics,
+            false,
         );
         assert_eq!(recovered_count, 0);
         assert_eq!(
@@ -1049,6 +1176,7 @@ mod tests {
             &mut highest_slot_seen,
             &rs_cache,
             &metrics,
+            false,
         );
         assert!(recovered_count > 0);
         assert_eq!(
@@ -1074,6 +1202,206 @@ mod tests {
     /// * detection used to scan raw shred payloads for a 32 byte pubkey, which
     ///   false-negatives when the key straddles two shreds or lives only in coding shreds.
     ///   It now runs on reconstructed transactions.
+
+    /// Where the time actually goes between a shred arriving and a create being parsed.
+    ///
+    /// `cargo test --release -p jito-shredstream-proxy bench_deshred -- --nocapture`
+    #[test]
+    fn bench_deshred_stages() {
+        let Ok(buffer) = std::fs::read("../bins/serialized_shreds.bin") else {
+            eprintln!("skipping: ../bins/serialized_shreds.bin not present");
+            return;
+        };
+        let packets = Packets::try_from_slice(&buffer).unwrap();
+
+        // 1. shred parse, per packet
+        let t = std::time::Instant::now();
+        let mut parsed = 0usize;
+        for p in &packets.packets {
+            if solana_ledger::shred::Shred::new_from_serialized_shred(p.clone())
+                .and_then(Shred::try_from)
+                .is_ok()
+            {
+                parsed += 1;
+            }
+        }
+        let per_shred = t.elapsed().as_nanos() / packets.packets.len() as u128;
+        println!("shred parse:            {per_shred:>8}ns per shred ({parsed} parsed)");
+
+        // 2. the whole reconstruct, including FEC recovery and bincode
+        let rs_cache = ReedSolomonCache::default();
+        let metrics = Arc::new(ShredMetrics::default());
+        let mut all_shreds = ahash::HashMap::default();
+        let mut idx: Vec<(Slot, u32)> = Vec::new();
+        let mut out = Vec::new();
+        let mut highest = 0;
+        let batch = PacketBatch::new(
+            packets
+                .packets
+                .iter()
+                .map(|x| {
+                    let mut packet = Packet::default();
+                    packet.buffer_mut()[..x.len()].copy_from_slice(x);
+                    packet.meta_mut().size = x.len();
+                    packet
+                })
+                .collect_vec(),
+        );
+        let t = std::time::Instant::now();
+        reconstruct_shreds(
+            batch,
+            &mut all_shreds,
+            &mut idx,
+            &mut out,
+            &mut highest,
+            &rs_cache,
+            &metrics,
+            true,
+        );
+        let total = t.elapsed();
+        let segments = out.len();
+        println!(
+            "reconstruct_shreds:     {:>8}us total for {} packets -> {} segments ({:.0}us per segment)",
+            total.as_micros(),
+            packets.packets.len(),
+            segments,
+            total.as_micros() as f64 / segments as f64
+        );
+
+        // 3. bincode deserialize alone, per segment
+        let payloads: Vec<Vec<u8>> = out.iter().map(|(_, _, bytes)| bytes.clone()).collect();
+        let t = std::time::Instant::now();
+        let mut entries = 0usize;
+        for p in &payloads {
+            if let Ok(e) = bincode::deserialize::<Vec<solana_entry::entry::Entry>>(p) {
+                entries += e.len();
+            }
+        }
+        let de = t.elapsed();
+        println!(
+            "bincode deserialize:    {:>8}us for {} segments ({:.0}us per segment, {} entries)",
+            de.as_micros(),
+            payloads.len(),
+            de.as_micros() as f64 / payloads.len() as f64,
+            entries
+        );
+
+        // 4. scanning the same payloads for the create discriminator instead
+        let t = std::time::Instant::now();
+        let mut hits = 0usize;
+        for p in &payloads {
+            if contains_create_discriminator(p) {
+                hits += 1;
+            }
+        }
+        let scan = t.elapsed();
+        println!(
+            "discriminator prescan:  {:>8}us for {} segments ({:.2}us per segment, {} hits)",
+            scan.as_micros(),
+            payloads.len(),
+            scan.as_micros() as f64 / payloads.len() as f64,
+            hits
+        );
+
+        // 5. parse_create over every decoded transaction
+        let txs: Vec<_> = out
+            .iter()
+            .flat_map(|(_, entries, _)| entries.iter())
+            .flat_map(|e| e.transactions.iter())
+            .collect();
+        let t = std::time::Instant::now();
+        let mut found = 0usize;
+        for tx in &txs {
+            if sniper::pumpfun::parse_create(tx).is_some() {
+                found += 1;
+            }
+        }
+        let pc = t.elapsed();
+        println!(
+            "parse_create:           {:>8}ns per transaction ({} txs, {} creates)",
+            pc.as_nanos() / txs.len().max(1) as u128,
+            txs.len(),
+            found
+        );
+    }
+
+    /// The 8 byte anchor discriminator of a pump.fun create, searched in a *contiguous*
+    /// deshredded payload. Unlike the old prefilter, which scanned raw shred payloads and
+    /// missed keys that straddled a shred boundary, the payload here is already assembled,
+    /// so an instruction's data cannot be split.
+    fn contains_create_discriminator(payload: &[u8]) -> bool {
+        super::may_contain_pump_create(payload)
+    }
+
+
+    /// The streaming walk must find exactly the creates a full deserialize finds. This is the
+    /// guarantee that the fast path cannot silently drop a launch.
+    #[test]
+    fn streaming_walk_agrees_with_full_deserialize() {
+        let Ok(buffer) = std::fs::read("../bins/serialized_shreds.bin") else {
+            eprintln!("skipping: ../bins/serialized_shreds.bin not present");
+            return;
+        };
+        let packets = Packets::try_from_slice(&buffer).unwrap();
+        let rs_cache = ReedSolomonCache::default();
+        let metrics = Arc::new(ShredMetrics::default());
+        let mut all_shreds = ahash::HashMap::default();
+        let mut idx: Vec<(Slot, u32)> = Vec::new();
+        let mut out = Vec::new();
+        let mut highest = 0;
+
+        // full path: every entry decoded
+        reconstruct_shreds(
+            PacketBatch::new(
+                packets
+                    .packets
+                    .iter()
+                    .map(|x| {
+                        let mut packet = Packet::default();
+                        packet.buffer_mut()[..x.len()].copy_from_slice(x);
+                        packet.meta_mut().size = x.len();
+                        packet
+                    })
+                    .collect_vec(),
+            ),
+            &mut all_shreds,
+            &mut idx,
+            &mut out,
+            &mut highest,
+            &rs_cache,
+            &metrics,
+            false,
+        );
+
+        let mut checked = 0usize;
+        let mut creates_seen = 0usize;
+        for (_slot, entries, payload) in &out {
+            let full: Vec<_> = entries
+                .iter()
+                .flat_map(|e| e.transactions.iter())
+                .filter_map(sniper::pumpfun::parse_create)
+                .map(|i| i.mint)
+                .collect();
+
+            let fast: Vec<_> = if super::may_contain_pump_create(payload) {
+                super::creates_in_payload(payload)
+                    .expect("payload that walks under bincode must walk here too")
+                    .iter()
+                    .filter_map(sniper::pumpfun::parse_create)
+                    .map(|i| i.mint)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+            assert_eq!(full, fast, "streaming walk disagreed on a segment");
+            creates_seen += full.len();
+            checked += 1;
+        }
+        println!("compared {checked} segments, {creates_seen} creates, identical");
+        assert!(checked > 0);
+    }
+
     #[test]
     fn test_pump_creates_recovered_from_live_shreds() {
         let Ok(buffer) = std::fs::read("../bins/serialized_shreds.bin") else {
@@ -1108,6 +1436,7 @@ mod tests {
             &mut highest_slot_seen,
             &rs_cache,
             &metrics,
+            true,
         );
 
         let mut txn_count = 0usize;
