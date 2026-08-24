@@ -1,0 +1,3 @@
+# Launcher wallets allowed to trigger a buy, one base58 pubkey per line.
+# Blank lines and # comments ignored. Reloaded automatically when the file changes.
+# With this list empty the sniper detects launches but never fires.

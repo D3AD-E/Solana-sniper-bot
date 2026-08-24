@@ -1,0 +1,17 @@
+[package]
+name = "jito-protos"
+version = { workspace = true }
+description = "Protobufs for working with block engine"
+authors = { workspace = true }
+homepage = { workspace = true }
+edition = { workspace = true }
+publish = false
+
+[dependencies]
+prost = { workspace = true }
+prost-types = { workspace = true }
+tonic = { workspace = true }
+
+[build-dependencies]
+protobuf-src = "1"
+tonic-build = { workspace = true }

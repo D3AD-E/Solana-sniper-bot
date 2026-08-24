@@ -1,0 +1,106 @@
+syntax = "proto3";
+
+package shredstream;
+
+import "shared.proto";
+import "google/protobuf/timestamp.proto";
+
+message Heartbeat {
+  // don't trust IP:PORT from tcp header since it can be tampered over the wire
+  // `socket.ip` must match incoming packet's ip. this prevents spamming an unwitting destination
+  shared.Socket socket = 1;
+
+  // regions for shredstream proxy to receive shreds from
+  // list of valid regions: https://jito-labs.gitbook.io/mev/systems/connecting/mainnet
+  repeated string regions = 2;
+}
+
+message HeartbeatResponse {
+  // client must respond within `ttl_ms` to keep stream alive
+  uint32 ttl_ms = 1;
+}
+
+service Shredstream {
+  // RPC endpoint to send heartbeats to keep shreds flowing
+  rpc SendHeartbeat (Heartbeat) returns (HeartbeatResponse) {}
+}
+
+message TraceShred {
+  // source region, one of: https://jito-labs.gitbook.io/mev/systems/connecting/mainnet
+  string region = 1;
+  // timestamp of creation
+  google.protobuf.Timestamp created_at = 2;
+  // monotonically increases, resets upon service restart
+  uint32 seq_num = 3;
+}
+
+
+// Shredstream Proxy
+
+service ShredstreamProxy {
+  rpc SubscribeEntries(SubscribeEntriesRequest) returns (stream Entry);
+
+  // Structured pump.fun launch feed. Consumers get pre-parsed fields, so they never
+  // have to deserialize a transaction themselves.
+  rpc SubscribePumpCreates(SubscribePumpCreatesRequest) returns (stream PumpCreate);
+
+  // Buys the sniper fired, for the process that handles selling.
+  rpc SubscribeFills(SubscribeFillsRequest) returns (stream Fill);
+}
+
+message SubscribeEntriesRequest {
+  // tbd: we may want to add filters here
+}
+
+message Entry {
+  // the slot that the entry is from
+  uint64 slot = 1;
+
+  // Serialized bytes of Vec<Entry>: https://docs.rs/solana-entry/latest/solana_entry/entry/struct.Entry.html
+  bytes entries = 2;
+}
+
+message SubscribePumpCreatesRequest {
+}
+
+// One pump.fun token launch (`create` or `create_v2`), already parsed.
+// All pubkey fields are raw 32-byte keys (no base58, no base64).
+message PumpCreate {
+  uint64 slot = 1;
+  bytes mint = 2;
+  bytes bonding_curve = 3;
+  bytes associated_bonding_curve = 4;
+  // creator passed as an instruction argument (owner of the creator-vault PDA)
+  bytes creator = 5;
+  // fee payer / signer of the create transaction
+  bytes user = 6;
+  // spl-token or token-2022, depending on create vs create_v2
+  bytes token_program = 7;
+  // max_sol_cost of the dev buy bundled in the same transaction, 0 if none
+  uint64 dev_buy_lamports = 8;
+  // first signature of the create transaction
+  bytes signature = 9;
+  // true when the launch used `create_v2` (token-2022 + mayhem accounts)
+  bool is_v2 = 10;
+  // proxy-local timestamp (micros since epoch) of when the create was decoded
+  uint64 detected_at_micros = 11;
+}
+
+message SubscribeFillsRequest {
+}
+
+// A buy the sniper actually fired. The token account is created from a seed rather than
+// being an ATA, so a seller cannot re-derive it without the seed.
+message Fill {
+  uint64 slot = 1;
+  bytes mint = 2;
+  bytes token_account = 3;
+  string seed = 4;
+  bytes token_program = 5;
+  bytes bonding_curve = 6;
+  bytes associated_bonding_curve = 7;
+  bytes creator = 8;
+  uint64 amount = 9;
+  uint64 max_sol_cost = 10;
+  uint64 fired_at_micros = 11;
+}
