@@ -9,7 +9,7 @@ use solana_sdk::{
     pubkey::Pubkey,
     transaction::VersionedTransaction,
 };
-use spl_associated_token_account::get_associated_token_address;
+use spl_associated_token_account::get_associated_token_address_with_program_id;
 
 /// Object returned to JS
 #[napi(object)]
@@ -45,14 +45,22 @@ pub fn sign_message(message: Buffer, secret_key: Buffer) -> Result<String> {
 }
 
 /// JS export: `associatedTokenAddress(...)`
-///   mint_buf  – 32-byte Buffer     (mint public key)
-///   owner_buf – 32-byte Buffer     (wallet pubkey)
-/// Returns     – 32-byte Buffer     (ATA pubkey)
+///   mint_buf          - 32-byte Buffer (mint public key)
+///   token_program_buf - 32-byte Buffer (spl-token or token-2022 program id)
+///   owner_buf         - 32-byte Buffer (wallet pubkey)
+/// Returns             - 32-byte Buffer (ATA pubkey)
+///
+/// The token program is an argument because every current pump.fun launch (`create_v2`)
+/// mints a token-2022 mint, whose ATA is derived under a different program id.
 #[napi(js_name = "associatedTokenAddress")]
-pub fn associated_token_address(mint_buf: Buffer, owner_buf: Buffer) -> Result<Buffer> {
-    if mint_buf.len() != 32 || owner_buf.len() != 32 {
+pub fn associated_token_address(
+    mint_buf: Buffer,
+    token_program_buf: Buffer,
+    owner_buf: Buffer,
+) -> Result<Buffer> {
+    if mint_buf.len() != 32 || owner_buf.len() != 32 || token_program_buf.len() != 32 {
         return Err(Error::from_reason(
-            "mint and owner must be 32-byte public keys",
+            "mint, token program and owner must be 32-byte public keys",
         ));
     }
 
@@ -62,10 +70,14 @@ pub fn associated_token_address(mint_buf: Buffer, owner_buf: Buffer) -> Result<B
     let owner_array: [u8; 32] = owner_buf[..]
         .try_into()
         .map_err(|_| Error::from_reason("owner not 32 bytes"))?;
+    let token_program_array: [u8; 32] = token_program_buf[..]
+        .try_into()
+        .map_err(|_| Error::from_reason("token program not 32 bytes"))?;
     let mint = Pubkey::new_from_array(mint_array);
     let owner = Pubkey::new_from_array(owner_array);
+    let token_program = Pubkey::new_from_array(token_program_array);
 
-    let ata = get_associated_token_address(&owner, &mint);
+    let ata = get_associated_token_address_with_program_id(&owner, &mint, &token_program);
     Ok(Buffer::from(ata.to_bytes().to_vec()))
 }
 

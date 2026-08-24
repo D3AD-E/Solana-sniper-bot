@@ -7,23 +7,20 @@ import {
   ASTRA_ENDPOINT_BY_REGION,
   NODE1_ENDPOINT_BY_REGION,
   NEXTBLOCK_ENDPOINT_BY_REGION,
+  JITO_ENDPOINT_BY_REGION,
+  endpointForRegion,
 } from './keepAlive.consts';
 
 const nodeRegion = process.env.NODE_REGION! as Region;
-/** Configuration per upstream */
-const CONFIG: Record<HostKey, { host: string; port: number }> = {
-  slot: { host: SLOT_ENDPOINT_BY_REGION[nodeRegion], port: 80 }, // Assuming default HTTP port
-  node: { host: NODE1_ENDPOINT_BY_REGION[nodeRegion]!, port: 80 },
-  nextBlock: { host: NEXTBLOCK_ENDPOINT_BY_REGION[nodeRegion]!, port: 80 },
-  astra: { host: ASTRA_ENDPOINT_BY_REGION[nodeRegion]!, port: 80 },
-};
 
-function wireAgentDebug(agent: Agent, key: string) {
-  // called once per agent
-  agent.on('free', (sock: any) => console.log(`[${key}] FREE   ${sock.localPort}`));
-  agent.on('timeout', (sock: any) => console.log(`[${key}] TIMEOUT ${sock.localPort}`));
-  agent.on('close', (sock: any) => console.log(`[${key}] CLOSE  ${sock.localPort}`));
-}
+/** Configuration per upstream. Hosts fall back to the nearest region that exists. */
+const CONFIG: Record<HostKey, { host: string; port: number }> = {
+  slot: { host: endpointForRegion(SLOT_ENDPOINT_BY_REGION, nodeRegion)!, port: 80 },
+  node: { host: endpointForRegion(NODE1_ENDPOINT_BY_REGION, nodeRegion)!, port: 80 },
+  nextBlock: { host: endpointForRegion(NEXTBLOCK_ENDPOINT_BY_REGION, nodeRegion)!, port: 80 },
+  astra: { host: endpointForRegion(ASTRA_ENDPOINT_BY_REGION, nodeRegion)!, port: 80 },
+  jito: { host: endpointForRegion(JITO_ENDPOINT_BY_REGION, nodeRegion)!, port: 443 },
+};
 
 /**
  * One-agent-per-host registry (true singleton because of Node's module cache).
@@ -51,7 +48,6 @@ class AgentRegistry {
             maxSockets: 6, // tune per host
             maxFreeSockets: 6,
           });
-      // wireAgentDebug(this.agents[key]!, key);
     }
     return this.agents[key]!;
   }

@@ -30,3 +30,19 @@ export type BuyTestData = {
   boughtAt: Date;
   wasSeen?: boolean;
 };
+
+/**
+ * A pump.fun launch as delivered by the shredstream proxy: already parsed, raw 32 byte
+ * keys, nothing to deserialize on this side.
+ */
+export type PumpLaunch = {
+  slot: number;
+  mint: Buffer;
+  bondingCurve: Buffer;
+  associatedBondingCurve: Buffer;
+  creator: Buffer;
+  user: Buffer;
+  tokenProgram: Buffer;
+  devBuyLamports: bigint;
+  isV2: boolean;
+};

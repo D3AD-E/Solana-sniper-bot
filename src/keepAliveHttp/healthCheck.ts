@@ -11,6 +11,8 @@ const nextBlockKey = process.env.NEXTBLOCK_CONNECTION_KEY!;
 const nodeKey = process.env.NODE_ONE_KEY!;
 const astraKey = process.env.ASTRA_KEY!;
 
+const jitoTipBody = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getTipAccounts', params: [] });
+
 export const pingAstra = async () => {
   try {
     await callUpstream('astra', `/iris?api-key=${astraKey}`, {
@@ -42,9 +44,7 @@ export const sendTransactionAstra = (tx: string) => {
       'Content-Length': Buffer.byteLength(txbody),
     },
     body: txbody,
-  }).catch((e) => {
-    console.error(`astra issue:`, e);
-  });
+  }).catch(() => {});
 };
 
 export const pingSlot = async () => {
@@ -78,9 +78,7 @@ export const sendTransactionSlot = (tx: string) => {
       'Content-Length': Buffer.byteLength(txbody),
     },
     body: txbody,
-  }).catch((e) => {
-    console.error(`slot issue:`, e);
-  });
+  }).catch(() => {});
 };
 
 export const pingNextBlock = async () => {
@@ -108,6 +106,45 @@ export const sendTransactionNextBlock = (tx: string) => {
     body: txbody,
   }).catch((e) => {
     console.error(`nextBlock issue:`, e);
+  });
+};
+
+export const pingJito = async () => {
+  try {
+    await callUpstream('jito', '/api/v1/getTipAccounts', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(jitoTipBody),
+      },
+      body: jitoTipBody,
+    });
+  } catch (e) {
+    // keep-alive only
+  }
+};
+
+/**
+ * Jito used to be reached through the searcher SDK with an Anchor-built transaction. It is
+ * now a plain provider: same prebuilt template, same byte patching, one keep-alive HTTPS
+ * connection to the regional block engine.
+ */
+export const sendTransactionJito = (tx: string) => {
+  const txbody = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'sendTransaction',
+    params: [tx, { encoding: 'base64', skipPreflight: true, maxRetries: 0 }],
+  });
+  callUpstream('jito', '/api/v1/transactions?bundleOnly=true', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(txbody),
+    },
+    body: txbody,
+  }).catch(() => {
+    // fire and forget: a provider error must never block the next launch
   });
 };
 
@@ -141,7 +178,5 @@ export const sendTransactionNode = (tx: string) => {
       'api-key': nodeKey,
     },
     body: txbody,
-  }).catch((e) => {
-    console.error(`node issue:`, e);
-  });
+  }).catch(() => {});
 };

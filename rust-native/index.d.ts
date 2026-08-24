@@ -14,11 +14,15 @@ export interface ParsedTx {
 export declare function signMessage(message: Buffer, secretKey: Buffer): string
 /**
  * JS export: `associatedTokenAddress(...)`
- *   mint_buf  – 32-byte Buffer     (mint public key)
- *   owner_buf – 32-byte Buffer     (wallet pubkey)
- * Returns     – 32-byte Buffer     (ATA pubkey)
+ *   mint_buf          - 32-byte Buffer (mint public key)
+ *   token_program_buf - 32-byte Buffer (spl-token or token-2022 program id)
+ *   owner_buf         - 32-byte Buffer (wallet pubkey)
+ * Returns             - 32-byte Buffer (ATA pubkey)
+ *
+ * The token program is an argument because every current pump.fun launch (`create_v2`)
+ * mints a token-2022 mint, whose ATA is derived under a different program id.
  */
-export declare function associatedTokenAddress(mintBuf: Buffer, ownerBuf: Buffer): Buffer
+export declare function associatedTokenAddress(mintBuf: Buffer, tokenProgramBuf: Buffer, ownerBuf: Buffer): Buffer
 /**
  * JS export: `findProgramAddress(...)`
  *   seed_buf     – arbitrary seed bytes (e.g. your `staticSeed`)
