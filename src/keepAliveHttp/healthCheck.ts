@@ -1,3 +1,4 @@
+import { PublicKey } from '@solana/web3.js';
 import { callUpstream } from '.';
 
 const body = JSON.stringify({
@@ -179,4 +180,40 @@ export const sendTransactionNode = (tx: string) => {
     },
     body: txbody,
   }).catch(() => {});
+};
+
+/**
+ * Helius Sender tip accounts. Sender routes across staked connections (Helius, Jito,
+ * Harmonic, Rakurai) at once; the tip is what buys the priority buffer, and 0.001 SOL is the
+ * documented minimum for it.
+ */
+export const HELIUS_SENDER_TIP_ACCOUNTS = [
+  '4ACfpUFoaSD9bfPdeu6DBt89gB6ENTeHBXCAi87NhDEE',
+  'D2L6yPZ2FmmmTKPgzaMKdhu6EWZcTpLy1Vhx8uvZe7NZ',
+  '9bnz4RShgq1hAnLnZbP8kbgBg1kEmcJBYQq3gQbmnSta',
+  '5VY91ws6B2hMmBFRsXkoAAdsPHBJwRfBht4DXox3xkwn',
+  '2nyhqdwKcJZR2vcqCyrYsaPVdAnFoJjiksCXJ7hfEYgD',
+  '2q5pghRs6arqVjRvT5gfgWfWcHWmw1ZuCzphgd5KfWGJ',
+  'wyvPkWjVZz1M8fHQnMMCDTQDbkManefNNhweYk5WkcF',
+  '3KCKozbAaF75qEU33jtzozcJ29yJuaLJTy2jFdzUY8bT',
+  '4vieeGHPYPG2MmyPRcYjdiDmmhN3ww7hsFNap8pVN3Ey',
+  '4TQLFNWK8AovT1gFvda5jfw2oJeRMKEmw7aH6MGBJ3or',
+].map((a) => new PublicKey(a));
+
+/** Sells go through Helius Sender rather than the plain RPC. No API key required. */
+export const sendTransactionHeliusSender = (tx: string) => {
+  const body = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'sendTransaction',
+    params: [tx, { encoding: 'base64', skipPreflight: true, maxRetries: 0 }],
+  });
+  return callUpstream('heliusSender', '/fast', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body),
+    },
+    body,
+  });
 };

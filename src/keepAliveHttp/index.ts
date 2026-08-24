@@ -8,6 +8,7 @@ import {
   NODE1_ENDPOINT_BY_REGION,
   NEXTBLOCK_ENDPOINT_BY_REGION,
   JITO_ENDPOINT_BY_REGION,
+  HELIUS_SENDER_ENDPOINT_BY_REGION,
   endpointForRegion,
 } from './keepAlive.consts';
 
@@ -20,6 +21,7 @@ const CONFIG: Record<HostKey, { host: string; port: number }> = {
   nextBlock: { host: endpointForRegion(NEXTBLOCK_ENDPOINT_BY_REGION, nodeRegion)!, port: 80 },
   astra: { host: endpointForRegion(ASTRA_ENDPOINT_BY_REGION, nodeRegion)!, port: 80 },
   jito: { host: endpointForRegion(JITO_ENDPOINT_BY_REGION, nodeRegion)!, port: 443 },
+  heliusSender: { host: endpointForRegion(HELIUS_SENDER_ENDPOINT_BY_REGION, nodeRegion)!, port: 80 },
 };
 
 /**

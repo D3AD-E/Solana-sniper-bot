@@ -7,21 +7,28 @@ import eventEmitter from './eventEmitter';
 import { USER_STOP_EVENT } from './eventEmitter/eventEmitter.consts';
 import { ShredstreamProxyClient } from './generated/shredstream/shredstream_grpc_pb';
 import { SubscribeFillsRequest, Fill } from './generated/shredstream/shredstream_pb';
-import { fetchPumpGlobal, PumpGlobal, Position, positionBalance, sellPosition } from './pumpFun';
+import { fetchPumpGlobal, PumpGlobal, Position, sellPosition, amountFromAccountData } from './pumpFun';
+import { sendTransactionHeliusSender, HELIUS_SENDER_TIP_ACCOUNTS } from './keepAliveHttp/healthCheck';
 
 /**
- * Node process: sells, telemetry, telegram.
+ * Node process: sells, telemetry, telegram. It never touches the buy path.
  *
- * It never touches the buy path. The Rust proxy detects launches on the shred stream and
- * fires the buy itself, then publishes what it bought on a non-hot gRPC stream. This process
- * picks those up and manages the exit over a plain websocket connection.
+ * The Rust proxy buys and publishes what it bought on a non-hot gRPC stream. That message is
+ * needed rather than optional: the buy creates its token account with createAccountWithSeed,
+ * so the address cannot be derived from the mint the way an ATA could.
+ *
+ * The sell is triggered by the buy *confirming*, not by a wall clock. A websocket
+ * subscription on that exact token account fires the moment the buy lands and carries the
+ * real balance, so there is nothing to poll and no guessing whether the buy made it.
  */
 
 type OpenPosition = Position & {
   slot: number;
-  boughtAt: Date;
-  amount: bigint;
+  detectedAt: number;
+  confirmedAt?: number;
+  subscription?: number;
   selling: boolean;
+  timer?: NodeJS.Timeout;
 };
 
 const positions = new Map<string, OpenPosition>();
@@ -29,9 +36,20 @@ let pumpGlobal: PumpGlobal | undefined;
 let softExit = false;
 let initialWalletBalance = 0;
 
-/** how long to hold before selling, in ms */
-const HOLD_MS = Number(process.env.HOLD_MS ?? 2100);
-/** shredstream proxy gRPC port, the same one the sniper serves */
+/**
+ * How long to hold after the buy confirms.
+ *
+ * Measured against a wallet running this strategy (24678QKx…, 72 positions): the first and
+ * only sell lands 2 slots minimum, 6 slots median, 8 slots at p75 after the buy — about two
+ * seconds — and it always dumps the whole balance in one transaction rather than laddering.
+ * Since our trigger is confirmation rather than detection, the wait here is measured from
+ * the moment the tokens actually appear.
+ */
+const HOLD_AFTER_CONFIRM_MS = Number(process.env.SELL_HOLD_MS ?? 1600);
+/** give up on a position whose buy never landed */
+const BUY_TIMEOUT_MS = Number(process.env.BUY_TIMEOUT_MS ?? 30_000);
+const SELL_CU_PRICE = BigInt(process.env.SELL_CU_PRICE ?? 100_000);
+const SELL_TIP_LAMPORTS = BigInt(process.env.SELL_TIP_LAMPORTS ?? 1_000_000);
 const PROXY_PORT = process.env.SHREDSTREAM_GRPC_PORT ?? '9999';
 
 eventEmitter.on(USER_STOP_EVENT, () => {
@@ -50,10 +68,6 @@ export default async function snipe(isMinimalRun: boolean = false): Promise<void
   subscribeToFills(PROXY_PORT);
 }
 
-/**
- * Buys the Rust sniper landed. The token account is created from a seed rather than being an
- * ATA, so the seed comes over the wire: it cannot be re-derived from the mint alone.
- */
 function subscribeToFills(port: string) {
   const client = new ShredstreamProxyClient(`localhost:${port}`, credentials.createInsecure());
   const stream = client.subscribeFills(new SubscribeFillsRequest());
@@ -77,56 +91,85 @@ function subscribeToFills(port: string) {
       associatedBondingCurve: new PublicKey(fill.getAssociatedBondingCurve_asU8()),
       creator: new PublicKey(fill.getCreator_asU8()),
       slot: fill.getSlot(),
-      boughtAt: new Date(),
-      amount: BigInt(fill.getAmount()),
+      detectedAt: Date.now(),
       selling: false,
     };
     positions.set(key, position);
-
-    logger.info(`bought ${key} slot ${position.slot} seed ${position.seed}`);
-    sendMessage(`Bought ${key}`);
-    setTimeout(() => exitPosition(key), HOLD_MS);
+    watchForConfirmation(key, position);
   });
 }
 
-async function exitPosition(key: string) {
+/**
+ * Waits for the buy to land by watching the token account itself. The notification carries
+ * the account data, so the exact balance to sell comes with the trigger.
+ */
+function watchForConfirmation(key: string, position: OpenPosition) {
+  position.subscription = solanaConnection.onAccountChange(
+    position.tokenAccount,
+    (account) => {
+      const amount = amountFromAccountData(account.data as Buffer);
+      if (amount === 0n || position.confirmedAt) return;
+      position.confirmedAt = Date.now();
+      logger.info(
+        `buy confirmed ${key} amount ${amount} after ${position.confirmedAt - position.detectedAt}ms`,
+      );
+      position.timer = setTimeout(() => exitPosition(key, amount), HOLD_AFTER_CONFIRM_MS);
+    },
+    'processed' as Commitment,
+  );
+
+  // the buy may simply not have landed; do not leak the subscription
+  setTimeout(() => {
+    const p = positions.get(key);
+    if (p && !p.confirmedAt) {
+      logger.info(`${key}: buy never landed, dropping`);
+      cleanup(key);
+    }
+  }, BUY_TIMEOUT_MS);
+}
+
+async function exitPosition(key: string, amount: bigint) {
   const position = positions.get(key);
-  if (!position || position.selling) return;
+  if (!position || position.selling || !pumpGlobal) return;
   position.selling = true;
 
   try {
-    // the buy may not have landed: the balance is the source of truth, not the fill
-    let balance = await positionBalance(solanaConnection, position);
-    if (balance === 0n) {
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-      balance = await positionBalance(solanaConnection, position);
-    }
-    if (balance === 0n) {
-      logger.info(`${key}: nothing to sell, buy did not land`);
-      positions.delete(key);
-      return;
-    }
-
-    const signature = await sellPosition(solanaConnection, wallet, pumpGlobal!, position, balance);
-    logger.info(`sold ${key} amount ${balance} https://solscan.io/tx/${signature}`);
+    // Helius Sender takes staked connections and wants its own tip
+    const signature = await sellPosition(solanaConnection, wallet, pumpGlobal, position, amount, {
+      cuPrice: SELL_CU_PRICE,
+      tipAccount: HELIUS_SENDER_TIP_ACCOUNTS[Math.floor(Math.random() * HELIUS_SENDER_TIP_ACCOUNTS.length)],
+      tipLamports: SELL_TIP_LAMPORTS,
+      sender: sendTransactionHeliusSender,
+    });
+    const held = position.confirmedAt ? Date.now() - position.confirmedAt : 0;
+    logger.info(`sold ${key} amount ${amount} held ${held}ms https://solscan.io/tx/${signature}`);
     sendMessage(`Sold ${key}`);
 
-    // give the sell a moment, then confirm the account is gone before forgetting it
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-    const remaining = await positionBalance(solanaConnection, position);
-    if (remaining > 0n) {
-      logger.warn(`${key}: ${remaining} tokens left, retrying`);
+    await new Promise((resolve) => setTimeout(resolve, 4000));
+    const info = await solanaConnection.getAccountInfo(position.tokenAccount, 'confirmed');
+    if (info && amountFromAccountData(info.data) > 0n) {
+      logger.warn(`${key}: still holding, retrying sell`);
       position.selling = false;
-      setTimeout(() => exitPosition(key), 1000);
+      setTimeout(() => exitPosition(key, amountFromAccountData(info.data)), 1000);
       return;
     }
-    positions.delete(key);
+    cleanup(key);
     await reportBalance();
   } catch (e) {
     logger.warn(`${key}: sell failed: ${(e as Error).message}`);
     position.selling = false;
-    if (!softExit) setTimeout(() => exitPosition(key), 1500);
+    if (!softExit) setTimeout(() => exitPosition(key, amount), 1200);
   }
+}
+
+function cleanup(key: string) {
+  const position = positions.get(key);
+  if (!position) return;
+  if (position.timer) clearTimeout(position.timer);
+  if (position.subscription !== undefined) {
+    solanaConnection.removeAccountChangeListener(position.subscription).catch(() => {});
+  }
+  positions.delete(key);
 }
 
 async function reportBalance() {

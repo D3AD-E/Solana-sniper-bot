@@ -147,3 +147,9 @@ data.json
 params.json
 rust-native/target
 rust-native/Cargo.lock
+analysis
+# env backups may contain keys
+.env.backup*
+.env.*.bak
+shred-sniper/sniper.json
+shred-sniper/whitelist.txt

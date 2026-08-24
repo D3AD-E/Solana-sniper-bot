@@ -42,6 +42,15 @@ export const JITO_ENDPOINT_BY_REGION: Partial<Record<Region, string>> = {
   [Region.LosAngeles]: 'slc.mainnet.block-engine.jito.wtf',
 };
 
+/** Helius Sender regional endpoints. No API key required. */
+export const HELIUS_SENDER_ENDPOINT_BY_REGION: Partial<Record<Region, string>> = {
+  [Region.NY]: 'ewr-sender.helius-rpc.com',
+  [Region.Frankfurt]: 'fra-sender.helius-rpc.com',
+  [Region.Amsterdam]: 'ams-sender.helius-rpc.com',
+  [Region.Tokyo]: 'tyo-sender.helius-rpc.com',
+  [Region.LosAngeles]: 'slc-sender.helius-rpc.com',
+};
+
 /**
  * Region coverage is uneven: 0slot, astra and jito serve all five regions, node1 has no
  * Tokyo or LA endpoint, and nextblock only publishes three. A region without an entry falls

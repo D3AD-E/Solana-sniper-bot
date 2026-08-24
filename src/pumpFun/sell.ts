@@ -20,6 +20,7 @@ import {
   SYSTEM_PROGRAM,
 } from './constants';
 import { PumpGlobal } from './global';
+import bs58 from 'bs58';
 
 /** anchor discriminator for pump.fun `sell` */
 const DISC_SELL = Buffer.from([51, 230, 133, 164, 1, 127, 131, 173]);
@@ -118,7 +119,15 @@ export async function sellPosition(
   global: PumpGlobal,
   position: Position,
   amount: bigint,
-  options: { cuPrice?: bigint; tipAccount?: PublicKey; tipLamports?: bigint; minSolOutput?: bigint } = {},
+  options: {
+    cuPrice?: bigint;
+    tipAccount?: PublicKey;
+    tipLamports?: bigint;
+    minSolOutput?: bigint;
+    /** send through Helius Sender (staked connections) instead of the plain RPC */
+    sender?: (base64Tx: string) => Promise<unknown>;
+    blockhash?: string;
+  } = {},
 ): Promise<string> {
   const instructions: TransactionInstruction[] = [
     ComputeBudgetProgram.setComputeUnitLimit({ units: SELL_COMPUTE_UNIT_LIMIT }),
@@ -137,7 +146,7 @@ export async function sellPosition(
     );
   }
 
-  const { blockhash } = await connection.getLatestBlockhash('confirmed');
+  const blockhash = options.blockhash ?? (await connection.getLatestBlockhash('confirmed')).blockhash;
   const message = new TransactionMessage({
     payerKey: wallet.publicKey,
     recentBlockhash: blockhash,
@@ -146,7 +155,23 @@ export async function sellPosition(
 
   const transaction = new VersionedTransaction(message);
   transaction.sign([wallet]);
+  const raw = Buffer.from(transaction.serialize());
+
+  if (options.sender) {
+    // Helius Sender wants a tip of its own; the caller adds it via tipAccount above
+    await options.sender(raw.toString('base64'));
+    return bs58.encode(transaction.signatures[0]);
+  }
   return connection.sendTransaction(transaction, { skipPreflight: true, maxRetries: 0 });
+}
+
+/** spl-token account layout: mint(32) owner(32) amount(8) */
+export const TOKEN_ACCOUNT_AMOUNT_OFFSET = 64;
+
+/** Reads the balance straight out of raw account data, for websocket notifications. */
+export function amountFromAccountData(data: Buffer): bigint {
+  if (data.length < TOKEN_ACCOUNT_AMOUNT_OFFSET + 8) return 0n;
+  return data.readBigUInt64LE(TOKEN_ACCOUNT_AMOUNT_OFFSET);
 }
 
 /** Current token balance of a position, 0 when the account is gone. */

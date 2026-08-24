@@ -17,18 +17,19 @@ S = requests.Session()
 S.headers["Content-Type"] = "application/json"
 _lock = threading.Lock()
 
-def post(payload, tries=6):
+def post(payload, tries=12):
     for i in range(tries):
         try:
             r = S.post(URL, json=payload, timeout=60)
             if r.status_code == 429:
-                time.sleep(1.5 * (i + 1)); continue
+                time.sleep(min(20, 1.0 * 2 ** i)); continue
             r.raise_for_status()
             return r.json()
-        except Exception as e:
+        except Exception:
             if i == tries - 1:
                 raise
-            time.sleep(1.5 * (i + 1))
+            time.sleep(min(20, 1.0 * 2 ** i))
+    raise RuntimeError("rpc exhausted retries")
 
 def call(method, params):
     return post({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).get("result")
@@ -51,7 +52,7 @@ def get_signatures(addr, max_sigs=100000, before=None):
             break
     return out[:max_sigs]
 
-def batch_txs(sigs, workers=6, chunk=50):
+def batch_txs(sigs, workers=2, chunk=10):
     chunks = [sigs[i:i + chunk] for i in range(0, len(sigs), chunk)]
     done = [0]
     def work(ch):
@@ -59,6 +60,8 @@ def batch_txs(sigs, workers=6, chunk=50):
                     "params": [s, {"maxSupportedTransactionVersion": 0, "encoding": "jsonParsed"}]}
                    for i, s in enumerate(ch)]
         res = post(payload)
+        if isinstance(res, dict):
+            raise RuntimeError(str(res)[:200])
         out = [None] * len(ch)
         for item in res:
             out[item["id"]] = item.get("result")

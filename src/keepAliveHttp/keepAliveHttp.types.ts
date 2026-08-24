@@ -1,4 +1,4 @@
-export type HostKey = 'slot' | 'node' | 'nextBlock' | 'astra' | 'jito';
+export type HostKey = 'slot' | 'node' | 'nextBlock' | 'astra' | 'jito' | 'heliusSender';
 
 export enum Region {
   Frankfurt = 'fra',
