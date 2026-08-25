@@ -1,0 +1,29 @@
+[Unit]
+Description=Shredstream proxy with the in-process pump.fun sniper
+After=network-online.target sniper-latency.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@REPO@/shred-sniper
+EnvironmentFile=-@REPO@/.env
+ExecStart=@REPO@/jito-shredstream-proxy shredstream \
+  --block-engine-url https://frankfurt.mainnet.block-engine.jito.wtf \
+  --auth-keypair @REPO@/shred-sniper/auth.json \
+  --desired-regions ${NODE_REGION} \
+  --sniper-config @REPO@/shred-sniper/sniper.json \
+  --grpc-service-port 9999
+Restart=always
+RestartSec=2
+
+# the sender threads run SCHED_FIFO once pinned; without this chrt is denied
+AmbientCapabilities=CAP_SYS_NICE
+LimitNOFILE=1048576
+LimitMEMLOCK=infinity
+# a shred socket that cannot buffer drops launches
+LimitNPROC=infinity
+OOMScoreAdjust=-800
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=Hold /dev/cpu_dma_latency at 0 so cores stay out of deep C-states
+Documentation=https://www.kernel.org/doc/html/latest/admin-guide/pm/cpuidle.html
+
+[Service]
+Type=simple
+# waking a core from a deep C-state costs microseconds, the same order as the whole
+# detect path. Holding this file open with a zero in it pins the exit latency to 0.
+ExecStart=/bin/sh -c 'exec 3<>/dev/cpu_dma_latency; printf "\0\0\0\0" >&3; sleep infinity'
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

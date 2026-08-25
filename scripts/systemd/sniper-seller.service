@@ -1,0 +1,19 @@
+[Unit]
+Description=pump.fun seller, analytics and telegram
+After=network-online.target sniper-proxy.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@REPO@
+EnvironmentFile=-@REPO@/.env
+ExecStart=/usr/bin/node --max-old-space-size=4096 @REPO@/dist/index.js snipe
+Restart=always
+RestartSec=5
+LimitNOFILE=262144
+# selling is not latency critical; keep it off the isolated cores
+CPUAffinity=0 1 2 3
+
+[Install]
+WantedBy=multi-user.target
