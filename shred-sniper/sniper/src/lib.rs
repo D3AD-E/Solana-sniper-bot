@@ -9,13 +9,16 @@
 //! updated in the background: whitelist, nonce values, fee recipients.
 
 mod bench;
+pub mod batch_write;
 pub mod chain;
 pub mod config;
 pub mod providers;
+pub mod position;
 pub mod pumpfun;
 pub mod sender;
 pub mod template;
 pub mod whitelist;
+pub mod wire;
 
 use std::{
     collections::HashSet,
@@ -34,6 +37,7 @@ use solana_sdk::pubkey::Pubkey;
 
 use crate::{
     chain::{FeeRecipientCache, NoncePool},
+    position::{ModeConfig, OpenPosition, PositionGate},
     config::SniperConfig,
     pumpfun::{CurveParams, PumpCreateInfo},
     sender::{Job, ProviderHandle, MAX_TX},
@@ -72,6 +76,9 @@ pub struct Shared {
     pub haircut_bps: u64,
     pub slippage_bps: u64,
     pub buyer: Pubkey,
+    /// sync / test / ghost gating
+    pub gate: Arc<PositionGate>,
+    pub ghost_mode: bool,
 }
 
 pub struct Sniper {
@@ -163,6 +170,25 @@ impl Sniper {
         let fee_recipients = FeeRecipientCache::new(&global);
         threads.push(fee_recipients.spawn_refresher(cfg.rpc_url.clone(), 30, exit.clone()));
 
+        let modes = ModeConfig {
+            sync_mode: cfg.sync_mode,
+            test_mode: cfg.test_mode,
+            ghost_mode: cfg.ghost_mode,
+            hold_ms: cfg.hold_ms,
+            poll_ms: cfg.position_poll_ms,
+            buy_timeout_ms: cfg.buy_timeout_ms,
+        };
+        info!(
+            "sniper: sync_mode {} test_mode {} ghost_mode {}",
+            modes.sync_mode, modes.test_mode, modes.ghost_mode
+        );
+        if modes.ghost_mode {
+            info!("sniper: ghost mode, nothing will be sent to a provider");
+        }
+        let (gate, gate_thread) =
+            position::start(cfg.rpc_url.clone(), modes, global.curve, exit.clone());
+        threads.push(gate_thread);
+
         let shared = Arc::new(Shared {
             whitelist,
             nonces,
@@ -175,6 +201,8 @@ impl Sniper {
             haircut_bps: cfg.haircut_bps,
             slippage_bps: cfg.slippage_bps,
             buyer,
+            gate,
+            ghost_mode: cfg.ghost_mode,
         });
 
         let template = template::build(&static_accounts, cfg.cu_limit);
@@ -272,6 +300,11 @@ impl HotSniper {
         }
         m.creates_whitelisted.fetch_add(1, Ordering::Relaxed);
 
+        // one token at a time, or stopped after a test round trip
+        if !self.shared.gate.may_fire() {
+            return None;
+        }
+
         if !self.seen.insert(info.mint) {
             m.duplicates.fetch_add(1, Ordering::Relaxed);
             return None;
@@ -352,6 +385,31 @@ impl HotSniper {
             return None;
         }
 
+        if !self.shared.gate.claim() {
+            return None;
+        }
+
+        // ghost mode stops here: the position is recorded and priced out on paper, and
+        // nothing is handed to a provider
+        if self.shared.ghost_mode {
+            self.shared.gate.opened(OpenPosition {
+                mint: info.mint,
+                bonding_curve: info.bonding_curve,
+                token_account,
+                amount: plan.amount,
+                cost: self.shared.buy_lamports,
+                ghost: true,
+            });
+            m.fired.fetch_add(1, Ordering::Relaxed);
+            return Some(FiredLaunch {
+                mint: info.mint,
+                token_account,
+                seed,
+                amount: plan.amount,
+                max_sol_cost: plan.max_sol_cost,
+            });
+        }
+
         let mut queued = 0u64;
         for i in 0..self.shared.providers.len() {
             let (tip_account, tip_lamports, cu_price) = {
@@ -376,6 +434,14 @@ impl HotSniper {
             return None;
         }
         m.fired.fetch_add(1, Ordering::Relaxed);
+        self.shared.gate.opened(OpenPosition {
+            mint: info.mint,
+            bonding_curve: info.bonding_curve,
+            token_account,
+            amount: plan.amount,
+            cost: plan.max_sol_cost,
+            ghost: false,
+        });
 
         Some(FiredLaunch {
             mint: info.mint,

@@ -146,6 +146,18 @@ fn hot(providers: usize, spinning: bool) -> (HotSniper, Vec<std::thread::JoinHan
         haircut_bps: 30,
         slippage_bps: 100,
         buyer,
+        gate: crate::position::start(
+            "http://127.0.0.1:1".to_string(),
+            crate::position::ModeConfig {
+                // the benchmark measures the fire path, not the one-at-a-time gate
+                sync_mode: false,
+                ..crate::position::ModeConfig::default()
+            },
+            curve(),
+            Arc::new(AtomicBool::new(true)),
+        )
+        .0,
+        ghost_mode: false,
     });
 
     let static_accounts = template::StaticAccounts {

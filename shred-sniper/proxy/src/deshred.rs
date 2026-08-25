@@ -514,42 +514,40 @@ fn may_contain_pump_create(payload: &[u8]) -> bool {
 }
 
 
-/// Streams the segment and returns only the transactions that are pump.fun creates.
+/// Returns the transactions in this segment that are pump.fun creates.
 ///
-/// A full `Vec<Entry>` deserialize allocates a transaction — with its signatures, account
-/// keys and instruction data — for every transaction in the segment, and costs ~44us. The
-/// discriminator scan already tells us the offset of the *last* create in the payload, so
-/// the walk can stop there instead of decoding the tail. Every create is still seen: the
-/// stop point is the last hit, not the first.
+/// Decoding the whole segment costs ~43us because every transaction allocates. Instead the
+/// discriminator offsets are located with a substring search, the entry vector is *walked*
+/// by reading lengths, and only a transaction whose byte span contains a hit is handed to
+/// bincode. Walking stops past the last hit, so the tail is never touched.
 ///
-/// Returns `Err(())` if the payload does not walk cleanly, and the caller falls back to the
-/// ordinary deserialize so a malformed segment is handled exactly as before.
-fn creates_in_payload(payload: &[u8]) -> Result<Vec<solana_sdk::transaction::VersionedTransaction>, ()> {
-    let last_hit = last_create_offset(payload).ok_or(())?;
-    let mut cur = std::io::Cursor::new(payload);
-    let entry_count: u64 = bincode::deserialize_from(&mut cur).map_err(|_| ())?;
-
-    let mut found = Vec::new();
-    for _ in 0..entry_count {
-        if cur.position() as usize > last_hit {
-            break;
-        }
-        let _num_hashes: u64 = bincode::deserialize_from(&mut cur).map_err(|_| ())?;
-        let mut hash = [0u8; 32];
-        std::io::Read::read_exact(&mut cur, &mut hash).map_err(|_| ())?;
-        let tx_count: u64 = bincode::deserialize_from(&mut cur).map_err(|_| ())?;
-        for _ in 0..tx_count {
-            let tx: solana_sdk::transaction::VersionedTransaction =
-                bincode::deserialize_from(&mut cur).map_err(|_| ())?;
-            if sniper::pumpfun::parse_create(&tx).is_some() {
-                found.push(tx);
-            }
-            if cur.position() as usize > last_hit {
-                return Ok(found);
-            }
-        }
+/// Returns `Err(())` when the payload does not walk cleanly, and the caller falls back to
+/// the ordinary deserialize so a malformed segment behaves exactly as before.
+fn creates_in_payload(
+    payload: &[u8],
+) -> Result<Vec<solana_sdk::transaction::VersionedTransaction>, ()> {
+    let hits = create_offsets(payload);
+    if hits.is_empty() {
+        return Ok(Vec::new());
     }
-    Ok(found)
+    let candidates = sniper::wire::transactions_at(payload, &hits).ok_or(())?;
+    Ok(candidates
+        .into_iter()
+        .filter(|tx| sniper::pumpfun::parse_create(tx).is_some())
+        .collect())
+}
+
+/// Offsets of every create discriminator in the payload, in order.
+#[inline]
+fn create_offsets(payload: &[u8]) -> Vec<usize> {
+    let mut hits: Vec<usize> =
+        memchr::memmem::find_iter(payload, &sniper::pumpfun::DISC_CREATE_V2).collect();
+    hits.extend(memchr::memmem::find_iter(
+        payload,
+        &sniper::pumpfun::DISC_CREATE,
+    ));
+    hits.sort_unstable();
+    hits
 }
 
 /// Offset of the last create discriminator in the payload.

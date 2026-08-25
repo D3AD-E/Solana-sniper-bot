@@ -30,6 +30,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use log::{debug, info, warn};
 
 use crate::{
+    batch_write::BatchWriter,
     config::{BodyFormat, ProviderConfig},
     template::MSG_OFFSET,
 };
@@ -122,6 +123,30 @@ struct Endpoint {
     head: Vec<u8>,
     health: Vec<u8>,
     conn: Option<Conn>,
+    /// this endpoint's fully built request, kept alive across a batched submit
+    request: Vec<u8>,
+}
+
+impl Endpoint {
+    /// Plain TCP endpoints can go through the batch writer; TLS cannot, because rustls owns
+    /// the record framing.
+    #[cfg(target_os = "linux")]
+    fn raw_fd(&self) -> Option<std::os::fd::RawFd> {
+        use std::os::fd::AsRawFd;
+        match self.conn.as_ref()? {
+            Conn::Plain(s) => Some(s.as_raw_fd()),
+            Conn::Tls(_) => None,
+        }
+    }
+
+    fn build_request(&mut self, length_digits: &[u8], body: &[u8]) {
+        self.request.clear();
+        self.request.extend_from_slice(&self.head);
+        self.request.extend_from_slice(b"Content-Length: ");
+        self.request.extend_from_slice(length_digits);
+        self.request.extend_from_slice(b"\r\n\r\n");
+        self.request.extend_from_slice(body);
+    }
 }
 
 impl Endpoint {
@@ -277,13 +302,29 @@ fn run(
             port: cfg.port,
             tls: cfg.tls,
             conn: None,
+            request: Vec::with_capacity(2560),
         })
         .collect::<Vec<_>>();
+
+    // one submission for all of a provider's regions instead of one syscall each
+    #[cfg(target_os = "linux")]
+    let mut batch = if endpoints.len() > 1 {
+        BatchWriter::new(endpoints.len())
+    } else {
+        None
+    };
+    #[cfg(target_os = "linux")]
+    if batch.is_some() {
+        info!(
+            "{}: batching writes across {} endpoints with io_uring",
+            cfg.name,
+            endpoints.len()
+        );
+    }
 
     let (body_prefix, body_suffix) = body_wrappers(cfg.body);
     let mut b64 = vec![0u8; MAX_TX * 4 / 3 + 8];
     let mut body = Vec::with_capacity(2048);
-    let mut request = Vec::with_capacity(2560);
     let mut drain = [0u8; 2048];
 
     // warm every connection before the first launch
@@ -346,14 +387,52 @@ fn run(
                 let mut num = [0u8; 20];
                 let digits = write_usize(&mut num, body.len());
 
+                // reconnect what dropped, then build every request up front so a batched
+                // submit has all its buffers ready
                 for ep in endpoints.iter_mut() {
-                    request.clear();
-                    request.extend_from_slice(&ep.head);
-                    request.extend_from_slice(b"Content-Length: ");
-                    request.extend_from_slice(digits);
-                    request.extend_from_slice(b"\r\n\r\n");
-                    request.extend_from_slice(&body);
+                    if ep.conn.is_none() && ep.connect().is_ok() {
+                        metrics.reconnects.fetch_add(1, Ordering::Relaxed);
+                    }
+                    ep.build_request(digits, &body);
+                }
 
+                // all of this provider's plain endpoints leave in one io_uring_enter, so the
+                // last region is not eleven microseconds behind the first
+                #[cfg(target_os = "linux")]
+                if let Some(writer) = batch.as_mut() {
+                    let items: Vec<(std::os::fd::RawFd, &[u8])> = endpoints
+                        .iter()
+                        .filter_map(|ep| ep.raw_fd().map(|fd| (fd, ep.request.as_slice())))
+                        .collect();
+                    if items.len() > 1 && items.len() <= writer.capacity() {
+                        let lengths: Vec<usize> = items.iter().map(|(_, b)| b.len()).collect();
+                        let results = writer.write_all(&items);
+                        let mut idx = 0usize;
+                        for ep in endpoints.iter_mut() {
+                            if ep.raw_fd().is_none() {
+                                continue;
+                            }
+                            match results.get(idx) {
+                                Some(Ok(n)) if *n == lengths[idx] => {
+                                    metrics.sent.fetch_add(1, Ordering::Relaxed);
+                                    ep.request.clear();
+                                }
+                                // a short write leaves the remainder for the loop below
+                                Some(Ok(n)) => {
+                                    ep.request.drain(..*n);
+                                }
+                                _ => ep.conn = None,
+                            }
+                            idx += 1;
+                        }
+                    }
+                }
+
+                // whatever the batch did not finish: TLS endpoints, short writes, reconnects
+                for ep in endpoints.iter_mut() {
+                    if ep.request.is_empty() {
+                        continue;
+                    }
                     let mut ok = false;
                     for _ in 0..2 {
                         if ep.conn.is_none() {
@@ -361,10 +440,15 @@ fn run(
                                 break;
                             }
                             metrics.reconnects.fetch_add(1, Ordering::Relaxed);
+                            ep.build_request(digits, &body);
                         }
-                        match ep.conn.as_mut().unwrap().write_all(&request) {
+                        let request = std::mem::take(&mut ep.request);
+                        let outcome = ep.conn.as_mut().unwrap().write_all(&request);
+                        ep.request = request;
+                        match outcome {
                             Ok(()) => {
                                 ok = true;
+                                ep.request.clear();
                                 break;
                             }
                             Err(e) => {
@@ -377,6 +461,7 @@ fn run(
                         metrics.sent.fetch_add(1, Ordering::Relaxed);
                     } else {
                         metrics.send_errors.fetch_add(1, Ordering::Relaxed);
+                        ep.request.clear();
                     }
                 }
 

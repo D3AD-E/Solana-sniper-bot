@@ -148,6 +148,26 @@ pub struct SniperConfig {
     /// a spinning one costs ~150ns but burns a core while it spins. 0 disables spinning.
     #[serde(default = "SniperConfig::default_sender_spin_micros")]
     pub sender_spin_micros: u64,
+    /// One token at a time: nothing new is bought until the open position closes or its
+    /// buy is known to have failed. Off means positions may overlap.
+    #[serde(default = "SniperConfig::default_true")]
+    pub sync_mode: bool,
+    /// Stop after one completed round trip, a buy that landed and a sell that closed it.
+    #[serde(default)]
+    pub test_mode: bool,
+    /// Never touch the chain. Buys are priced, recorded and exited on paper against the real
+    /// curve, so a strategy can be measured without spending anything.
+    #[serde(default)]
+    pub ghost_mode: bool,
+    /// How long a ghost position is held before it is priced out.
+    #[serde(default = "SniperConfig::default_hold_ms")]
+    pub hold_ms: u64,
+    /// How often the chain is polled while a position is open.
+    #[serde(default = "SniperConfig::default_poll_ms")]
+    pub position_poll_ms: u64,
+    /// After this long with no token account, a buy is treated as lost and the gate lifts.
+    #[serde(default = "SniperConfig::default_buy_timeout_ms")]
+    pub buy_timeout_ms: u64,
     /// dry run: build, patch and sign, but never write to a socket
     #[serde(default)]
     pub dry_run: bool,
@@ -172,6 +192,18 @@ impl SniperConfig {
     }
     fn default_sender_spin_micros() -> u64 {
         2_000_000
+    }
+    fn default_true() -> bool {
+        true
+    }
+    fn default_hold_ms() -> u64 {
+        1_600
+    }
+    fn default_poll_ms() -> u64 {
+        200
+    }
+    fn default_buy_timeout_ms() -> u64 {
+        30_000
     }
 
     pub fn load(path: &Path) -> Result<Self, String> {
@@ -211,5 +243,14 @@ mod tests {
         assert_eq!(cfg.cu_limit, 90_000);
         assert_eq!(cfg.slippage_bps, 100);
         assert_eq!(cfg.haircut_bps, 30);
+    }
+
+    #[test]
+    fn sync_mode_is_on_and_the_other_modes_are_off_by_default() {
+        let cfg: SniperConfig =
+            serde_json::from_str(r#"{"keypair_path":"k","rpc_url":"r","providers":[]}"#).unwrap();
+        assert!(cfg.sync_mode, "one token at a time unless asked otherwise");
+        assert!(!cfg.test_mode);
+        assert!(!cfg.ghost_mode);
     }
 }
