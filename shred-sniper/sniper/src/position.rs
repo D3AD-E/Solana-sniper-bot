@@ -23,7 +23,10 @@ use std::{
 
 use crossbeam_channel::{Receiver, Sender};
 use log::{info, warn};
-use solana_client::rpc_client::RpcClient;
+use solana_client::{
+    rpc_client::{GetConfirmedSignaturesForAddress2Config, RpcClient},
+    rpc_response::RpcConfirmedTransactionStatusWithSignature,
+};
 use solana_sdk::{commitment_config::CommitmentConfig, pubkey::Pubkey};
 
 use crate::pumpfun::CurveParams;
@@ -59,6 +62,8 @@ pub struct PositionMetrics {
     pub landed_plus_one: AtomicU64,
     /// landed two or more slots later
     pub landed_later: AtomicU64,
+    /// buys that landed but whose slot could not be read back
+    pub landing_slot_unknown: AtomicU64,
     /// paper profit and loss, lamports, ghost mode only
     pub ghost_pnl_lamports: AtomicI64,
     pub ghost_wins: AtomicU64,
@@ -183,7 +188,7 @@ fn track(
     metrics: Arc<PositionMetrics>,
     exit: Arc<AtomicBool>,
 ) {
-    let client = RpcClient::new_with_commitment(rpc_url, CommitmentConfig::confirmed());
+    let client = RpcClient::new_with_commitment(rpc_url.clone(), CommitmentConfig::confirmed());
 
     while !exit.load(Ordering::Relaxed) {
         let Ok(position) = rx.recv_timeout(Duration::from_millis(250)) else {
@@ -193,7 +198,7 @@ fn track(
         if position.ghost {
             ghost_cycle(&client, &modes, &curve, &position, &metrics);
         } else {
-            live_cycle(&client, &modes, &position, &metrics);
+            live_cycle(&client, &rpc_url, &modes, &position, &metrics);
         }
 
         metrics.closed.fetch_add(1, Ordering::Relaxed);
@@ -208,9 +213,10 @@ fn track(
 /// Waits for the buy to appear, then for the sell to close the account.
 fn live_cycle(
     client: &RpcClient,
+    rpc_url: &str,
     modes: &ModeConfig,
     position: &OpenPosition,
-    metrics: &PositionMetrics,
+    metrics: &Arc<PositionMetrics>,
 ) {
     let poll = Duration::from_millis(modes.poll_ms);
     let deadline = Instant::now() + Duration::from_millis(modes.buy_timeout_ms);
@@ -226,7 +232,11 @@ fn live_cycle(
         if exists {
             if !landed {
                 landed = true;
-                record_landing(client, position, metrics);
+                // off this thread: reading the landing slot has to wait for `confirmed`, and
+                // this thread is the one holding the position gate. A gate held for an extra
+                // second or two is a launch not seen, which is exactly the cost the number
+                // being measured is supposed to expose.
+                spawn_landing_record(rpc_url, *position, metrics.clone());
             }
         } else if landed {
             info!("position {} closed", position.mint);
@@ -285,13 +295,92 @@ fn ghost_cycle(
     );
 }
 
+/// How long to wait for the landing slot to become readable.
+///
+/// The token account is first seen at `processed`, and `getSignaturesForAddress` refuses to
+/// answer below `confirmed`, which is a slot or two behind. Long enough to cover that gap,
+/// short enough that a lookup that never resolves does not sit on the position gate.
+const LANDING_LOOKUP_ATTEMPTS: usize = 12;
+const LANDING_LOOKUP_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Picks the transaction that created the account: the oldest one that did not fail.
+///
+/// `getSignaturesForAddress` returns newest first, and by the time the sell runs there are
+/// two signatures on this account. A failed transaction never created anything, so it cannot
+/// be the one, which also keeps a rejected duplicate from being mistaken for the buy.
+fn creating_signature(
+    signatures: &[RpcConfirmedTransactionStatusWithSignature],
+) -> Option<(u64, &str)> {
+    signatures
+        .iter()
+        .filter(|s| s.err.is_none())
+        .min_by_key(|s| s.slot)
+        .map(|s| (s.slot, s.signature.as_str()))
+}
+
+/// The slot the buy actually landed in, read off the transaction that created the token
+/// account.
+///
+/// This used to be `client.get_slot()`, which returns the slot the *poller* happens to be in
+/// when it first notices the account — one or two slots late, given a 200ms poll interval on
+/// top of an RPC round trip. That number could never report a 0 even when the buy landed in
+/// the create's own slot, which made it useless for the single question it exists to answer.
+fn read_landed_slot(client: &RpcClient, token_account: &Pubkey) -> Option<(u64, String)> {
+    for attempt in 0..LANDING_LOOKUP_ATTEMPTS {
+        if attempt > 0 {
+            std::thread::sleep(LANDING_LOOKUP_INTERVAL);
+        }
+        let config = GetConfirmedSignaturesForAddress2Config {
+            limit: Some(10),
+            commitment: Some(CommitmentConfig::confirmed()),
+            ..Default::default()
+        };
+        let Ok(signatures) = client.get_signatures_for_address_with_config(token_account, config)
+        else {
+            continue;
+        };
+        if let Some((slot, signature)) = creating_signature(&signatures) {
+            return Some((slot, signature.to_string()));
+        }
+    }
+    None
+}
+
+/// Reads and records the landing slot on its own thread.
+///
+/// One short-lived thread per landed position, which is a handful a minute. The alternative
+/// is doing the lookup inline on the tracker thread, which holds the position gate.
+fn spawn_landing_record(rpc_url: &str, position: OpenPosition, metrics: Arc<PositionMetrics>) {
+    let rpc_url = rpc_url.to_string();
+    if let Err(e) = Builder::new()
+        .name("snipeLanding".to_string())
+        .spawn(move || {
+            let client =
+                RpcClient::new_with_commitment(rpc_url, CommitmentConfig::confirmed());
+            record_landing(&client, &position, &metrics);
+        })
+    {
+        warn!("could not spawn landing recorder: {e}");
+    }
+}
+
 /// Records how many slots behind the create our buy landed.
 ///
 /// This is the number that says whether the sniper is actually competitive. Same slot means
 /// the buy reached the leader that was already building the block containing the create;
 /// anything later means the race was lost on the network, not in this process.
+///
+/// A landing whose slot cannot be read is counted separately rather than folded into
+/// `landed_later` — a measurement that fails is not the same as a race that was lost, and
+/// quietly conflating the two is what made the old number worthless.
 fn record_landing(client: &RpcClient, position: &OpenPosition, metrics: &PositionMetrics) {
-    let Ok(landed_slot) = client.get_slot() else {
+    let Some((landed_slot, signature)) = read_landed_slot(client, &position.token_account) else {
+        metrics.landing_slot_unknown.fetch_add(1, Ordering::Relaxed);
+        warn!(
+            "{}: buy landed but its slot could not be read within {}ms, not counted",
+            position.mint,
+            LANDING_LOOKUP_ATTEMPTS as u64 * LANDING_LOOKUP_INTERVAL.as_millis() as u64,
+        );
         return;
     };
     let delta = landed_slot.saturating_sub(position.create_slot);
@@ -301,12 +390,15 @@ fn record_landing(client: &RpcClient, position: &OpenPosition, metrics: &Positio
         _ => metrics.landed_later.fetch_add(1, Ordering::Relaxed),
     };
     info!(
-        "{} landed {} slot(s) after the create (same {} / +1 {} / later {})",
+        "{} create slot {} -> landed slot {} (+{delta}) sig {signature} \
+         | same {} / +1 {} / later {} / unreadable {}",
         position.mint,
-        delta,
+        position.create_slot,
+        landed_slot,
         metrics.landed_same_slot.load(Ordering::Relaxed),
         metrics.landed_plus_one.load(Ordering::Relaxed),
         metrics.landed_later.load(Ordering::Relaxed),
+        metrics.landing_slot_unknown.load(Ordering::Relaxed),
     );
 }
 
@@ -341,6 +433,43 @@ pub fn sell_proceeds(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sig(signature: &str, slot: u64, failed: bool) -> RpcConfirmedTransactionStatusWithSignature {
+        RpcConfirmedTransactionStatusWithSignature {
+            signature: signature.to_string(),
+            slot,
+            err: failed.then(|| {
+                solana_sdk::transaction::TransactionError::InstructionError(
+                    0,
+                    solana_sdk::instruction::InstructionError::Custom(1),
+                )
+            }),
+            memo: None,
+            block_time: None,
+            confirmation_status: None,
+        }
+    }
+
+    /// The landing slot is the whole point of the metric, so the rule that picks which
+    /// signature it comes from has to be exactly right: oldest, and never a failed one.
+    #[test]
+    fn the_creating_transaction_is_the_oldest_successful_one() {
+        // what the RPC actually returns: newest first, buy and sell both present
+        let history = [sig("sell", 310, false), sig("buy", 300, false)];
+        assert_eq!(creating_signature(&history), Some((300, "buy")));
+
+        // a rejected duplicate landing earlier must not be mistaken for the buy
+        let with_failure = [
+            sig("sell", 310, false),
+            sig("buy", 300, false),
+            sig("rejected", 299, true),
+        ];
+        assert_eq!(creating_signature(&with_failure), Some((300, "buy")));
+
+        // nothing usable is None, not a guess -- the caller counts that separately
+        assert_eq!(creating_signature(&[]), None);
+        assert_eq!(creating_signature(&[sig("rejected", 299, true)]), None);
+    }
 
     fn curve() -> CurveParams {
         CurveParams {

@@ -1,0 +1,16 @@
+# Prod (linux) unit for the dev sweep. The daemon runs forever; systemd restarts it.
+#   sudo cp scripts/dev-sweep.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now dev-sweep
+[Unit]
+Description=pump.fun dev-history sweep (sniper freshness filter)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/sniper
+ExecStart=/usr/bin/python3 /opt/sniper/analysis/dev_sweep.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

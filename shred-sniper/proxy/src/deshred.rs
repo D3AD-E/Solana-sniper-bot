@@ -721,6 +721,16 @@ fn creates_in_payload(
         return Ok(Vec::new());
     }
     let candidates = sniper::wire::transactions_at(payload, hits).ok_or(())?;
+    // In confirm mode keep buys as well as creates: the trigger fires from create-block buys.
+    if sniper::confirm::confirm_mode() {
+        return Ok(candidates
+            .into_iter()
+            .filter(|tx| {
+                sniper::pumpfun::parse_create(tx).is_some()
+                    || sniper::pumpfun::parse_buy(tx).is_some()
+            })
+            .collect());
+    }
     Ok(candidates
         .into_iter()
         .filter(|tx| sniper::pumpfun::parse_create(tx).is_some())
@@ -746,6 +756,16 @@ fn create_offsets(payload: &[u8]) -> Vec<usize> {
 fn create_offsets_into(slice: &[u8], base: usize, hits: &mut Vec<usize>) {
     hits.extend(memchr::memmem::find_iter(slice, &sniper::pumpfun::DISC_CREATE_V2).map(|o| o + base));
     hits.extend(memchr::memmem::find_iter(slice, &sniper::pumpfun::DISC_CREATE).map(|o| o + base));
+    // v1.1 confirmation trigger needs the create-block buys too, so a launch's whole block is
+    // decoded rather than the create alone. Paid only when confirm mode is on: the extra
+    // three passes cost nothing on the whitelist path.
+    if sniper::confirm::confirm_mode() {
+        hits.extend(memchr::memmem::find_iter(slice, &sniper::pumpfun::DISC_BUY).map(|o| o + base));
+        hits.extend(memchr::memmem::find_iter(slice, &sniper::pumpfun::DISC_BUY_V2).map(|o| o + base));
+        hits.extend(
+            memchr::memmem::find_iter(slice, &sniper::pumpfun::DISC_BUY_EXACT_SOL_IN).map(|o| o + base),
+        );
+    }
     hits.sort_unstable();
 }
 

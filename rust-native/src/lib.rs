@@ -175,6 +175,7 @@ pub fn parse_buy_tx(entry_b64: String, init_sol: String, init_token: String) -> 
 }
 
 mod selection;
+mod strategy;
 
 pub use selection::{CreatorCfg, CreatorState, Plan, Reject, Registry, Results};
 

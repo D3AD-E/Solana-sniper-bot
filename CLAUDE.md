@@ -285,6 +285,147 @@ day is still +179 trimmed.
 * Capacity: 1,400 fires/day at rank 4–6 is 6× the leader's volume; assume fee escalation
   and displacement if actually run at that scale. Paper-trade first.
 
+## v1.1: the wallet layer (2026-08-25, triple-checked)
+
+Scripts: `triple_check.py`, `leader_hunt.py`, `walletlist_value.py`, `strategy_v11.py`,
+`build_watchlists.py`. All watchlist evaluations use lists built from PRIOR days only.
+
+**Triple-check of v1 passed:** headline reproduces exactly (+262.9 test / +337.9 OOS
+trimmed). Dev self-buy wash is negligible (0.7–0.8% of confirmed SOL; those fires
+actually win MORE). Size cap 2.0 keeps only ~57% of PnL on 66% of capital — keep 3.5.
+
+**Wallet rotation is structural.** Fires whose confirmers are 100% never-before-seen
+wallets are the BEST bucket (+0.30/+0.26 trimmed, win 63–68%, both held-out days).
+Sniper wallets rotate constantly, so E4Ez does not follow wallets — he counts flow.
+Any broad "reputable sniper" list decays in days and following it LOSES (−0.05..−0.06
+per trade). This kills the naive copy-trade idea.
+
+**But three narrow wallet classes carry real, causal signal** (`leader_hunt.py` found
+68 wallets profitable on every active day; E4Ez is only #2 by 4-day net):
+
+* **symbionts** (follow): single-dev insiders — ≤3 devs, 40+ trips, >+0.5/trade, net>30.
+  E.g. `G3fk9Nyk…` +1,161 SOL net on 218 trades riding ONE creator at rank 2. Bare
+  copy-trigger (enter right after their create-block buy, 2.0 SOL, frozen ladder):
+  +0.24/+0.21 trimmed, win 76%/69% — +79/day test, +128/day OOS.
+* **whales** (follow): size ≥3, >+1.0/trade, 30+ trips. Copy-trigger +0.24/+0.40
+  trimmed, +25/+80 per day.
+* **elite operators** (avoid): ≥20 devs, 40+ trips, net>30, every day positive.
+  If one landed BEFORE our trigger, the fire averages ≈0 or negative — skip it.
+  Following them also loses. They are competition, not signal.
+
+**v1.1 book** = MAIN (v1 trigger + dev not in `dev_history` + no elite ahead)
+→ else SYM follow → else WHALE follow, one position per launch:
+
+| day | MAIN | SYM | WHALE | book |
+|---|---|---|---|---|
+| 08-23 test | +261 (n 852, win 66%) | +78 | +7 | **+346** |
+| 08-24 OOS | +336 (n 1,356, win 59%) | +128 | +39 | **+503** |
+
+Cross-day dev freshness (amendment): dev seen on ANY prior extracted day is dead
+weight (+0.03 vs +0.26/trade test) — 20% of v1 fires removed.
+
+**Postgres tables** (same pumpinfo DSN): `watch_wallets` (75 rows: 33 symbiont-follow,
+14 whale-follow, 28 elite-avoid; wallet/tag/action + full stats) and `dev_history`
+(39,467 deployers, first/last seen, launches) — powers the live cross-day freshness
+check. Rebuild after each new extracted day with `build_watchlists.py` (idempotent;
+extend its `SEQ`). The watchlist rots if not refreshed — symbionts die with their
+creator, whales rotate within ~a week.
+
+## Live paper-trading rig
+
+`analysis/live_paper.py` runs the full v1.1 decision tree against live pump.fun flow:
+Helius WS `logsSubscribe` on the pump program (a create is a tx logging BOTH
+"Instruction: Create" AND "InitializeMint2" — "Instruction: Create" alone also matches
+ATA creation inside ordinary first-buys and produced garbage candidates), then
+`getSignaturesForAddress(mint, until=create_sig)` at create+2.5 s to retroactively
+capture the create-slot buys (a WS sub opened after the create MISSES them - don't
+"fix" this back to a subscription), decision, second poll at +14 s for the ladder walk.
+Uses `dev_history` + `watch_wallets` from Postgres. `N_ENTRIES` env caps entries;
+results append-merge into `analysis/data/live_paper.json`.
+
+First live session (2026-08-25 15:46–16:01 UTC): 354 creates, 64% rejected non-fresh,
+6 fires. Five strategy-valid trades: −0.074, −0.138, −0.142, +0.007, −0.125 (1/5 win —
+14% probability at the backtested 54% rate, n meaningless, and it was the historically
+worst hour). The sixth fire was an 85-SOL bundle sweeping its own curve to vq 115 and
+insta-rugging (−3.26 in paper): `run_launch`'s `vq >= COMPLETE_VQ` guard was missing
+from the live port and is now in. Ladder contained every valid loss (worst −0.14 while
+one token went to literal zero — ladder recovered 3.40 of 3.5).
+
+Second session (16:15–16:28 UTC, 10 entries): **+0.56 SOL, 5/10 wins** — win rate on
+the backtested 54%, per-trade +0.056 vs expected +0.18 (n=10 variance). Banding
+reproduced live: the four fires with ≥12.8 SOL confirmed went 3/4 avg +0.23; the two
+at the 4.0–4.3 floor both lost. One Helius WS drop (WinError 121) killed the first
+half mid-run — the script now auto-reconnects and persists every close immediately.
+Third session (16:30–18:00 UTC, 90 min, 20 entries): **+3.07 SOL, 11/20 wins (55%),
++0.153/trade** — on top of the backtested +0.18 at 54%. 3,799 creates seen, 78%
+skipped non-fresh, 782 no-confirmation, 4 bundle sweeps blocked by the vq>=115 guard
+(one at vq 988 — likely curve-account misparse on an odd create; the guard turns
+those into harmless skips), 2 elite-avoid skips, 1 WS drop auto-recovered.
+
+Running total: 35 valid paper trades, **+3.16 SOL, 17/35 wins (49%)**, worst loss
+−0.41, all in `data/live_paper.json`. A tight live-vs-backtest verdict still needs
+~300+ entries (`N_ENTRIES`/`TIMEOUT_S` env vars).
+
+## Production wiring (2026-08-25)
+
+* `rust-native/src/strategy.rs` — v1.1 hot path (fresh-dev + confirmation trigger +
+  vq>=115 guard + watch wallets + env-driven params). Imports curve math from
+  `selection.rs` (which remains the OLD creator-whitelist strategy). 17 tests pass
+  standalone in WSL — see `rust-native/STRATEGY.md` for wiring and the test recipe.
+  **Run cargo in WSL, not Windows** (prod toolchain; full crate needs Linux OpenSSL).
+* All strategy knobs live in `.env` ("v1.1 confirmation-trigger strategy" block).
+  `SNIPER_CU_LIMIT=96000` is measured (consumed p50 73k / p99 87k on 149 of the
+  leader's landed buys, `analysis/cu_measure.py`) — re-measure on our own landed txs.
+* Flat tables for the proxy: `dev_history.txt` (39.5k devs) + `watch_wallets.tsv`
+  (75 wallets), regenerated atomically by `analysis/export_tables.py`.
+* `analysis/dev_sweep.py` — daemon keeping `dev_history` current from PumpPortal's free
+  WS (zero RPC credits), batch-upsert every 30 s, table export every ~5 min, lockfile
+  singleton. Installed on this box as scheduled task `pump-dev-sweep` (every 5 min,
+  start-if-not-running; `scripts/install_dev_sweep.ps1`). Linux unit:
+  `scripts/dev-sweep.service`. If the sweep dies, the freshness filter rots and MAIN
+  fires on serial devs — treat a stale `max(updated_at)` in dev_history as a halt signal.
+* Deploy: `DEPLOY.md` (Latitude Ubuntu runbook). `scripts/push.sh` rsyncs from dev
+  (WSL) with `--build/--restart`; `scripts/bootstrap.sh` (base) then
+  `scripts/deploy_v11.sh` (postgres :5433 + tables from `scripts/db/watchlists.sql`
+  via `analysis/db_dump.py` + dev-sweep unit). Strategy knobs are .env-only — no
+  rebuild to retune; tables hot-reload.
+* **`GOLIVE.md`** is the live checklist (what's done, what's left, halt signals) and the
+  sizing spec (`size = clamp(0.47×confirmed, 1.5, 3.5)`).
+* v1.1 is wired into the REAL prod crate now, not just rust-native: `shred-sniper/sniper/
+  src/confirm.rs` (decision machine, ported, own tests), `pumpfun::parse_buy` (create-block
+  buy decoder + test), `HotSniper::on_create`/`on_buy` (register-pending then fire),
+  forwarder buy dispatch, and the deshred fast path decoding buys only when
+  `SNIPER_CONFIRM_MODE=1` (gated by `confirm::CONFIRM_MODE`, so whitelist latency is
+  unchanged). `rust-native/src/strategy.rs` remains the standalone/napi twin. Whole
+  workspace only compiles on Linux (OpenSSL) — build/test on the box or WSL, never Windows.
+  Confirm path is unit-tested but UNPROVEN on live shreds: ghost-soak before trusting it.
+
+## Soak finding: the near-complete-curve trap (2026-08-25)
+
+The 1-hour live paper soak (stalled at 26 min on a WS recv hang — the reconnect guards a
+dropped connection, not a silent stall; add a recv watchdog before a long unattended run)
+surfaced a real backtest blind spot. Two −3.08 SOL losses at vq≈89 (~59 SOL confirmed) sat
+next to a +1.54 win at vq≈87: near-complete curves are bimodal (migrate up, or dump to
+zero). The backtest **cannot see this** — it values a near-complete curve AT completion
+(`COMPLETE_VQ=115`, optimistic), so `fire_features` shows vq 85–100 as +1.40/trade at 96%
+win, which is a simulator artifact of the same family as the discarded ML model. Live and
+sim agree only at vq 30–50, where every clean soak fire won (+0.32/+0.46/+0.36). Action
+taken: `SNIPER_VQ_CAP_SOL` hardened 115→60 in `.env` (rejects >30 SOL of prior flow, ~3% of
+fires, removes the −3 SOL tails). The compiled default stays 115 (the completion constant);
+60 is the live-hardened override. Cumulative paper record after this soak: 41 trades,
+−3.9 SOL, 20/41 wins — the negative total is entirely the pre-guard −3.26 bundle rug plus
+these two near-complete −3.08s, all of which the current guards (vq≥115 sweep guard + the
+new 60 cap) now reject.
+
+Clean re-run with the fixes (18:52–19:52 UTC, hardened): the 60s WS staleness watchdog
+held the connection for the full unattended hour. 2,928 creates → 595 fresh candidates →
+3 entries (2 MAIN + 1 WHALE, +0.169 SOL, all closed). The vq-60 cap rejected 9
+near-complete curves; elite-avoid skipped 1; the WHALE-follow book fired live for the first
+time. Thin fire count is the slow evening window + a now-comprehensive dev_history (40k
+devs, 76% of candidates correctly rejected as repeat deployers) — the freshness filter is
+aggressive by design, not broken. The live paper harness (`live_paper.py`) now has the
+watchdog and an env-driven `SNIPER_VQ_CAP_SOL` (default 60) matching prod.
+
 ## Standing caveats
 
 The +0.5/trade figures come from a self-selected population of good operators. Copying E4Ez's

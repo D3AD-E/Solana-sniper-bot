@@ -86,6 +86,65 @@ fn disc(data: &[u8]) -> Option<&[u8; 8]> {
     data.get(..8)?.try_into().ok()
 }
 
+/// A pump.fun buy landing in a block, as seen off the shred stream. This is what the v1.1
+/// confirmation trigger counts: buys landing in the create block after the dev's initial buy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PumpBuyInfo {
+    pub mint: Pubkey,
+    /// fee payer of the buy transaction
+    pub buyer: Pubkey,
+    /// SOL committed to the buy, in lamports. For `buy`/`buy_v2` this is `max_sol_cost`
+    /// (fee included); for `buy_exact_sol_in` it is the exact sol argument. It is the amount
+    /// pledged, which is what is visible pre-execution and what the trigger counts.
+    pub sol_lamports: u64,
+}
+
+/// Returns the first pump.fun buy in `tx`, if any. Skips a buy whose signer is the mint's own
+/// creator in the same transaction (that is the dev buy, handled by `parse_create`).
+///
+/// Hot path: no allocation, no formatting, no logging.
+#[inline]
+pub fn parse_buy(tx: &VersionedTransaction) -> Option<PumpBuyInfo> {
+    let keys = tx.message.static_account_keys();
+    let instructions: &[CompiledInstruction] = match &tx.message {
+        solana_sdk::message::VersionedMessage::V0(v0) => &v0.instructions,
+        solana_sdk::message::VersionedMessage::Legacy(l) => &l.instructions,
+    };
+    // a transaction that also carries a create is a dev buy, not a confirming buy
+    for ix in instructions {
+        if keys.get(ix.program_id_index as usize) == Some(&PUMP_PROGRAM) {
+            if let Some(d) = disc(&ix.data) {
+                if *d == DISC_CREATE || *d == DISC_CREATE_V2 {
+                    return None;
+                }
+            }
+        }
+    }
+    for ix in instructions {
+        if keys.get(ix.program_id_index as usize) != Some(&PUMP_PROGRAM) {
+            continue;
+        }
+        let Some(d) = disc(&ix.data) else { continue };
+        let sol = match *d {
+            // (amount_tokens: u64, max_sol_cost: u64)
+            DISC_BUY | DISC_BUY_V2 => {
+                u64::from_le_bytes(ix.data.get(16..24)?.try_into().ok()?)
+            }
+            // (sol_in: u64, min_tokens_out: u64)
+            DISC_BUY_EXACT_SOL_IN => {
+                u64::from_le_bytes(ix.data.get(8..16)?.try_into().ok()?)
+            }
+            _ => continue,
+        };
+        // pump buy accounts: 0 global, 1 fee_recipient, 2 mint, 3 bonding_curve, ...
+        let mint = *key_at(keys, ix, 2)?;
+        // the fee payer is the buyer on a standalone buy transaction
+        let buyer = *keys.first()?;
+        return Some(PumpBuyInfo { mint, buyer, sol_lamports: sol });
+    }
+    None
+}
+
 /// Returns the launch described by `tx`, if it is a pump.fun create.
 ///
 /// Hot path: no allocation, no formatting, no logging.

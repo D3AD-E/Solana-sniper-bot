@@ -265,13 +265,19 @@ fn scan_for_pump_creates(
 ) {
     for entry in entries {
         for tx in &entry.transactions {
-            let Some(info) = pumpfun::parse_create(tx) else {
+            // A launch either fires immediately (whitelist path) or, under the confirmation
+            // trigger, fires from a confirming buy in the create block. Both return a
+            // FiredLaunch carrying everything the seller needs.
+            let create_info = pumpfun::parse_create(tx);
+            let fired = if let Some(info) = &create_info {
+                metrics.pump_creates_seen.fetch_add(1, Ordering::Relaxed);
+                // fire first: everything below allocates or formats
+                hot.as_mut().and_then(|h| h.on_create(info, slot))
+            } else if let Some(buy) = pumpfun::parse_buy(tx) {
+                hot.as_mut().and_then(|h| h.on_buy(&buy, slot))
+            } else {
                 continue;
             };
-            metrics.pump_creates_seen.fetch_add(1, Ordering::Relaxed);
-
-            // fire first: everything below allocates or formats
-            let fired = hot.as_mut().and_then(|h| h.on_create(&info, slot));
 
             // the seller needs the seed: the buy creates its token account from one, so the
             // address cannot be re-derived from the mint alone
@@ -283,10 +289,10 @@ fn scan_for_pump_creates(
                         mint: f.mint.to_bytes().to_vec(),
                         token_account: f.token_account.to_bytes().to_vec(),
                         seed: String::from_utf8_lossy(&f.seed).into_owned(),
-                        token_program: info.token_program.to_bytes().to_vec(),
-                        bonding_curve: info.bonding_curve.to_bytes().to_vec(),
-                        associated_bonding_curve: info.associated_bonding_curve.to_bytes().to_vec(),
-                        creator: info.creator.to_bytes().to_vec(),
+                        token_program: f.token_program.to_bytes().to_vec(),
+                        bonding_curve: f.bonding_curve.to_bytes().to_vec(),
+                        associated_bonding_curve: f.associated_bonding_curve.to_bytes().to_vec(),
+                        creator: f.creator.to_bytes().to_vec(),
                         amount: f.amount,
                         max_sol_cost: f.max_sol_cost,
                         fired_at_micros: SystemTime::now()
@@ -297,6 +303,10 @@ fn scan_for_pump_creates(
                 }
             }
 
+            // downstream create feed: only for actual creates, not confirming buys
+            let Some(info) = &create_info else {
+                continue;
+            };
             if pump_create_sender.receiver_count() == 0 {
                 continue;
             }

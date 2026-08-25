@@ -158,6 +158,7 @@ fn hot(providers: usize, spinning: bool) -> (HotSniper, Vec<std::thread::JoinHan
         )
         .0,
         ghost_mode: false,
+        confirm: None,
     });
 
     let static_accounts = template::StaticAccounts {
@@ -178,6 +179,9 @@ fn hot(providers: usize, spinning: bool) -> (HotSniper, Vec<std::thread::JoinHan
             seed_index: 1,
             launch_counter: 0,
             vault_cache: Box::new([(Pubkey::default(), Pubkey::default()); 1024]),
+            session: crate::confirm::Session::default(),
+            pending: ahash::AHashMap::with_capacity(256),
+            cur_slot: 0,
         },
         drains,
         stop,

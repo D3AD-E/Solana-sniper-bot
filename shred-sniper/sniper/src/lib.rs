@@ -12,6 +12,7 @@ mod bench;
 pub mod batch_write;
 pub mod chain;
 pub mod config;
+pub mod confirm;
 pub mod providers;
 pub mod position;
 pub mod pumpfun;
@@ -39,7 +40,8 @@ use crate::{
     chain::{FeeRecipientCache, NoncePool},
     position::{ModeConfig, OpenPosition, PositionGate},
     config::SniperConfig,
-    pumpfun::{CurveParams, PumpCreateInfo},
+    confirm::{LaunchWatch, Pass, Session},
+    pumpfun::{BuyPlan, CurveParams, PumpBuyInfo, PumpCreateInfo},
     sender::{Job, ProviderHandle, TipOffsets, TxBuf, MAX_TX},
     template::{SeedTable, Template, SEED_LEN},
     whitelist::Whitelist,
@@ -61,6 +63,14 @@ pub struct SniperMetrics {
     pub fired: AtomicU64,
     /// individual provider jobs queued
     pub jobs_queued: AtomicU64,
+    /// confirm mode: creates from a fresh deployer, registered as pending
+    pub confirm_pending: AtomicU64,
+    /// confirm mode: creates skipped because the deployer was not fresh
+    pub confirm_not_fresh: AtomicU64,
+    /// confirm mode: launches skipped because an elite operator landed before the trigger
+    pub confirm_elite_ahead: AtomicU64,
+    /// confirm mode: launches skipped because the curve was at/over the completion cap
+    pub confirm_curve_capped: AtomicU64,
 }
 
 /// Shared, background-updated state. Safe to read from the hot path.
@@ -81,6 +91,8 @@ pub struct Shared {
     pub ghost_mode: bool,
     /// token accounts for every seed, derived at startup
     pub seed_table: SeedTable,
+    /// v1.1 confirmation-trigger params, or None when the whitelist path is in use.
+    pub confirm: Option<confirm::Params>,
 }
 
 pub struct Sniper {
@@ -213,6 +225,34 @@ impl Sniper {
         let seed_table = SeedTable::build(&buyer, seed_start, SEED_TABLE_LEN)?;
         info!("sniper: {} token accounts derived", seed_table.len());
 
+        // v1.1 confirmation-trigger tables. When SNIPER_CONFIRM_MODE=1 these replace the
+        // whitelist for the MAIN book; the reloader keeps them current under a running proxy.
+        let confirm = if confirm::Params::enabled() {
+            let dev_path = std::env::var("SNIPER_DEV_HISTORY")
+                .unwrap_or_else(|_| "dev_history.txt".into());
+            let watch_path = std::env::var("SNIPER_WATCH_WALLETS")
+                .unwrap_or_else(|_| "watch_wallets.tsv".into());
+            match (
+                confirm::load_devs_from_file(&dev_path),
+                confirm::load_watch_from_file(&watch_path),
+            ) {
+                (Ok((nd, _)), Ok((nw, _))) => {
+                    info!("sniper: confirm mode ON, {nd} known devs, {nw} watch wallets");
+                }
+                (d, w) => {
+                    return Err(format!(
+                        "confirm mode on but tables failed to load: devs={d:?} watch={w:?} \
+                         (SNIPER_DEV_HISTORY, SNIPER_WATCH_WALLETS)"
+                    ));
+                }
+            }
+            confirm::spawn_reloader(dev_path, watch_path, std::time::Duration::from_secs(60));
+            confirm::CONFIRM_MODE.store(true, std::sync::atomic::Ordering::Relaxed);
+            Some(confirm::Params::from_env())
+        } else {
+            None
+        };
+
         let shared = Arc::new(Shared {
             whitelist,
             nonces,
@@ -228,6 +268,7 @@ impl Sniper {
             gate,
             ghost_mode: cfg.ghost_mode,
             seed_table,
+            confirm,
         });
 
         Ok(Self {
@@ -257,6 +298,9 @@ impl Sniper {
                 vault_cache: Box::new(
                     [(Pubkey::default(), Pubkey::default()); VAULT_CACHE_SLOTS],
                 ),
+                session: Session::default(),
+                pending: ahash::AHashMap::with_capacity(256),
+                cur_slot: 0,
             },
             threads,
         )
@@ -287,6 +331,18 @@ pub struct HotSniper {
     /// against the ed25519 curve, and the same creators launch token after token, so the
     /// hit rate is high. A wrong entry is impossible: the creator is compared in full.
     vault_cache: Box<[(Pubkey, Pubkey); VAULT_CACHE_SLOTS]>,
+    /// v1.1 confirm mode: deployers seen this session (freshness), the create blocks being
+    /// watched, and the slot they belong to. All empty/unused when confirm is off.
+    session: Session,
+    pending: ahash::AHashMap<Pubkey, PendingLaunch>,
+    cur_slot: u64,
+}
+
+/// A launch whose create block is being watched for the confirmation trigger.
+struct PendingLaunch {
+    info: PumpCreateInfo,
+    slot: u64,
+    watch: LaunchWatch,
 }
 
 const VAULT_CACHE_SLOTS: usize = 1024;
@@ -315,6 +371,12 @@ pub struct FiredLaunch {
     pub seed: [u8; SEED_LEN],
     pub amount: u64,
     pub max_sol_cost: u64,
+    // carried so the seller can be handed a fill without the original create in hand -- the
+    // confirmation trigger fires from a buy, where the forwarder no longer has the create.
+    pub bonding_curve: Pubkey,
+    pub associated_bonding_curve: Pubkey,
+    pub creator: Pubkey,
+    pub token_program: Pubkey,
 }
 
 impl HotSniper {
@@ -350,26 +412,30 @@ impl HotSniper {
         fresh
     }
 
-    /// Hot path. Returns what was fired, or None.
+    /// Hot path. A pump create was decoded; decide, and fire immediately on the whitelist
+    /// path or register the launch for the confirmation trigger.
     ///
     /// No allocation, no `String`/`format!`, no logging, no syscalls.
     #[inline]
     pub fn on_create(&mut self, info: &PumpCreateInfo, slot: u64) -> Option<FiredLaunch> {
-        let m = &self.shared.metrics;
-        m.creates_seen.fetch_add(1, Ordering::Relaxed);
+        // never bind `&self.shared.metrics` across a `&mut self` call (confirm_register /
+        // fire_launch below); the atomics are incremented inline instead.
+        self.shared.metrics.creates_seen.fetch_add(1, Ordering::Relaxed);
+
+        // v1.1 confirmation trigger: do not fire on the create. Register a fresh deployer's
+        // launch and wait for the create block to confirm demand (see on_buy).
+        if let Some(params) = self.shared.confirm.clone() {
+            self.confirm_register(info, slot, &params);
+            return None;
+        }
 
         if !self.shared.whitelist.contains(&info.user) {
             return None;
         }
-        m.creates_whitelisted.fetch_add(1, Ordering::Relaxed);
-
-        // one token at a time, or stopped after a test round trip
-        if !self.shared.gate.may_fire() {
-            return None;
-        }
+        self.shared.metrics.creates_whitelisted.fetch_add(1, Ordering::Relaxed);
 
         if !self.seen.insert(info.mint) {
-            m.duplicates.fetch_add(1, Ordering::Relaxed);
+            self.shared.metrics.duplicates.fetch_add(1, Ordering::Relaxed);
             return None;
         }
         if self.seen.len() > 50_000 {
@@ -379,15 +445,9 @@ impl HotSniper {
         if self.shared.max_dev_buy_lamports > 0
             && info.dev_buy_lamports >= self.shared.max_dev_buy_lamports
         {
-            m.skipped_dev_buy.fetch_add(1, Ordering::Relaxed);
+            self.shared.metrics.skipped_dev_buy.fetch_add(1, Ordering::Relaxed);
             return None;
         }
-
-        // every provider variant of this launch shares one nonce, so only one can land
-        let Some((nonce_account, nonce_value)) = self.shared.nonces.take() else {
-            m.skipped_no_nonce.fetch_add(1, Ordering::Relaxed);
-            return None;
-        };
 
         let plan = self.shared.curve.plan_buy(
             info.dev_buy_lamports,
@@ -398,6 +458,114 @@ impl HotSniper {
         if plan.amount == 0 {
             return None;
         }
+        self.fire_launch(info, slot, plan)
+    }
+
+    /// v1.1 confirm mode: register a fresh deployer's launch so its create block can be
+    /// watched. Dedups the create and drops pending launches from sealed (earlier) slots.
+    #[inline]
+    fn confirm_register(&mut self, info: &PumpCreateInfo, slot: u64, _params: &confirm::Params) {
+        // never bind `&self.shared.metrics` across a `&mut self` call below.
+        self.seal_old_slots(slot);
+        if !self.seen.insert(info.mint) {
+            self.shared.metrics.duplicates.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        if self.seen.len() > 50_000 {
+            self.seen.clear();
+        }
+        if !self.session.dev_is_fresh(&info.creator) {
+            self.shared.metrics.confirm_not_fresh.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        if self.pending.len() > 4096 {
+            self.pending.retain(|_, p| p.slot >= slot);
+        }
+        self.shared.metrics.confirm_pending.fetch_add(1, Ordering::Relaxed);
+        self.pending.insert(
+            info.mint,
+            PendingLaunch { info: *info, slot, watch: LaunchWatch::new(info.dev_buy_lamports) },
+        );
+    }
+
+    /// v1.1 confirm mode: a pump buy was decoded. Advance the matching create block's watcher
+    /// and fire when the trigger is met. Returns what was fired, or None.
+    #[inline]
+    pub fn on_buy(&mut self, buy: &PumpBuyInfo, slot: u64) -> Option<FiredLaunch> {
+        let Some(params) = self.shared.confirm.clone() else {
+            return None;
+        };
+        self.seal_old_slots(slot);
+        // fire only on confirming buys IN the create block; buys in a later slot are too late.
+        let (result, info) = {
+            let p = self.pending.get_mut(&buy.mint)?;
+            if p.slot != slot {
+                return None;
+            }
+            (p.watch.on_buy(&buy.buyer, buy.sol_lamports, &params), p.info)
+        };
+        // note: never bind `&self.shared.metrics` across the `&mut self` fire below.
+        match result {
+            Ok(fire) => {
+                self.pending.remove(&buy.mint);
+                let plan = self.shared.curve.plan_buy(
+                    fire.dev_buy_lamports,
+                    fire.budget_lamports,
+                    self.shared.haircut_bps,
+                    self.shared.slippage_bps,
+                );
+                if plan.amount == 0 {
+                    return None;
+                }
+                let _ = fire.book; // Book::{Main,FollowSymbiont,FollowWhale} — same fire path
+                self.fire_launch(&info, slot, plan)
+            }
+            Err(Pass::EliteAhead) => {
+                self.shared.metrics.confirm_elite_ahead.fetch_add(1, Ordering::Relaxed);
+                self.pending.remove(&buy.mint);
+                None
+            }
+            Err(Pass::CurveCapped) => {
+                self.shared.metrics.confirm_curve_capped.fetch_add(1, Ordering::Relaxed);
+                self.pending.remove(&buy.mint);
+                None
+            }
+            Err(Pass::Dead) => {
+                self.pending.remove(&buy.mint);
+                None
+            }
+            Err(Pass::Watching) => None,
+        }
+    }
+
+    /// The create block for a launch lives in one slot; once the proxy moves to a later slot,
+    /// no more confirming buys can land, so drop everything still pending from earlier slots.
+    #[inline]
+    fn seal_old_slots(&mut self, slot: u64) {
+        if slot > self.cur_slot {
+            if !self.pending.is_empty() {
+                self.pending.retain(|_, p| p.slot >= slot);
+            }
+            self.cur_slot = slot;
+        }
+    }
+
+    /// Builds and fires the buy for `info` with a priced `plan`. Shared by the whitelist path
+    /// and the confirmation trigger, so both size, patch, and fan out identically.
+    #[inline]
+    fn fire_launch(&mut self, info: &PumpCreateInfo, slot: u64, plan: BuyPlan) -> Option<FiredLaunch> {
+        let m = &self.shared.metrics;
+
+        // one token at a time, or stopped after a test round trip
+        if !self.shared.gate.may_fire() {
+            return None;
+        }
+
+        // every provider variant of this launch shares one nonce, so only one can land
+        let Some((nonce_account, nonce_value)) = self.shared.nonces.take() else {
+            m.skipped_no_nonce.fetch_add(1, Ordering::Relaxed);
+            return None;
+        };
 
         // The token account comes from a seed rather than the ATA program: ~18k fewer compute
         // units on chain. Both the address and the seed were derived at startup -- nothing
@@ -477,6 +645,10 @@ impl HotSniper {
                 seed,
                 amount: plan.amount,
                 max_sol_cost: plan.max_sol_cost,
+                bonding_curve: info.bonding_curve,
+                associated_bonding_curve: info.associated_bonding_curve,
+                creator: info.creator,
+                token_program: info.token_program,
             });
         }
 
@@ -522,6 +694,10 @@ impl HotSniper {
             seed,
             amount: plan.amount,
             max_sol_cost: plan.max_sol_cost,
+            bonding_curve: info.bonding_curve,
+            associated_bonding_curve: info.associated_bonding_curve,
+            creator: info.creator,
+            token_program: info.token_program,
         })
     }
 }
