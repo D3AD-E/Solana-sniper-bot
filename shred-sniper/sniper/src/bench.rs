@@ -10,7 +10,6 @@
 #![cfg(test)]
 
 use std::{
-    collections::HashSet,
     sync::{atomic::AtomicBool, Arc},
     time::Instant,
 };
@@ -21,7 +20,7 @@ use solana_sdk::pubkey::Pubkey;
 use crate::{
     chain::{FeeRecipientCache, GlobalConfig, NoncePool},
     pumpfun::{CurveParams, PumpCreateInfo, TOKEN_2022_PROGRAM},
-    sender::{Job, MAX_TX},
+    sender::{Job, TxBuf, MAX_TX},
     template, HotSniper, Shared, SniperMetrics,
 };
 
@@ -146,6 +145,7 @@ fn hot(providers: usize, spinning: bool) -> (HotSniper, Vec<std::thread::JoinHan
         haircut_bps: 30,
         slippage_bps: 100,
         buyer,
+        seed_table: template::SeedTable::build(&buyer, 1, 1024).expect("seed table"),
         gate: crate::position::start(
             "http://127.0.0.1:1".to_string(),
             crate::position::ModeConfig {
@@ -172,9 +172,10 @@ fn hot(providers: usize, spinning: bool) -> (HotSniper, Vec<std::thread::JoinHan
         HotSniper {
             shared,
             template: tmpl,
-            seen: HashSet::with_capacity(1 << 16),
-            job: Job::default(),
-            seed_counter: 1,
+            seen: ahash::AHashSet::with_capacity(1 << 16),
+            tx_ring: (0..super::TX_RING).map(|_| Arc::new(TxBuf::default())).collect(),
+            ring_cursor: 0,
+            seed_index: 1,
             launch_counter: 0,
             vault_cache: Box::new([(Pubkey::default(), Pubkey::default()); 1024]),
         },
@@ -247,7 +248,18 @@ fn bench_hot_path_stages() {
         s.push(t.elapsed().as_nanos());
         std::hint::black_box(v);
     }
-    report("create_with_seed (one sha256)", s);
+    report("create_with_seed (was on the hot path)", s);
+
+    // what the hot path does now: the same address, derived at startup instead
+    let table = template::SeedTable::build(&buyer, 1, 4096).unwrap();
+    let mut s = Vec::with_capacity(ITERS);
+    for i in 0..ITERS {
+        let t = Instant::now();
+        let v = table.get(i % 4096, &TOKEN_2022_PROGRAM);
+        s.push(t.elapsed().as_nanos());
+        std::hint::black_box(v);
+    }
+    report("seed table lookup (replaces it)", s);
 
     let mut s = Vec::with_capacity(ITERS);
     for _ in 0..ITERS {
@@ -289,23 +301,31 @@ fn bench_hot_path_stages() {
     }
     report("patch 14 fields", s);
 
-    let mut job = Job::default();
+    let mut body = Arc::new(TxBuf::default());
     let len = tmpl.tx.len();
     let mut s = Vec::with_capacity(ITERS);
     for _ in 0..ITERS {
         let t = Instant::now();
-        job.len = len as u16;
-        job.tx[..len].copy_from_slice(&tmpl.tx);
+        let buf = Arc::get_mut(&mut body).unwrap();
+        buf.len = len as u16;
+        buf.tx[..len].copy_from_slice(&tmpl.tx);
+        let shared = body.clone();
         s.push(t.elapsed().as_nanos());
+        drop(shared);
     }
-    report("copy tx into job buffer", s);
+    report("copy tx into shared body", s);
 }
 
 /// Isolates the cost of handing a job to a sender thread. A receiver blocked in `recv`
 /// must be woken by the kernel, and that futex wake is charged to the *detect* thread.
 #[test]
 fn bench_channel_handoff() {
-    let job = Job::default();
+    let job = Job {
+        base: Arc::new(TxBuf::default()),
+        tip_account: [0u8; 32],
+        tip_lamports: 0,
+        cu_price: 0,
+    };
 
     // 1. no receiver at all: pure enqueue cost
     let (tx, rx) = crossbeam_channel::bounded::<Job>(ITERS + 16);

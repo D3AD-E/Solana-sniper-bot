@@ -4959,6 +4959,7 @@ dependencies = [
 name = "sniper"
 version = "0.2.13"
 dependencies = [
+ "ahash 0.8.11",
  "arc-swap",
  "base64 0.22.1",
  "bincode",

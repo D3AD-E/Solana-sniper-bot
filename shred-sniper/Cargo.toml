@@ -43,5 +43,15 @@ tonic = { version = "0.13", features = ["tls-webpki-roots"] }
 tonic-build = "0.13"
 
 [profile.release]
-# thin has minimal overhead vs none (default): https://blog.llvm.org/2016/06/thinlto-scalable-and-incremental-lto.html
-lto = "thin"
+# This binary is latency critical and is built once per deployment, so every knob here is
+# traded the same way: longer build, faster code.
+#
+# * `fat` LTO plus a single codegen unit lets the hot path inline across crate boundaries --
+#   `Pubkey::create_program_address`, the curve25519 field ops and the shred layout accessors
+#   all live in other crates and are called from inside the detect loop.
+# * `abort` removes the unwinding landing pads from that loop. A panic already takes the
+#   whole process down: `main` installs a hook that sets `exit` and shuts everything off,
+#   because a proxy whose reconstructor thread has died is worse than one that restarts.
+lto = "fat"
+codegen-units = 1
+panic = "abort"

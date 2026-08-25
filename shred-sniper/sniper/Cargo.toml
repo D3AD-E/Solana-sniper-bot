@@ -8,6 +8,7 @@ edition = { workspace = true }
 publish = false
 
 [dependencies]
+ahash = { workspace = true }
 arc-swap = { workspace = true }
 base64 = "0.22"
 bincode = { workspace = true }

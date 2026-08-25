@@ -15,6 +15,10 @@
 //!     which is what produces the 6002 reverts when a launch is over-subscribed.
 //!   * per-creator budget and CU price - the budget is the real position size; the token
 //!     amount handed to the pump `buy` instruction is derived from it.
+//!   * rolling per-creator result - a creator whose recent snipes lost money is switched off
+//!     until it recovers. This is the single most valuable filter found: on his own launches
+//!     it roughly triples the edge per attempt and is the only variant that stayed profitable
+//!     on a degraded day.
 //!
 //! The registry is swapped wholesale by a background reloader, so the hot path never takes a
 //! lock and never sees a half-written table.
@@ -66,6 +70,52 @@ pub struct CreatorCfg {
     pub max_depth_lamports: u64,
 }
 
+/// Rolling result for one creator, updated as our own trades close.
+///
+/// A plain ring of the last N outcomes rather than an average: the point is to switch a
+/// creator off quickly when it turns, and a long-run mean is too slow to do that.
+#[derive(Clone, Copy, Debug)]
+pub struct CreatorState {
+    ring: [f32; Self::WINDOW],
+    len: u8,
+    next: u8,
+}
+
+impl Default for CreatorState {
+    fn default() -> Self {
+        CreatorState { ring: [0.0; Self::WINDOW], len: 0, next: 0 }
+    }
+}
+
+impl CreatorState {
+    pub const WINDOW: usize = 32;
+    /// Trade this creator until we have seen at least this many results.
+    pub const WARMUP: u8 = 10;
+
+    pub fn record(&mut self, pnl_sol: f32) {
+        self.ring[self.next as usize] = pnl_sol;
+        self.next = (self.next + 1) % Self::WINDOW as u8;
+        if (self.len as usize) < Self::WINDOW {
+            self.len += 1;
+        }
+    }
+
+    #[inline]
+    pub fn mean(&self) -> f32 {
+        if self.len == 0 {
+            return 0.0;
+        }
+        let n = self.len as usize;
+        self.ring[..n].iter().sum::<f32>() / n as f32
+    }
+
+    /// Warming up counts as enabled: we cannot rank a creator we have never traded.
+    #[inline]
+    pub fn enabled(&self) -> bool {
+        self.len < Self::WARMUP || self.mean() > 0.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Plan {
     /// `amount` argument for the pump `buy` instruction, in raw token units.
@@ -84,10 +134,33 @@ pub enum Reject {
     TooShallow,
     TooDeep,
     Unfillable,
+    CreatorCold,
 }
 
 pub struct Registry {
     creators: FastMap<[u8; 32], CreatorCfg>,
+}
+
+/// Our own trading results, kept apart from the config so a config reload never wipes them.
+#[derive(Default)]
+pub struct Results {
+    per_creator: FastMap<[u8; 32], CreatorState>,
+}
+
+impl Results {
+    #[inline]
+    pub fn get(&self, creator: &[u8; 32]) -> CreatorState {
+        self.per_creator.get(creator).copied().unwrap_or_default()
+    }
+
+    /// Call when a position closes, with the realised PnL of that round trip.
+    pub fn record(&mut self, creator: [u8; 32], pnl_sol: f32) {
+        self.per_creator.entry(creator).or_default().record(pnl_sol);
+    }
+
+    pub fn cold(&self) -> usize {
+        self.per_creator.values().filter(|s| !s.enabled()).count()
+    }
 }
 
 impl Registry {
@@ -105,15 +178,20 @@ impl Registry {
 
     /// The whole decision. `curve_quote_lamports` is the curve's quote reserve *including* the
     /// 30 SOL virtual offset, i.e. what the create (plus anything already ahead of us in the
-    /// block) left behind.
+    /// block) left behind. `state` carries our own recent results for this creator.
     #[inline]
     pub fn decide(
         &self,
         creator: &[u8; 32],
         dev_buy_lamports: u64,
         curve_quote_lamports: u64,
+        state: &CreatorState,
     ) -> Result<Plan, Reject> {
         let cfg = self.creators.get(creator).ok_or(Reject::NotWhitelisted)?;
+
+        if !state.enabled() {
+            return Err(Reject::CreatorCold);
+        }
 
         if dev_buy_lamports < cfg.floor_lamports {
             return Err(Reject::DevBuyBelowFloor);
@@ -332,9 +410,10 @@ pub fn decide_now(
     creator: &[u8; 32],
     dev_buy_lamports: u64,
     curve_quote_lamports: u64,
+    state: &CreatorState,
 ) -> Result<Plan, Reject> {
     match current() {
-        Some(reg) => reg.decide(creator, dev_buy_lamports, curve_quote_lamports),
+        Some(reg) => reg.decide(creator, dev_buy_lamports, curve_quote_lamports, state),
         None => Err(Reject::NotWhitelisted),
     }
 }
@@ -385,18 +464,19 @@ mod tests {
         let other = [7u8; 32];
         let depth_ok = VIRT_SOL_0 + 8_000_000_000;
 
-        assert_eq!(r.decide(&other, 5_000_000_000, depth_ok), Err(Reject::NotWhitelisted));
-        assert_eq!(r.decide(&dev, 4_000_000_000, depth_ok), Err(Reject::DevBuyBelowFloor));
+        let warm = CreatorState::default();
+        assert_eq!(r.decide(&other, 5_000_000_000, depth_ok, &warm), Err(Reject::NotWhitelisted));
+        assert_eq!(r.decide(&dev, 4_000_000_000, depth_ok, &warm), Err(Reject::DevBuyBelowFloor));
         assert_eq!(
-            r.decide(&dev, 5_000_000_000, VIRT_SOL_0 + 1_000_000_000),
+            r.decide(&dev, 5_000_000_000, VIRT_SOL_0 + 1_000_000_000, &warm),
             Err(Reject::TooShallow)
         );
         assert_eq!(
-            r.decide(&dev, 5_000_000_000, VIRT_SOL_0 + 40_000_000_000),
+            r.decide(&dev, 5_000_000_000, VIRT_SOL_0 + 40_000_000_000, &warm),
             Err(Reject::TooDeep)
         );
 
-        let plan = r.decide(&dev, 5_000_000_000, depth_ok).unwrap();
+        let plan = r.decide(&dev, 5_000_000_000, depth_ok, &warm).unwrap();
         assert_eq!(plan.max_sol_cost, 500_000_000);
         assert_eq!(plan.cu_price, 10_000_000);
         assert!(plan.token_amount > 0);
@@ -407,9 +487,37 @@ mod tests {
         publish(reg());
         let dev = bs58_decode_32(DEV).unwrap();
         let quote = VIRT_SOL_0 + 8_000_000_000;
-        assert!(decide_now(&dev, 5_000_000_000, quote).is_ok());
+        let warm = CreatorState::default();
+        assert!(decide_now(&dev, 5_000_000_000, quote, &warm).is_ok());
         publish(Registry::empty());
-        assert_eq!(decide_now(&dev, 5_000_000_000, quote), Err(Reject::NotWhitelisted));
+        assert_eq!(decide_now(&dev, 5_000_000_000, quote, &warm), Err(Reject::NotWhitelisted));
+    }
+
+    #[test]
+    fn a_losing_creator_is_switched_off_and_can_recover() {
+        let r = reg();
+        let dev = bs58_decode_32(DEV).unwrap();
+        let quote = VIRT_SOL_0 + 8_000_000_000;
+        let mut results = Results::default();
+
+        // warmup: traded even with nothing but losses recorded so far
+        for _ in 0..(CreatorState::WARMUP - 1) {
+            results.record(dev, -0.05);
+        }
+        assert!(r.decide(&dev, 5_000_000_000, quote, &results.get(&dev)).is_ok());
+
+        // once warmed up on losses it goes cold
+        results.record(dev, -0.05);
+        assert_eq!(
+            r.decide(&dev, 5_000_000_000, quote, &results.get(&dev)),
+            Err(Reject::CreatorCold)
+        );
+
+        // and a run of wins brings it back
+        for _ in 0..20 {
+            results.record(dev, 0.5);
+        }
+        assert!(r.decide(&dev, 5_000_000_000, quote, &results.get(&dev)).is_ok());
     }
 
     #[test]

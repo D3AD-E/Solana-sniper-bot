@@ -9,9 +9,20 @@
 //! no metadata account, mayhem accounts) are accepted. Nothing depends on an exact account
 //! set, so accounts appended by future pump.fun upgrades cannot silently drop launches.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use solana_sdk::{
     instruction::CompiledInstruction, pubkey::Pubkey, transaction::VersionedTransaction,
 };
+
+/// Creates whose accounts could not be read out of the transaction's static keys.
+///
+/// Every account the parse needs lives in the static key list today, so this stays at zero.
+/// If a pump.fun upgrade moves any of them behind an address lookup table the parse starts
+/// returning `None` and those launches become invisible -- with no other signal that
+/// anything changed. This counter is that signal, which is why the discriminator match and
+/// the account read are counted separately.
+pub static UNRESOLVED_CREATES: AtomicU64 = AtomicU64::new(0);
 
 /// pump.fun bonding-curve program
 pub const PUMP_PROGRAM: Pubkey =
@@ -97,37 +108,20 @@ pub fn parse_create(tx: &VersionedTransaction) -> Option<PumpCreateInfo> {
         let Some(d) = disc(&ix.data) else { continue };
 
         match *d {
-            DISC_CREATE_V2 => {
-                // accounts: 0 mint, 1 mint_authority, 2 bonding_curve, 3 associated_bonding_curve,
-                //           4 global, 5 user, 6 system, 7 token_2022, ...
-                // args: name:String, symbol:String, uri:String, creator:Pubkey,
-                //       is_mayhem_mode:bool, is_cashback_enabled:OptionBool
-                info = Some(PumpCreateInfo {
-                    mint: *key_at(keys, ix, 0)?,
-                    bonding_curve: *key_at(keys, ix, 2)?,
-                    associated_bonding_curve: *key_at(keys, ix, 3)?,
-                    creator: trailing_pubkey(&ix.data, 2)?,
-                    user: *key_at(keys, ix, 5)?,
-                    token_program: *key_at(keys, ix, 7).unwrap_or(&TOKEN_2022_PROGRAM),
-                    dev_buy_lamports: 0,
-                    is_v2: true,
-                });
-            }
-            DISC_CREATE => {
-                // accounts: 0 mint, 1 mint_authority, 2 bonding_curve, 3 associated_bonding_curve,
-                //           4 global, 5 mpl, 6 metadata, 7 user, 8 system, 9 token_program, ...
-                // args: name:String, symbol:String, uri:String, creator:Pubkey
-                info = Some(PumpCreateInfo {
-                    mint: *key_at(keys, ix, 0)?,
-                    bonding_curve: *key_at(keys, ix, 2)?,
-                    associated_bonding_curve: *key_at(keys, ix, 3)?,
-                    creator: trailing_pubkey(&ix.data, 0)?,
-                    user: *key_at(keys, ix, 7)?,
-                    token_program: *key_at(keys, ix, 9).unwrap_or(&TOKEN_PROGRAM),
-                    dev_buy_lamports: 0,
-                    is_v2: false,
-                });
-            }
+            DISC_CREATE_V2 => match read_create_v2(keys, ix) {
+                Some(i) => info = Some(i),
+                None => {
+                    UNRESOLVED_CREATES.fetch_add(1, Ordering::Relaxed);
+                    return None;
+                }
+            },
+            DISC_CREATE => match read_create(keys, ix) {
+                Some(i) => info = Some(i),
+                None => {
+                    UNRESOLVED_CREATES.fetch_add(1, Ordering::Relaxed);
+                    return None;
+                }
+            },
             // dev buy in the same transaction; `max_sol_cost` is the second u64 argument
             DISC_BUY | DISC_BUY_V2 => {
                 if let Some(b) = ix.data.get(16..24) {
@@ -147,6 +141,41 @@ pub fn parse_create(tx: &VersionedTransaction) -> Option<PumpCreateInfo> {
     let mut info = info?;
     info.dev_buy_lamports = dev_buy_lamports;
     Some(info)
+}
+
+/// accounts: 0 mint, 1 mint_authority, 2 bonding_curve, 3 associated_bonding_curve,
+///           4 global, 5 user, 6 system, 7 token_2022, ...
+/// args: name:String, symbol:String, uri:String, creator:Pubkey,
+///       is_mayhem_mode:bool, is_cashback_enabled:OptionBool
+#[inline(always)]
+fn read_create_v2(keys: &[Pubkey], ix: &CompiledInstruction) -> Option<PumpCreateInfo> {
+    Some(PumpCreateInfo {
+        mint: *key_at(keys, ix, 0)?,
+        bonding_curve: *key_at(keys, ix, 2)?,
+        associated_bonding_curve: *key_at(keys, ix, 3)?,
+        creator: trailing_pubkey(&ix.data, 2)?,
+        user: *key_at(keys, ix, 5)?,
+        token_program: *key_at(keys, ix, 7).unwrap_or(&TOKEN_2022_PROGRAM),
+        dev_buy_lamports: 0,
+        is_v2: true,
+    })
+}
+
+/// accounts: 0 mint, 1 mint_authority, 2 bonding_curve, 3 associated_bonding_curve,
+///           4 global, 5 mpl, 6 metadata, 7 user, 8 system, 9 token_program, ...
+/// args: name:String, symbol:String, uri:String, creator:Pubkey
+#[inline(always)]
+fn read_create(keys: &[Pubkey], ix: &CompiledInstruction) -> Option<PumpCreateInfo> {
+    Some(PumpCreateInfo {
+        mint: *key_at(keys, ix, 0)?,
+        bonding_curve: *key_at(keys, ix, 2)?,
+        associated_bonding_curve: *key_at(keys, ix, 3)?,
+        creator: trailing_pubkey(&ix.data, 0)?,
+        user: *key_at(keys, ix, 7)?,
+        token_program: *key_at(keys, ix, 9).unwrap_or(&TOKEN_PROGRAM),
+        dev_buy_lamports: 0,
+        is_v2: false,
+    })
 }
 
 #[inline(always)]

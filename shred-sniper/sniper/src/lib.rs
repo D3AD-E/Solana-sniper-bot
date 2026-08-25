@@ -21,7 +21,6 @@ pub mod whitelist;
 pub mod wire;
 
 use std::{
-    collections::HashSet,
     path::Path,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -31,6 +30,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use ahash::AHashSet;
 use ed25519_dalek::SigningKey;
 use log::{info, warn};
 use solana_sdk::pubkey::Pubkey;
@@ -40,8 +40,8 @@ use crate::{
     position::{ModeConfig, OpenPosition, PositionGate},
     config::SniperConfig,
     pumpfun::{CurveParams, PumpCreateInfo},
-    sender::{Job, ProviderHandle, MAX_TX},
-    template::{seed_bytes, Template, SEED_LEN},
+    sender::{Job, ProviderHandle, TipOffsets, TxBuf, MAX_TX},
+    template::{SeedTable, Template, SEED_LEN},
     whitelist::Whitelist,
 };
 
@@ -79,6 +79,8 @@ pub struct Shared {
     /// sync / test / ghost gating
     pub gate: Arc<PositionGate>,
     pub ghost_mode: bool,
+    /// token accounts for every seed, derived at startup
+    pub seed_table: SeedTable,
 }
 
 pub struct Sniper {
@@ -92,6 +94,7 @@ impl Sniper {
     /// account, builds the template and starts every background thread. Fails loudly: a
     /// half-configured sniper is worse than none.
     pub fn start(config_path: &Path, exit: Arc<AtomicBool>) -> Result<Self, String> {
+        warn_if_built_without_simd();
         let cfg = SniperConfig::load(config_path)?;
         let signing_key = read_keypair(&cfg.keypair_path)?;
         let buyer = Pubkey::new_from_array(signing_key.verifying_key().to_bytes());
@@ -131,6 +134,16 @@ impl Sniper {
             user_volume_accumulator: pumpfun::user_volume_accumulator(&buyer),
         };
 
+        // built before the senders start: each one needs the offsets of the three fields it
+        // owns, so it can stamp them onto the shared body on its own thread
+        let template = template::build(&static_accounts, cfg.cu_limit);
+        info!("sniper: template ready\n{}", template.describe());
+        let tip_offsets = TipOffsets {
+            tip_account: template.offsets.tip_account,
+            tip_lamports: template.offsets.tip_lamports,
+            cu_price: template.offsets.cu_price,
+        };
+
         let mut threads = Vec::new();
         let mut providers = Vec::new();
         for p in cfg.providers.iter().filter(|p| p.enabled) {
@@ -140,6 +153,8 @@ impl Sniper {
                 cfg.dry_run,
                 64,
                 cfg.sender_spin_micros,
+                tip_offsets,
+                template.tx.len(),
             )?;
             info!(
                 "sniper: provider {} -> {}:{}{} tip {} across {} accounts, cu price {}",
@@ -189,6 +204,15 @@ impl Sniper {
             position::start(cfg.rpc_url.clone(), modes, global.curve, exit.clone());
         threads.push(gate_thread);
 
+        // start the seed counter somewhere unpredictable, so a restart cannot collide with a
+        // token account a previous run created and has not sold yet
+        let seed_start = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| (d.subsec_nanos() ^ d.as_secs() as u32) % 1_000_000)
+            .unwrap_or(0);
+        let seed_table = SeedTable::build(&buyer, seed_start, SEED_TABLE_LEN)?;
+        info!("sniper: {} token accounts derived", seed_table.len());
+
         let shared = Arc::new(Shared {
             whitelist,
             nonces,
@@ -203,10 +227,8 @@ impl Sniper {
             buyer,
             gate,
             ghost_mode: cfg.ghost_mode,
+            seed_table,
         });
-
-        let template = template::build(&static_accounts, cfg.cu_limit);
-        info!("sniper: template ready\n{}", template.describe());
 
         Ok(Self {
             shared,
@@ -223,20 +245,14 @@ impl Sniper {
             threads,
         } = self;
 
-        // start the seed counter somewhere unpredictable, so a restart cannot collide with a
-        // token account a previous run created and has not sold yet
-        let seed_counter = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| (d.subsec_nanos() ^ d.as_secs() as u32) % 1_000_000)
-            .unwrap_or(0);
-
         (
             HotSniper {
                 shared,
                 template,
-                seen: HashSet::with_capacity(1 << 16),
-                job: Job::default(),
-                seed_counter,
+                seen: AHashSet::with_capacity(1 << 16),
+                tx_ring: (0..TX_RING).map(|_| Arc::new(TxBuf::default())).collect(),
+                ring_cursor: 0,
+                seed_index: 0,
                 launch_counter: 0,
                 vault_cache: Box::new(
                     [(Pubkey::default(), Pubkey::default()); VAULT_CACHE_SLOTS],
@@ -251,9 +267,19 @@ impl Sniper {
 pub struct HotSniper {
     pub shared: Arc<Shared>,
     template: Template,
-    seen: HashSet<Pubkey>,
-    job: Job,
-    seed_counter: u32,
+    /// Mints already fired on. `ahash`: this is a 32 byte key looked up on the hot path.
+    seen: AHashSet<Pubkey>,
+    /// Preallocated transaction bodies handed to the senders.
+    ///
+    /// Every provider variant of a launch shares one body, so the fan-out copies 1232 bytes
+    /// once instead of once per provider. A slot is reused as soon as every sender has
+    /// finished with the previous launch that used it, which is the normal case; when one is
+    /// still in flight the launch allocates a fresh body rather than making the hot path
+    /// wait for it.
+    tx_ring: Vec<Arc<TxBuf>>,
+    ring_cursor: usize,
+    /// cursor into `Shared::seed_table`
+    seed_index: usize,
     launch_counter: usize,
     /// Direct-mapped cache of creator -> creator vault.
     ///
@@ -264,6 +290,15 @@ pub struct HotSniper {
 }
 
 const VAULT_CACHE_SLOTS: usize = 1024;
+
+/// How many token accounts are derived up front. At ~400ns each this is ~26ms of startup and
+/// ~4.6MB, and it covers more launches than a process is going to see between restarts.
+const SEED_TABLE_LEN: usize = 1 << 16;
+
+/// How many launch bodies are kept preallocated. Launches are seconds apart and a sender
+/// lets go of a body as soon as it has copied it, so one slot would almost always do; the
+/// ring is here so a wedged provider cannot force an allocation on every later launch.
+const TX_RING: usize = 8;
 
 #[inline(always)]
 fn vault_slot(creator: &Pubkey) -> usize {
@@ -285,6 +320,34 @@ pub struct FiredLaunch {
 impl HotSniper {
     pub fn metrics(&self) -> &SniperMetrics {
         &self.shared.metrics
+    }
+
+    /// Copies the patched template into a shareable body, reusing a ring slot when every
+    /// sender has already let go of it.
+    ///
+    /// Takes its fields rather than `&mut self` so the caller can keep its borrow of
+    /// `shared.metrics` alive across the call.
+    #[inline]
+    fn fill_body(ring: &mut [Arc<TxBuf>], cursor: &mut usize, template: &[u8]) -> Arc<TxBuf> {
+        let len = template.len();
+        let idx = *cursor;
+        *cursor += 1;
+        if *cursor == ring.len() {
+            *cursor = 0;
+        }
+        let slot = &mut ring[idx];
+        if let Some(buf) = Arc::get_mut(slot) {
+            buf.len = len as u16;
+            buf.tx[..len].copy_from_slice(template);
+            return slot.clone();
+        }
+        // a sender is still holding this slot. Allocating is cheaper than waiting for it.
+        let mut buf = TxBuf::default();
+        buf.len = len as u16;
+        buf.tx[..len].copy_from_slice(template);
+        let fresh = Arc::new(buf);
+        *slot = fresh.clone();
+        fresh
     }
 
     /// Hot path. Returns what was fired, or None.
@@ -336,15 +399,17 @@ impl HotSniper {
             return None;
         }
 
-        // the token account comes from a seed rather than the ATA program: one sha256 here,
-        // and ~18k fewer compute units on chain
-        self.seed_counter = (self.seed_counter + 1) % 1_000_000;
-        let seed = seed_bytes(self.seed_counter);
-        // safety: `seed_bytes` only ever produces ASCII digits
-        let seed_str = unsafe { core::str::from_utf8_unchecked(&seed) };
-        let token_account =
-            Pubkey::create_with_seed(&self.shared.buyer, seed_str, &info.token_program)
-                .unwrap_or_default();
+        // The token account comes from a seed rather than the ATA program: ~18k fewer compute
+        // units on chain. Both the address and the seed were derived at startup -- nothing
+        // about them depends on the launch -- so this is two loads.
+        self.seed_index += 1;
+        if self.seed_index == self.shared.seed_table.len() {
+            self.seed_index = 0;
+        }
+        let (seed, token_account) = self
+            .shared
+            .seed_table
+            .get(self.seed_index, &info.token_program);
 
         let cache_slot = vault_slot(&info.creator);
         let creator_vault = if self.vault_cache[cache_slot].0 == info.creator {
@@ -386,6 +451,10 @@ impl HotSniper {
         }
 
         if !self.shared.gate.claim() {
+            // another detect thread won the race for the slot, so this launch never
+            // happened. Forget the mint, or a later shred carrying the same create would be
+            // dropped as a duplicate of a buy that was never made.
+            self.seen.remove(&info.mint);
             return None;
         }
 
@@ -411,24 +480,26 @@ impl HotSniper {
             });
         }
 
-        let mut queued = 0u64;
-        for i in 0..self.shared.providers.len() {
-            let (tip_account, tip_lamports, cu_price) = {
-                let p = &self.shared.providers[i];
-                let tip = p.tip_accounts[self.launch_counter % p.tip_accounts.len()];
-                (tip, p.tip_lamports, p.cu_price)
-            };
-            let t = &mut self.template;
-            let o = t.offsets;
-            t.patch_key(o.tip_account, &tip_account);
-            t.patch_u64(o.tip_lamports, tip_lamports);
-            t.patch_u64(o.cu_price, cu_price);
+        // one copy of the body for the whole fan-out. The three fields that differ per
+        // provider are stamped on by the sender threads, so every provider is queued within
+        // the same microsecond instead of the last one trailing the first by ~10us.
+        let base = Self::fill_body(
+            &mut self.tx_ring,
+            &mut self.ring_cursor,
+            &self.template.tx[..len],
+        );
 
-            self.job.len = len as u16;
-            self.job.tx[..len].copy_from_slice(&t.tx);
-            self.shared.providers[i].try_send(self.job.clone());
+        let mut queued = 0u64;
+        for p in self.shared.providers.iter() {
+            p.try_send(Job {
+                base: base.clone(),
+                tip_account: p.tip_accounts[self.launch_counter % p.tip_accounts.len()],
+                tip_lamports: p.tip_lamports,
+                cu_price: p.cu_price,
+            });
             queued += 1;
         }
+        drop(base);
 
         m.jobs_queued.fetch_add(queued, Ordering::Relaxed);
         if queued == 0 {
@@ -454,6 +525,35 @@ impl HotSniper {
         })
     }
 }
+
+/// Warns when the binary was built for a baseline CPU on a box that is not one.
+///
+/// The crypto on this path picks its implementation at *compile* time from `target_feature`,
+/// so a binary built without `-C target-cpu=native` runs the portable code on a machine that
+/// has SHA-NI and AVX2 and gives no runtime hint that it is doing so. Measured here:
+///
+/// | stage                            | baseline | `target-cpu=native` |
+/// | -------------------------------- | -------- | ------------------- |
+/// | ed25519 sign                     | 11.3µs   | 9.9µs               |
+/// | `create_with_seed` (one sha256)  | 150ns    | 87ns                |
+///
+/// `find_program_address` does not move, with or without the curve25519 SIMD backend: its
+/// cost is a point decompression per candidate bump, which is a field exponentiation and is
+/// not what those backends accelerate.
+///
+/// `scripts/bootstrap.sh` sets the flag. This exists for every other way a binary can end up
+/// on the box.
+#[cfg(target_arch = "x86_64")]
+fn warn_if_built_without_simd() {
+    if std::arch::is_x86_feature_detected!("avx2") && !cfg!(target_feature = "avx2") {
+        warn!(
+            "sniper: this CPU has AVX2 but the binary was not built for it. Rebuild with              RUSTFLAGS='-C target-cpu=native': signing and the token account derivation both              sit on the detect path and both get measurably faster."
+        );
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn warn_if_built_without_simd() {}
 
 /// Reads a solana-cli keypair json file (a 64 byte array).
 fn read_keypair(path: &str) -> Result<SigningKey, String> {

@@ -4,7 +4,6 @@
 //! background thread, so no I/O, lock or await ever sits between detection and firing.
 
 use std::{
-    collections::HashSet,
     path::PathBuf,
     str::FromStr,
     sync::{
@@ -15,13 +14,18 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+use ahash::AHashSet;
 use arc_swap::ArcSwap;
 use log::{info, warn};
 use solana_sdk::pubkey::Pubkey;
 
+/// A launcher set. `ahash` rather than the std hasher: this is looked up on every create,
+/// before anything else, and SipHash over a 32 byte key costs ~4x what ahash does.
+pub type LauncherSet = AHashSet<Pubkey>;
+
 #[derive(Clone)]
 pub struct Whitelist {
-    set: Arc<ArcSwap<HashSet<Pubkey>>>,
+    set: Arc<ArcSwap<LauncherSet>>,
     /// when true every launcher passes; used for shadow runs
     disabled: bool,
 }
@@ -29,7 +33,7 @@ pub struct Whitelist {
 impl Whitelist {
     pub fn new(disabled: bool) -> Self {
         Self {
-            set: Arc::new(ArcSwap::from_pointee(HashSet::new())),
+            set: Arc::new(ArcSwap::from_pointee(LauncherSet::new())),
             disabled,
         }
     }
@@ -47,7 +51,7 @@ impl Whitelist {
         self.len() == 0
     }
 
-    pub fn store(&self, set: HashSet<Pubkey>) {
+    pub fn store(&self, set: LauncherSet) {
         self.set.store(Arc::new(set));
     }
 
@@ -79,13 +83,13 @@ impl Whitelist {
 
 /// One base58 pubkey per line. Blank lines and `#` comments are ignored, and a bad line is
 /// skipped rather than throwing the whole file away.
-pub fn parse_file(path: &PathBuf) -> Result<HashSet<Pubkey>, String> {
+pub fn parse_file(path: &PathBuf) -> Result<LauncherSet, String> {
     let raw = std::fs::read_to_string(path).map_err(|e| format!("read {path:?}: {e}"))?;
     Ok(parse_str(&raw))
 }
 
-pub fn parse_str(raw: &str) -> HashSet<Pubkey> {
-    let mut set = HashSet::with_capacity(raw.len() / 44 + 16);
+pub fn parse_str(raw: &str) -> LauncherSet {
+    let mut set = LauncherSet::with_capacity(raw.len() / 44 + 16);
     for line in raw.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {

@@ -36,7 +36,7 @@ use solana_sdk::{
 
 use crate::pumpfun::{
     EVENT_AUTHORITY, FEE_CONFIG, FEE_PROGRAM, GLOBAL, GLOBAL_VOLUME_ACCUMULATOR, PUMP_PROGRAM,
-    TOKEN_2022_PROGRAM,
+    TOKEN_2022_PROGRAM, TOKEN_PROGRAM,
 };
 
 /// Discriminator of pump.fun `buy`.
@@ -367,6 +367,74 @@ impl Template {
     }
 }
 
+
+/// Every token account the sniper will ever create, worked out before the first launch.
+///
+/// The buy makes its token account with `createAccountWithSeed`, so the address is
+/// `sha256(buyer || seed || token_program)`. The buyer is fixed at startup, the token program
+/// is one of two known values, and the seed is a counter -- none of it depends on the launch.
+/// So none of it belongs on the hot path.
+///
+/// Two things this buys beyond the ~90ns of sha256. `Pubkey::create_with_seed` is fallible,
+/// and the hot path used to swallow that with `unwrap_or_default()`, which would have sent a
+/// buy against `Pubkey::default()`; here a bad address is a startup error. And the seed for a
+/// launch is now a pair of array indexes rather than a hash, so the whole step is a load.
+pub struct SeedTable {
+    seeds: Vec<[u8; SEED_LEN]>,
+    /// address under token-2022, which is what every current launch uses
+    token_2022: Vec<Pubkey>,
+    /// address under classic spl-token, for a `create` that is not `create_v2`
+    token_classic: Vec<Pubkey>,
+}
+
+impl SeedTable {
+    /// Builds `len` entries starting from seed counter `start`.
+    ///
+    /// `start` is randomised per run so a restart cannot land on a token account an earlier
+    /// run created and has not sold yet.
+    pub fn build(buyer: &Pubkey, start: u32, len: usize) -> Result<Self, String> {
+        let mut seeds = Vec::with_capacity(len);
+        let mut token_2022 = Vec::with_capacity(len);
+        let mut token_classic = Vec::with_capacity(len);
+        for i in 0..len {
+            let seed = seed_bytes(start.wrapping_add(i as u32) % 1_000_000);
+            // safety: `seed_bytes` only ever produces ASCII digits
+            let as_str = unsafe { core::str::from_utf8_unchecked(&seed) };
+            let derive = |program: &Pubkey| {
+                Pubkey::create_with_seed(buyer, as_str, program)
+                    .map_err(|e| format!("seed {as_str} does not derive an address: {e}"))
+            };
+            token_2022.push(derive(&TOKEN_2022_PROGRAM)?);
+            token_classic.push(derive(&TOKEN_PROGRAM)?);
+            seeds.push(seed);
+        }
+        Ok(Self {
+            seeds,
+            token_2022,
+            token_classic,
+        })
+    }
+
+    pub fn len(&self) -> usize {
+        self.seeds.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.seeds.is_empty()
+    }
+
+    /// Hot path. `index` must be less than `len()`.
+    #[inline(always)]
+    pub fn get(&self, index: usize, token_program: &Pubkey) -> ([u8; SEED_LEN], Pubkey) {
+        let addresses = if *token_program == TOKEN_2022_PROGRAM {
+            &self.token_2022
+        } else {
+            &self.token_classic
+        };
+        (self.seeds[index], addresses[index])
+    }
+}
+
 /// Six ASCII digits, written straight into the template with no formatting machinery.
 #[inline(always)]
 pub fn seed_bytes(counter: u32) -> [u8; SEED_LEN] {
@@ -498,6 +566,36 @@ mod tests {
         assert_eq!(buy.data.len(), 25);
         assert_eq!(buy.data[..8], DISC_BUY);
         assert_eq!(buy.data[24], 0);
+    }
+
+    /// The table is the hot path's only source of token accounts, so it has to agree with
+    /// the derivation it replaced, for both token programs and at the wrap-around.
+    #[test]
+    fn precomputed_token_accounts_match_create_with_seed() {
+        let buyer = Pubkey::new_from_array([0xB3; 32]);
+        let table = SeedTable::build(&buyer, 999_990, 32).expect("table builds");
+        assert_eq!(table.len(), 32);
+
+        for i in 0..table.len() {
+            for program in [TOKEN_2022_PROGRAM, TOKEN_PROGRAM] {
+                let (seed, address) = table.get(i, &program);
+                let as_str = std::str::from_utf8(&seed).unwrap();
+                let expected = Pubkey::create_with_seed(&buyer, as_str, &program).unwrap();
+                assert_eq!(address, expected, "entry {i} under {program}");
+            }
+        }
+
+        // the counter wraps at a million, exactly as it did before
+        assert_eq!(&table.get(0, &TOKEN_2022_PROGRAM).0, b"999990");
+        assert_eq!(&table.get(9, &TOKEN_2022_PROGRAM).0, b"999999");
+        assert_eq!(&table.get(10, &TOKEN_2022_PROGRAM).0, b"000000");
+
+        // anything that is not token-2022 is treated as classic spl-token, which is what the
+        // template patches in that case
+        let (_, classic) = table.get(3, &TOKEN_PROGRAM);
+        let (_, unknown) = table.get(3, &Pubkey::new_from_array([0x77; 32]));
+        assert_eq!(classic, unknown);
+        assert_ne!(classic, table.get(3, &TOKEN_2022_PROGRAM).1);
     }
 
     #[test]

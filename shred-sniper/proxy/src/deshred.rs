@@ -39,6 +39,12 @@ pub struct ShredsStateTracker {
     already_recovered_fec_sets: Vec<bool>,
     /// array of bools that track which data shred indexes have been already deshredded
     already_deshredded: Vec<bool>,
+    /// Highest index written since the last reset.
+    ///
+    /// The vectors are `MAX_DATA_SHREDS_PER_SLOT` (32768) entries wide because that is the
+    /// worst case, but a real slot uses a few thousand. Recycling only has to clear what was
+    /// actually touched, and this is how much that is.
+    high_water: usize,
 }
 impl Default for ShredsStateTracker {
     fn default() -> Self {
@@ -47,8 +53,69 @@ impl Default for ShredsStateTracker {
             data_shreds: vec![None; MAX_DATA_SHREDS_PER_SLOT],
             already_recovered_fec_sets: vec![false; MAX_DATA_SHREDS_PER_SLOT],
             already_deshredded: vec![false; MAX_DATA_SHREDS_PER_SLOT],
+            high_water: 0,
         }
     }
+}
+
+impl ShredsStateTracker {
+    /// Records that `index` has been written, so a later reset knows how far to clear.
+    #[inline(always)]
+    fn touch(&mut self, index: usize) {
+        if index > self.high_water {
+            self.high_water = index;
+        }
+    }
+
+    /// Returns the tracker to its just-constructed state without giving the memory back.
+    fn reset(&mut self) {
+        let n = (self.high_water + 1).min(self.data_status.len());
+        self.data_status[..n].fill(ShredStatus::Unknown);
+        self.data_shreds[..n].fill(None);
+        self.already_recovered_fec_sets[..n].fill(false);
+        self.already_deshredded[..n].fill(false);
+        self.high_water = 0;
+    }
+}
+
+/// Recycles per-slot trackers.
+///
+/// `Option<Shred>` is 128 bytes, so `data_shreds` alone is 4MiB. Building a tracker per slot
+/// means a fresh mapping plus a 4MiB zeroing roughly every 400ms, and the thread that pays
+/// it is the one that deshreds and detects -- a launch in the first FEC set of a slot pays it
+/// directly. Recycling keeps the pages resident and clears only the touched prefix.
+#[derive(Default)]
+pub struct TrackerPool {
+    free: Vec<ShredsStateTracker>,
+}
+
+/// Enough to cover the slots in flight without holding hundreds of megabytes idle.
+const MAX_POOLED_TRACKERS: usize = 8;
+
+impl TrackerPool {
+    fn take(&mut self) -> ShredsStateTracker {
+        self.free.pop().unwrap_or_default()
+    }
+
+    fn give(&mut self, mut tracker: ShredsStateTracker) {
+        if self.free.len() < MAX_POOLED_TRACKERS {
+            tracker.reset();
+            self.free.push(tracker);
+        }
+    }
+}
+
+/// `fec_set_index` straight out of the common header, with no parse.
+///
+/// Layout: signature(64) shred_variant(1) slot(8) index(4) version(2) fec_set_index(4),
+/// which is the 83 byte common header. `fec_set_index_matches_the_parsed_shred` checks this
+/// against `Shred::fec_set_index` on real captured shreds.
+const FEC_SET_INDEX_OFFSET: usize = 64 + 1 + 8 + 4 + 2;
+
+#[inline(always)]
+fn peek_fec_set_index(shred: &[u8]) -> Option<u32> {
+    let b = shred.get(FEC_SET_INDEX_OFFSET..FEC_SET_INDEX_OFFSET + 4)?;
+    Some(u32::from_le_bytes(b.try_into().ok()?))
 }
 
 /// Returns the number of shreds reconstructed
@@ -57,7 +124,7 @@ impl Default for ShredsStateTracker {
 /// every time a fec is recovered, scan for neighbouring DATA_COMPLETE_SHRED flags in the shreds, attempting to deserialize into solana entries when there are no missing shreds between the DATA_COMPLETE_SHRED flags.
 /// note that an FEC set doesn't necessarily contain DATA_COMPLETE_SHRED in the last shred. when deserializing the bincode data, you must use data between shreds starting at the last DATA_COMPLETE_SHRED (not inclusive) to the next DATA_COMPLETE_SHRED (inclusive)
 pub fn reconstruct_shreds(
-    packet_batch: PacketBatch,
+    packet_batch: &PacketBatch,
     all_shreds: &mut ahash::HashMap<
         Slot,
         (
@@ -68,6 +135,8 @@ pub fn reconstruct_shreds(
     slot_fec_indexes_to_iterate: &mut Vec<(Slot, u32)>,
     deshredded_entries: &mut Vec<(Slot, Vec<solana_entry::entry::Entry>, Vec<u8>)>,
     highest_slot_seen: &mut Slot,
+    tracker_pool: &mut TrackerPool,
+    early: &mut EarlyDetect,
     rs_cache: &ReedSolomonCache,
     metrics: &ShredMetrics,
     // pump_only: skip the bincode deserialize for segments with no pump.fun create
@@ -79,6 +148,42 @@ pub fn reconstruct_shreds(
     slot_fec_indexes_to_iterate.clear();
     // ingest all packets
     for packet in packet_batch.iter().filter_map(|p| p.data(..)) {
+        // Reject off the wire bytes, before the shred is copied onto the heap and parsed.
+        //
+        // `new_from_serialized_shred` allocates and copies ~1228 bytes and then validates
+        // the merkle variant, and with several regions subscribed most of what arrives is a
+        // shred we already hold. These three fields sit at fixed offsets in the common
+        // header, so the duplicate can be dropped for the price of reading them.
+        if let (Some(slot), Some(index), Some(fec_set_index)) = (
+            solana_ledger::shred::layout::get_slot(packet),
+            solana_ledger::shred::layout::get_index(packet),
+            peek_fec_set_index(packet),
+        ) {
+            if highest_slot_seen.saturating_sub(SLOT_LOOKBACK) > slot {
+                continue;
+            }
+            let index = index as usize;
+            let fec_set_index = fec_set_index as usize;
+            if index < MAX_DATA_SHREDS_PER_SLOT && fec_set_index < MAX_DATA_SHREDS_PER_SLOT {
+                if let Some((_, tracker)) = all_shreds.get(&slot) {
+                    if tracker.already_recovered_fec_sets[fec_set_index]
+                        || tracker.already_deshredded[index]
+                    {
+                        continue;
+                    }
+                    // a data shred already held: `update_state_tracker` would reject it too
+                    if tracker.data_shreds[index].is_some()
+                        && matches!(
+                            solana_ledger::shred::layout::get_shred_type(packet),
+                            Ok(ShredType::Data)
+                        )
+                    {
+                        continue;
+                    }
+                }
+            }
+        }
+
         match solana_ledger::shred::Shred::new_from_serialized_shred(packet.to_vec())
             .and_then(Shred::try_from)
         {
@@ -86,13 +191,17 @@ pub fn reconstruct_shreds(
                 let slot = shred.common_header().slot;
                 let index = shred.index() as usize;
                 let fec_set_index = shred.fec_set_index();
-                let (all_shreds, state_tracker) = all_shreds.entry(slot).or_default();
+                // checked before the parse too, but a shred can arrive for a slot that the
+                // batch itself has only just made stale
                 if highest_slot_seen.saturating_sub(SLOT_LOOKBACK) > slot {
                     debug!(
                         "Old shred slot: {slot}, fec_set_index: {fec_set_index}, index: {index}"
                     );
                     continue;
                 }
+                let (all_shreds, state_tracker) = all_shreds
+                    .entry(slot)
+                    .or_insert_with(|| (Default::default(), tracker_pool.take()));
                 if state_tracker.already_recovered_fec_sets[fec_set_index as usize]
                     || state_tracker.already_deshredded[index]
                 {
@@ -103,10 +212,14 @@ pub fn reconstruct_shreds(
                     continue;
                 };
 
+                let is_data = matches!(shred.shred_type(), ShredType::Data);
                 all_shreds
                     .entry(fec_set_index)
                     .or_default()
                     .insert(ComparableShred(shred));
+                if pump_only && is_data {
+                    early.note_arrival(slot, index as u32);
+                }
                 slot_fec_indexes_to_iterate.push((slot, fec_set_index)); // use Vec so we can sort to make sure if any earlier FEC sets have DATA_SHRED_COMPLETE, later entries can use the flag to find the bounds
                 *highest_slot_seen = std::cmp::max(*highest_slot_seen, slot);
             }
@@ -121,11 +234,26 @@ pub fn reconstruct_shreds(
     slot_fec_indexes_to_iterate.sort_unstable();
     slot_fec_indexes_to_iterate.dedup();
 
+    // Before FEC recovery and before the ordinary deshred, because this is the whole point:
+    // a create is handed over on the shred that completes its transaction, not on the shred
+    // that completes the segment around it.
+    if pump_only {
+        let found = detect_in_partial_segments(all_shreds, early, deshredded_entries);
+        if found > 0 {
+            metrics
+                .early_creates_count
+                .fetch_add(found as u64, Ordering::Relaxed);
+            metrics.txn_count.fetch_add(found as u64, Ordering::Relaxed);
+        }
+    }
+
     // try recovering by FEC set
     // already checked if FEC set is completed or deserialized
     let mut total_recovered_count = 0;
     for (slot, fec_set_index) in slot_fec_indexes_to_iterate.iter() {
-        let (all_shreds, state_tracker) = all_shreds.entry(*slot).or_default();
+        let (all_shreds, state_tracker) = all_shreds
+            .entry(*slot)
+            .or_insert_with(|| (Default::default(), tracker_pool.take()));
         let shreds = all_shreds.entry(*fec_set_index).or_default();
         let (
             num_expected_data_shreds,
@@ -166,6 +294,11 @@ pub fn reconstruct_shreds(
                     if update_state_tracker(&shred, state_tracker).is_none() {
                         continue; // already seen before in state tracker
                     }
+                    // a recovered data shred can be the one that completes a create, and on a
+                    // lossy feed it often is, so the partial-segment pass has to see it too
+                    if pump_only && matches!(shred.shred_type(), ShredType::Data) {
+                        early.note_arrival(*slot, shred.index());
+                    }
                     // shreds.insert(ComparableShred(shred)); // optional since all data shreds are in state_tracker
                     total_recovered_count += 1;
                     fec_set_recovered_count += 1;
@@ -179,13 +312,29 @@ pub fn reconstruct_shreds(
         if fec_set_recovered_count > 0 {
             debug!("recovered slot: {slot}, fec_index: {fec_set_index}, recovered count: {fec_set_recovered_count}");
             state_tracker.already_recovered_fec_sets[*fec_set_index as usize] = true;
+            state_tracker.touch(*fec_set_index as usize);
             shreds.clear();
+        }
+    }
+
+    // Again, now that recovery has filled in the gaps. A segment can be contiguous without
+    // yet having the `DATA_COMPLETE_SHRED` on its right that the ordinary path below needs,
+    // and this pass does not need one.
+    if pump_only {
+        let found = detect_in_partial_segments(all_shreds, early, deshredded_entries);
+        if found > 0 {
+            metrics
+                .early_creates_count
+                .fetch_add(found as u64, Ordering::Relaxed);
+            metrics.txn_count.fetch_add(found as u64, Ordering::Relaxed);
         }
     }
 
     // deshred and bincode deserialize
     for (slot, fec_set_index) in slot_fec_indexes_to_iterate.iter() {
-        let (_all_shreds, state_tracker) = all_shreds.entry(*slot).or_default();
+        let (_all_shreds, state_tracker) = all_shreds
+            .entry(*slot)
+            .or_insert_with(|| (Default::default(), tracker_pool.take()));
         let Some((start_data_complete_idx, end_data_complete_idx, unknown_start)) =
             get_indexes(state_tracker, *fec_set_index as usize)
         else {
@@ -217,11 +366,21 @@ pub fn reconstruct_shreds(
             }
         };
 
+        // One scan for both discriminators, reused by the walk below. Searching the payload
+        // to decide whether to walk it and then searching it again to find out where is two
+        // passes over the same tens of kilobytes, and the second pass is on the critical path
+        // of the launch we just found.
+        let hits = if pump_only {
+            create_offsets(&deshredded_payload)
+        } else {
+            Vec::new()
+        };
+
         // Skip the deserialize for segments that cannot hold a launch. Only done when the
         // segment boundaries are known: when `unknown_start` is set, a deserialize failure is
         // how a mis-bounded segment is detected and left for a later retry, so that signal
         // has to be preserved.
-        if pump_only && !unknown_start && !may_contain_pump_create(&deshredded_payload) {
+        if pump_only && !unknown_start && hits.is_empty() {
             metrics
                 .deserialize_skipped_count
                 .fetch_add(1, Ordering::Relaxed);
@@ -232,6 +391,12 @@ pub fn reconstruct_shreds(
                 };
                 state_tracker.already_recovered_fec_sets[shred.fec_set_index() as usize] = true;
                 state_tracker.already_deshredded[shred.index() as usize] = true;
+                // a direct field write rather than `touch`: the closure captures this field
+                // on its own, and `to_deshred` is still borrowing `data_shreds`
+                let high = shred.fec_set_index().max(shred.index()) as usize;
+                if high > state_tracker.high_water {
+                    state_tracker.high_water = high;
+                }
             });
             continue;
         }
@@ -239,7 +404,7 @@ pub fn reconstruct_shreds(
         // The segment holds a create. Walk it and keep only those transactions rather than
         // materialising every transaction in the segment.
         if pump_only {
-            if let Ok(txs) = creates_in_payload(&deshredded_payload) {
+            if let Ok(txs) = creates_in_payload(&deshredded_payload, &hits) {
                 let entries = if txs.is_empty() {
                     Vec::new()
                 } else {
@@ -259,6 +424,12 @@ pub fn reconstruct_shreds(
                     };
                     state_tracker.already_recovered_fec_sets[shred.fec_set_index() as usize] = true;
                     state_tracker.already_deshredded[shred.index() as usize] = true;
+                    // a direct field write rather than `touch`: the closure captures this field
+                    // on its own, and `to_deshred` is still borrowing `data_shreds`
+                    let high = shred.fec_set_index().max(shred.index()) as usize;
+                    if high > state_tracker.high_water {
+                        state_tracker.high_water = high;
+                    }
                 });
                 continue;
             }
@@ -301,6 +472,12 @@ pub fn reconstruct_shreds(
             };
             state_tracker.already_recovered_fec_sets[shred.fec_set_index() as usize] = true;
             state_tracker.already_deshredded[shred.index() as usize] = true;
+            // a direct field write rather than `touch`: the closure captures this field
+            // on its own, and `to_deshred` is still borrowing `data_shreds`
+            let high = shred.fec_set_index().max(shred.index()) as usize;
+            if high > state_tracker.high_water {
+                state_tracker.high_water = high;
+            }
         })
     }
 
@@ -308,10 +485,17 @@ pub fn reconstruct_shreds(
         let slot_threshold = highest_slot_seen.saturating_sub(SLOT_LOOKBACK);
         let mut incomplete_fec_sets = ahash::HashMap::<Slot, Vec<_>>::default();
         let mut incomplete_fec_sets_count = 0;
-        all_shreds.retain(|slot, (fec_set_indexes, state_tracker)| {
-            if *slot >= slot_threshold {
-                return true;
-            }
+        // `retain` can only drop the tracker; taking the entries out lets the 4MiB of
+        // vectors go back to the pool and be reused by the next slot
+        let stale = all_shreds
+            .keys()
+            .copied()
+            .filter(|slot| *slot < slot_threshold)
+            .collect::<Vec<Slot>>();
+        for slot in stale {
+            let Some((fec_set_indexes, state_tracker)) = all_shreds.remove(&slot) else {
+                continue;
+            };
 
             // count missing fec sets before clearing
             for (fec_set_index, shreds) in fec_set_indexes.iter() {
@@ -327,7 +511,7 @@ pub fn reconstruct_shreds(
 
                 incomplete_fec_sets_count += 1;
                 incomplete_fec_sets
-                    .entry(*slot)
+                    .entry(slot)
                     .and_modify(|fec_set_data| {
                         fec_set_data.push((*fec_set_index, num_expected_data_shreds, shreds.len()))
                     })
@@ -336,8 +520,9 @@ pub fn reconstruct_shreds(
                     });
             }
 
-            false
-        });
+            tracker_pool.give(state_tracker);
+        }
+        early.segments.retain(|(slot, _), _| *slot >= slot_threshold);
         if incomplete_fec_sets_count > 0 {
             incomplete_fec_sets
                 .iter_mut()
@@ -490,6 +675,7 @@ fn update_state_tracker(shred: &Shred, state_tracker: &mut ShredsStateTracker) -
         } else {
             state_tracker.data_status[index] = ShredStatus::NotDataComplete;
         }
+        state_tracker.touch(index);
     };
     Some(index)
 }
@@ -497,11 +683,15 @@ fn update_state_tracker(shred: &Shred, state_tracker: &mut ShredsStateTracker) -
 
 /// True when the deshredded payload might contain a pump.fun create.
 ///
+/// Superseded on the hot path by `create_offsets`, which answers the same question and also
+/// says where; kept as the reference the fused scan is tested against.
+///
 /// The payload here is already assembled and contiguous, so an instruction's 8 byte
 /// discriminator cannot be split the way a pubkey could be split across raw shreds — which
 /// is what made the old shred-level prefilter drop launches. Deserializing a segment costs
 /// ~54us and only about one segment in six hundred holds a create, so this scan pays for
 /// itself many times over.
+#[cfg_attr(not(test), allow(dead_code))]
 #[inline]
 fn may_contain_pump_create(payload: &[u8]) -> bool {
     static CREATE_V2: std::sync::OnceLock<memchr::memmem::Finder<'static>> =
@@ -525,42 +715,243 @@ fn may_contain_pump_create(payload: &[u8]) -> bool {
 /// the ordinary deserialize so a malformed segment behaves exactly as before.
 fn creates_in_payload(
     payload: &[u8],
+    hits: &[usize],
 ) -> Result<Vec<solana_sdk::transaction::VersionedTransaction>, ()> {
-    let hits = create_offsets(payload);
     if hits.is_empty() {
         return Ok(Vec::new());
     }
-    let candidates = sniper::wire::transactions_at(payload, &hits).ok_or(())?;
+    let candidates = sniper::wire::transactions_at(payload, hits).ok_or(())?;
     Ok(candidates
         .into_iter()
         .filter(|tx| sniper::pumpfun::parse_create(tx).is_some())
         .collect())
 }
 
+/// Length of an anchor instruction discriminator.
+const DISC_LEN: usize = 8;
+
 /// Offsets of every create discriminator in the payload, in order.
 #[inline]
 fn create_offsets(payload: &[u8]) -> Vec<usize> {
-    let mut hits: Vec<usize> =
-        memchr::memmem::find_iter(payload, &sniper::pumpfun::DISC_CREATE_V2).collect();
-    hits.extend(memchr::memmem::find_iter(
-        payload,
-        &sniper::pumpfun::DISC_CREATE,
-    ));
-    hits.sort_unstable();
+    let mut hits = Vec::new();
+    create_offsets_into(payload, 0, &mut hits);
     hits
 }
 
-/// Offset of the last create discriminator in the payload.
+/// Appends the offsets of every create discriminator in `slice`, shifted by `base`.
+///
+/// The base exists for the incremental scan, which searches only the bytes that have just
+/// arrived but has to report offsets into the whole segment.
 #[inline]
-fn last_create_offset(payload: &[u8]) -> Option<usize> {
-    let v2 = memchr::memmem::rfind(payload, &sniper::pumpfun::DISC_CREATE_V2);
-    let v1 = memchr::memmem::rfind(payload, &sniper::pumpfun::DISC_CREATE);
-    match (v2, v1) {
-        (Some(a), Some(b)) => Some(a.max(b)),
-        (Some(a), None) => Some(a),
-        (None, Some(b)) => Some(b),
-        (None, None) => None,
+fn create_offsets_into(slice: &[u8], base: usize, hits: &mut Vec<usize>) {
+    hits.extend(memchr::memmem::find_iter(slice, &sniper::pumpfun::DISC_CREATE_V2).map(|o| o + base));
+    hits.extend(memchr::memmem::find_iter(slice, &sniper::pumpfun::DISC_CREATE).map(|o| o + base));
+    hits.sort_unstable();
+}
+
+
+
+// ---------------------------------------------------------------------------
+// early detection
+// ---------------------------------------------------------------------------
+
+/// Incremental detection over the part of a segment that has arrived.
+///
+/// The ordinary path cannot produce a transaction until the segment it lives in is bounded
+/// on both sides by `DATA_COMPLETE_SHRED` flags, because that is what `Shredder::deshred`
+/// requires. A 32 shred FEC set arrives over a millisecond or more, so a create sitting in
+/// the third shred is invisible for the rest of that millisecond -- next to which the whole
+/// internal detect path, at ~26us, is noise.
+///
+/// Nothing actually forces the wait. A segment is a bincode `Vec<Entry>` written in order, so
+/// the prefix that has arrived is a valid prefix of that encoding, and `wire::transactions_at`
+/// already refuses to guess when it walks off the end. So each segment keeps the data it has
+/// seen so far, appends newly arrived shreds to it, searches only the newly appended bytes,
+/// and hands over any create whose transaction is complete. The create fires on the shred
+/// that finishes it rather than on the shred that finishes the segment.
+///
+/// The ordinary path still runs and still produces the full segment for the entry feed. A
+/// launch found twice is not a problem: the sniper dedups on mint.
+#[derive(Default)]
+pub struct EarlyDetect {
+    /// keyed by (slot, first data shred index of the segment)
+    segments: ahash::HashMap<(Slot, u32), EarlySegment>,
+    /// data shred indexes ingested in the current batch
+    arrived: Vec<(Slot, u32)>,
+    /// scratch, reused across segments
+    hits: Vec<usize>,
+}
+
+impl EarlyDetect {
+    /// Records a data shred that just arrived, so the segment holding it is grown and
+    /// rescanned. Keyed on the shred index rather than the FEC set index: a segment is
+    /// bounded by `DATA_COMPLETE_SHRED` flags, and several of them fit inside one FEC set.
+    #[inline]
+    pub fn note_arrival(&mut self, slot: Slot, index: u32) {
+        self.arrived.push((slot, index));
     }
+}
+
+struct EarlySegment {
+    /// next data shred index to append
+    next: u32,
+    /// concatenated data payloads of shreds `[start, next)`
+    buf: Vec<u8>,
+    /// how much of `buf` has already been searched for a create discriminator
+    scanned: usize,
+    /// discriminator offsets found so far, including ones whose transaction has not
+    /// finished arriving yet
+    hits: Vec<usize>,
+    /// the segment's last shred has arrived; the ordinary path owns it from here
+    complete: bool,
+}
+
+impl EarlySegment {
+    fn new(start: u32) -> Self {
+        Self {
+            next: start,
+            buf: Vec::with_capacity(8 * 1024),
+            scanned: 0,
+            hits: Vec::new(),
+            complete: false,
+        }
+    }
+}
+
+/// First data shred index of the segment that `index` belongs to.
+///
+/// Same left boundary the ordinary path uses -- the shred after the previous
+/// `DATA_COMPLETE_SHRED` -- but this one refuses to guess. `get_indexes` is allowed to pick a
+/// best-effort start because a wrong guess shows up as a bincode failure it can retry; here a
+/// wrong start would just waste the scan, so an unknown boundary means "not yet".
+fn segment_start(tracker: &ShredsStateTracker, index: usize) -> Option<u32> {
+    if index >= tracker.data_status.len() || tracker.already_deshredded[index] {
+        return None;
+    }
+    let mut start = index;
+    while start > 0 {
+        match tracker.data_status[start - 1] {
+            // the previous shred ends the previous segment, so this one starts here
+            ShredStatus::DataComplete => return Some(start as u32),
+            ShredStatus::NotDataComplete => {
+                if tracker.already_deshredded[start - 1] {
+                    return Some(start as u32);
+                }
+                start -= 1;
+            }
+            ShredStatus::Unknown => return None,
+        }
+    }
+    Some(0)
+}
+
+/// Grows every segment that gained a shred and hands over any create that is now complete.
+/// Returns the number of launches found.
+fn detect_in_partial_segments(
+    all_shreds: &ahash::HashMap<
+        Slot,
+        (
+            ahash::HashMap<u32, HashSet<ComparableShred>>,
+            ShredsStateTracker,
+        ),
+    >,
+    early: &mut EarlyDetect,
+    deshredded_entries: &mut Vec<(Slot, Vec<solana_entry::entry::Entry>, Vec<u8>)>,
+) -> usize {
+    // taken out so the segment map can be mutated while this is iterated; put back empty
+    let mut arrived = std::mem::take(&mut early.arrived);
+    arrived.sort_unstable();
+    arrived.dedup();
+
+    let mut found = 0usize;
+    for (slot, shred_index) in arrived.iter() {
+        let Some((_, tracker)) = all_shreds.get(slot) else {
+            continue;
+        };
+        let Some(start) = segment_start(tracker, *shred_index as usize) else {
+            continue;
+        };
+
+        let seg = early
+            .segments
+            .entry((*slot, start))
+            .or_insert_with(|| EarlySegment::new(start));
+        if seg.complete {
+            continue;
+        }
+
+        // append every contiguous data shred that has turned up since last time
+        let mut ends_here = false;
+        while (seg.next as usize) < tracker.data_status.len() {
+            let i = seg.next as usize;
+            if tracker.already_deshredded[i] {
+                // the ordinary path got there first
+                ends_here = true;
+                break;
+            }
+            let Some(shred) = tracker.data_shreds[i].as_ref() else {
+                break;
+            };
+            let Ok(data) = solana_ledger::shred::layout::get_data(shred.payload().as_ref())
+            else {
+                break;
+            };
+            seg.buf.extend_from_slice(data);
+            seg.next += 1;
+            if matches!(tracker.data_status[i], ShredStatus::DataComplete) {
+                ends_here = true;
+                break;
+            }
+        }
+
+        // Scan before retiring the segment. When the shred that finishes a transaction is
+        // also the one that finishes the segment there is nothing to gain, but the ordinary
+        // path only picks the segment up if it can bound it on the left too -- and this path
+        // does not care about the left boundary of the *previous* segment.
+        if seg.buf.len() > seg.scanned {
+            let from = seg.scanned.saturating_sub(DISC_LEN - 1);
+            early.hits.clear();
+            create_offsets_into(&seg.buf[from..], from, &mut early.hits);
+            seg.scanned = seg.buf.len();
+            if !early.hits.is_empty() {
+                seg.hits.extend_from_slice(&early.hits);
+                seg.hits.sort_unstable();
+                seg.hits.dedup();
+            }
+
+            // `Err` means the walk ran off the end: the create's transaction has not finished
+            // arriving, so the hits stay recorded and the next shred tries again
+            if !seg.hits.is_empty() {
+                if let Ok(txs) = creates_in_payload(&seg.buf, &seg.hits) {
+                    if !txs.is_empty() {
+                        found += txs.len();
+                        // an empty payload marks a partial segment: it must not reach the
+                        // entry feed, which promises whole segments
+                        deshredded_entries.push((
+                            *slot,
+                            vec![solana_entry::entry::Entry {
+                                num_hashes: 0,
+                                hash: solana_sdk::hash::Hash::default(),
+                                transactions: txs,
+                            }],
+                            Vec::new(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        if ends_here {
+            seg.complete = true;
+            // the ordinary path owns it now, and it will publish the whole segment
+            seg.buf = Vec::new();
+            seg.hits = Vec::new();
+        }
+    }
+
+    arrived.clear();
+    early.arrived = arrived;
+    found
 }
 
 const SLOT_LOOKBACK: Slot = 50;
@@ -701,7 +1092,7 @@ mod tests {
     use solana_sdk::{clock::Slot, hash::Hash, signature::Keypair};
 
     use crate::{
-        deshred::{reconstruct_shreds, ComparableShred},
+        deshred::{reconstruct_shreds, ComparableShred, EarlyDetect, TrackerPool},
         forwarder::ShredMetrics,
     };
 
@@ -795,7 +1186,7 @@ mod tests {
         let mut deshredded_entries = Vec::new();
         let mut highest_slot_seen = 0;
         let recovered_count = reconstruct_shreds(
-            PacketBatch::new(
+            &PacketBatch::new(
                 packets
                     .packets
                     .iter()
@@ -811,6 +1202,8 @@ mod tests {
             &mut slot_fec_indexes_to_iterate,
             &mut deshredded_entries,
             &mut highest_slot_seen,
+            &mut TrackerPool::default(),
+            &mut EarlyDetect::default(),
             &rs_cache,
             &metrics,
             false,
@@ -851,7 +1244,7 @@ mod tests {
         let mut deshredded_entries = Vec::new();
         let mut highest_slot_seen = 0;
         let recovered_count = reconstruct_shreds(
-            PacketBatch::new(
+            &PacketBatch::new(
                 packets
                     .packets
                     .iter()
@@ -869,6 +1262,8 @@ mod tests {
             &mut slot_fec_indexes_to_iterate,
             &mut deshredded_entries,
             &mut highest_slot_seen,
+            &mut TrackerPool::default(),
+            &mut EarlyDetect::default(),
             &rs_cache,
             &metrics,
             false,
@@ -974,7 +1369,7 @@ mod tests {
         let mut deshredded_entries = Vec::new();
         let mut highest_slot_seen = 0;
         let recovered_count = reconstruct_shreds(
-            PacketBatch::new(
+            &PacketBatch::new(
                 packets
                     .packets
                     .iter()
@@ -990,6 +1385,8 @@ mod tests {
             &mut slot_fec_indexes_to_iterate,
             &mut deshredded_entries,
             &mut highest_slot_seen,
+            &mut TrackerPool::default(),
+            &mut EarlyDetect::default(),
             &rs_cache,
             &metrics,
             false,
@@ -1030,7 +1427,7 @@ mod tests {
         let mut deshredded_entries = Vec::new();
         let mut highest_slot_seen = 0;
         let recovered_count = reconstruct_shreds(
-            PacketBatch::new(
+            &PacketBatch::new(
                 packets
                     .packets
                     .iter()
@@ -1048,6 +1445,8 @@ mod tests {
             &mut slot_fec_indexes_to_iterate,
             &mut deshredded_entries,
             &mut highest_slot_seen,
+            &mut TrackerPool::default(),
+            &mut EarlyDetect::default(),
             &rs_cache,
             &metrics,
             false,
@@ -1132,11 +1531,13 @@ mod tests {
         let mut deshredded_entries = Vec::new();
         let mut highest_slot_seen = 0;
         let recovered_count = reconstruct_shreds(
-            PacketBatch::new(packets.clone()),
+            &PacketBatch::new(packets.clone()),
             &mut all_shreds,
             &mut slot_fec_indexes_to_iterate,
             &mut deshredded_entries,
             &mut highest_slot_seen,
+            &mut TrackerPool::default(),
+            &mut EarlyDetect::default(),
             &rs_cache,
             &metrics,
             false,
@@ -1160,7 +1561,7 @@ mod tests {
         let mut deshredded_entries = Vec::new();
         let mut highest_slot_seen = 0;
         let recovered_count = reconstruct_shreds(
-            PacketBatch::new(
+            &PacketBatch::new(
                 packets
                     .iter()
                     .enumerate()
@@ -1172,6 +1573,8 @@ mod tests {
             &mut slot_fec_indexes_to_iterate,
             &mut deshredded_entries,
             &mut highest_slot_seen,
+            &mut TrackerPool::default(),
+            &mut EarlyDetect::default(),
             &rs_cache,
             &metrics,
             false,
@@ -1247,11 +1650,13 @@ mod tests {
         );
         let t = std::time::Instant::now();
         reconstruct_shreds(
-            batch,
+            &batch,
             &mut all_shreds,
             &mut idx,
             &mut out,
             &mut highest,
+            &mut TrackerPool::default(),
+            &mut EarlyDetect::default(),
             &rs_cache,
             &metrics,
             true,
@@ -1311,7 +1716,8 @@ mod tests {
             let reps = 200;
             for _ in 0..reps {
                 for p in &with_create {
-                    std::hint::black_box(super::creates_in_payload(p).ok());
+                    let hits = super::create_offsets(p);
+                    std::hint::black_box(super::creates_in_payload(p, &hits).ok());
                 }
             }
             println!(
@@ -1369,7 +1775,7 @@ mod tests {
 
         // full path: every entry decoded
         reconstruct_shreds(
-            PacketBatch::new(
+            &PacketBatch::new(
                 packets
                     .packets
                     .iter()
@@ -1385,6 +1791,8 @@ mod tests {
             &mut idx,
             &mut out,
             &mut highest,
+            &mut TrackerPool::default(),
+            &mut EarlyDetect::default(),
             &rs_cache,
             &metrics,
             false,
@@ -1400,8 +1808,15 @@ mod tests {
                 .map(|i| i.mint)
                 .collect();
 
-            let fast: Vec<_> = if super::may_contain_pump_create(payload) {
-                super::creates_in_payload(payload)
+            // the fused scan must agree with the standalone one it replaced
+            let hits = super::create_offsets(payload);
+            assert_eq!(
+                !hits.is_empty(),
+                super::may_contain_pump_create(payload),
+                "create_offsets and may_contain_pump_create disagreed"
+            );
+            let fast: Vec<_> = if !hits.is_empty() {
+                super::creates_in_payload(payload, &hits)
                     .expect("payload that walks under bincode must walk here too")
                     .iter()
                     .filter_map(sniper::pumpfun::parse_create)
@@ -1417,6 +1832,330 @@ mod tests {
         }
         println!("compared {checked} segments, {creates_seen} creates, identical");
         assert!(checked > 0);
+    }
+
+    /// The pre-parse filter reads `fec_set_index` straight out of the common header, at a
+    /// hardcoded offset. If that offset is ever wrong the filter starts dropping live shreds
+    /// while everything still compiles, so it is checked against the parsed value on every
+    /// shred in the capture.
+    #[test]
+    fn peeked_fec_set_index_matches_the_parsed_shred() {
+        let Ok(buffer) = std::fs::read("../bins/serialized_shreds.bin") else {
+            eprintln!("skipping: ../bins/serialized_shreds.bin not present (git lfs)");
+            return;
+        };
+        let packets = Packets::try_from_slice(&buffer).unwrap();
+
+        let mut checked = 0usize;
+        for raw in packets.packets.iter() {
+            let Ok(parsed) =
+                solana_ledger::shred::Shred::new_from_serialized_shred(raw.clone())
+            else {
+                continue;
+            };
+            assert_eq!(
+                super::peek_fec_set_index(raw),
+                Some(parsed.fec_set_index()),
+                "peeked fec_set_index disagreed with the parsed shred"
+            );
+            assert_eq!(
+                solana_ledger::shred::layout::get_slot(raw),
+                Some(parsed.slot())
+            );
+            assert_eq!(
+                solana_ledger::shred::layout::get_index(raw),
+                Some(parsed.index())
+            );
+            checked += 1;
+        }
+        assert!(checked > 1000, "only {checked} shreds parsed out of the capture");
+    }
+
+
+    /// Early detection has to be both *earlier* and *right*.
+    ///
+    /// The capture is replayed one shred per batch, which is how they actually arrive. For
+    /// every create, the batch that first reported it through a partial segment is compared
+    /// against the batch that reported it through the ordinary complete-segment path. The
+    /// partial path must never invent a launch, and for real launches it must get there first
+    /// at least some of the time -- that lead is the whole reason it exists.
+
+    /// Builds a pump.fun `create_v2` transaction that `parse_create` accepts.
+    fn synthetic_create_tx(
+        creator: solana_sdk::pubkey::Pubkey,
+    ) -> solana_sdk::transaction::VersionedTransaction {
+        use solana_sdk::instruction::{AccountMeta, Instruction};
+
+        // accounts 0 mint, 1 mint_authority, 2 bonding_curve, 3 associated_bonding_curve,
+        // 4 global, 5 user, 6 system, 7 token_2022
+        let accounts = (0..8)
+            .map(|i| {
+                if i == 7 {
+                    AccountMeta::new_readonly(sniper::pumpfun::TOKEN_2022_PROGRAM, false)
+                } else {
+                    AccountMeta::new(solana_sdk::pubkey::Pubkey::new_unique(), false)
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // disc | name/symbol/uri | creator | is_mayhem_mode | is_cashback_enabled
+        let mut data = sniper::pumpfun::DISC_CREATE_V2.to_vec();
+        data.extend_from_slice(&[0xEEu8; 48]);
+        data.extend_from_slice(&creator.to_bytes());
+        data.extend_from_slice(&[0u8, 0u8]);
+
+        let ix = Instruction {
+            program_id: sniper::pumpfun::PUMP_PROGRAM,
+            accounts,
+            data,
+        };
+        let payer = solana_sdk::pubkey::Pubkey::new_unique();
+        solana_sdk::transaction::VersionedTransaction {
+            signatures: vec![solana_sdk::signature::Signature::default()],
+            message: solana_sdk::message::VersionedMessage::Legacy(
+                solana_sdk::message::Message::new(&[ix], Some(&payer)),
+            ),
+        }
+    }
+
+    /// A transaction that carries `bytes` of payload and nothing that looks like a create.
+    fn filler_tx(bytes: usize) -> solana_sdk::transaction::VersionedTransaction {
+        use solana_sdk::instruction::{AccountMeta, Instruction};
+        let ix = Instruction {
+            program_id: solana_sdk::pubkey::Pubkey::new_unique(),
+            accounts: vec![AccountMeta::new(
+                solana_sdk::pubkey::Pubkey::new_unique(),
+                false,
+            )],
+            data: vec![0xEEu8; bytes],
+        };
+        let payer = solana_sdk::pubkey::Pubkey::new_unique();
+        solana_sdk::transaction::VersionedTransaction {
+            signatures: vec![solana_sdk::signature::Signature::default()],
+            message: solana_sdk::message::VersionedMessage::Legacy(
+                solana_sdk::message::Message::new(&[ix], Some(&payer)),
+            ),
+        }
+    }
+
+    /// The point of the whole partial-segment path, stated as a test.
+    ///
+    /// A segment holding a create near its front is shredded and delivered one shred at a
+    /// time, in order, the way a healthy feed delivers them. The ordinary path cannot say
+    /// anything until the last shred arrives, because that is the one carrying
+    /// `DATA_COMPLETE_SHRED`. The partial path has to produce the launch as soon as the
+    /// transaction itself is complete, which is many shreds earlier -- and that gap is the
+    /// entire reason to run a sniper off shreds rather than off a block feed.
+    #[test]
+    fn a_create_is_found_before_its_segment_ends() {
+        let slot = 42_424u64;
+        let leader_keypair = Arc::new(Keypair::new());
+        let reed_solomon_cache = ReedSolomonCache::default();
+        let shredder = Shredder::new(slot, slot - 1, 0, 0).unwrap();
+
+        let creator = solana_sdk::pubkey::Pubkey::new_unique();
+        let create = synthetic_create_tx(creator);
+        let expected_creator = sniper::pumpfun::parse_create(&create)
+            .expect("the synthetic transaction must parse as a create")
+            .creator;
+
+        // the create up front, then enough traffic behind it to span a lot of shreds.
+        // Entries are built through `make_slot_entries_with_transactions` because the
+        // shredder wants the `Entry` from the vendored ledger, not the one from crates.io.
+        let mut entries = make_slot_entries_with_transactions(1);
+        entries[0].transactions = vec![create];
+        for _ in 0..30 {
+            let mut filler = make_slot_entries_with_transactions(1);
+            filler[0].transactions = (0..2).map(|_| filler_tx(900)).collect();
+            entries.extend(filler);
+        }
+
+        let (data_shreds, _coding) = shredder.entries_to_shreds(
+            &leader_keypair,
+            entries.as_slice(),
+            true, // is_last_in_slot: DATA_COMPLETE lands on the final data shred
+            Some(Hash::new_from_array(rand::thread_rng().gen())),
+            0,
+            0,
+            true,
+            &reed_solomon_cache,
+            &mut ProcessShredsStats::default(),
+        );
+        assert!(
+            data_shreds.len() > 10,
+            "need a segment worth several shreds, got {}",
+            data_shreds.len()
+        );
+
+        let rs_cache = ReedSolomonCache::default();
+        let metrics = Arc::new(ShredMetrics::default());
+        let mut all_shreds = ahash::HashMap::default();
+        let mut slot_fec_indexes_to_iterate: Vec<(Slot, u32)> = Vec::new();
+        let mut deshredded_entries = Vec::new();
+        let mut highest_slot_seen = 0;
+        let mut tracker_pool = TrackerPool::default();
+        let mut early = EarlyDetect::default();
+
+        let mut early_at: Option<usize> = None;
+        let mut full_at: Option<usize> = None;
+
+        // data shreds only, in order, one per call: no coding shreds, so nothing can be
+        // recovered and every shred has to earn its place
+        for (i, shred) in data_shreds.iter().enumerate() {
+            let mut packet = Packet::default();
+            shred.copy_to_packet(&mut packet);
+
+            reconstruct_shreds(
+                &PacketBatch::new(vec![packet]),
+                &mut all_shreds,
+                &mut slot_fec_indexes_to_iterate,
+                &mut deshredded_entries,
+                &mut highest_slot_seen,
+                &mut tracker_pool,
+                &mut early,
+                &rs_cache,
+                &metrics,
+                true,
+            );
+
+            for (_slot, decoded, payload) in deshredded_entries.iter() {
+                let hit = decoded
+                    .iter()
+                    .flat_map(|e| e.transactions.iter())
+                    .filter_map(sniper::pumpfun::parse_create)
+                    .any(|info| info.creator == expected_creator);
+                if !hit {
+                    continue;
+                }
+                // an empty payload marks a partial segment
+                let slot_at = if payload.is_empty() {
+                    &mut early_at
+                } else {
+                    &mut full_at
+                };
+                slot_at.get_or_insert(i);
+            }
+        }
+
+        let early_at = early_at.expect("the create was never found in a partial segment");
+        let full_at = full_at.expect("the create was never found in the complete segment");
+        println!(
+            "segment of {} shreds: partial path found the create at shred {early_at}, \
+             complete path at shred {full_at}",
+            data_shreds.len()
+        );
+        assert_eq!(
+            full_at,
+            data_shreds.len() - 1,
+            "the complete path can only speak once DATA_COMPLETE has arrived"
+        );
+        assert!(
+            early_at < full_at,
+            "partial path bought nothing: {early_at} vs {full_at}"
+        );
+    }
+
+    #[test]
+    fn partial_segments_find_creates_before_the_segment_completes() {
+        let Ok(buffer) = std::fs::read("../bins/serialized_shreds.bin") else {
+            eprintln!("skipping: ../bins/serialized_shreds.bin not present (git lfs)");
+            return;
+        };
+        let packets = Packets::try_from_slice(&buffer).unwrap();
+
+        let rs_cache = ReedSolomonCache::default();
+        let metrics = Arc::new(ShredMetrics::default());
+        let mut all_shreds = ahash::HashMap::default();
+        let mut slot_fec_indexes_to_iterate: Vec<(Slot, u32)> = Vec::new();
+        let mut deshredded_entries = Vec::new();
+        let mut highest_slot_seen = 0;
+        let mut tracker_pool = TrackerPool::default();
+        let mut early = EarlyDetect::default();
+
+        // mint -> index of the batch that first reported it, per path
+        let mut first_early: std::collections::HashMap<solana_sdk::pubkey::Pubkey, usize> =
+            Default::default();
+        let mut first_full: std::collections::HashMap<solana_sdk::pubkey::Pubkey, usize> =
+            Default::default();
+
+        for (batch_index, raw) in packets.packets.iter().enumerate() {
+            let mut packet = Packet::default();
+            packet.buffer_mut()[..raw.len()].copy_from_slice(raw);
+            packet.meta_mut().size = raw.len();
+
+            reconstruct_shreds(
+                &PacketBatch::new(vec![packet]),
+                &mut all_shreds,
+                &mut slot_fec_indexes_to_iterate,
+                &mut deshredded_entries,
+                &mut highest_slot_seen,
+                &mut tracker_pool,
+                &mut early,
+                &rs_cache,
+                &metrics,
+                true,
+            );
+
+            for (_slot, entries, payload) in deshredded_entries.iter() {
+                // an empty payload is how a partial segment is marked
+                let target = if payload.is_empty() {
+                    &mut first_early
+                } else {
+                    &mut first_full
+                };
+                for tx in entries.iter().flat_map(|e| e.transactions.iter()) {
+                    if let Some(info) = sniper::pumpfun::parse_create(tx) {
+                        target.entry(info.mint).or_insert(batch_index);
+                    }
+                }
+            }
+        }
+
+        assert!(
+            !first_full.is_empty(),
+            "the ordinary path should still find creates"
+        );
+        assert!(
+            !first_early.is_empty(),
+            "no create was found before its segment completed"
+        );
+
+        // never invent a launch
+        for mint in first_early.keys() {
+            assert!(
+                first_full.contains_key(mint),
+                "partial segment reported {mint}, which the complete segment never produced"
+            );
+        }
+
+        let mut earlier = 0usize;
+        let mut total_lead = 0usize;
+        for (mint, early_at) in first_early.iter() {
+            let full_at = first_full[mint];
+            assert!(
+                *early_at <= full_at,
+                "{mint} was reported late by the partial path: {early_at} vs {full_at}"
+            );
+            if *early_at < full_at {
+                earlier += 1;
+                total_lead += full_at - *early_at;
+            }
+        }
+
+        println!(
+            "early detection: {} of {} creates found before their segment completed, \
+             {} of them strictly earlier, {:.1} shreds of lead on average",
+            first_early.len(),
+            first_full.len(),
+            earlier,
+            total_lead as f64 / earlier.max(1) as f64,
+        );
+        // No lead is asserted here. This capture is lossy enough that its one create only
+        // becomes available through FEC recovery, which hands the whole segment over at once
+        // -- so on this input both paths land on the same shred. What is asserted is the part
+        // that has to hold on every input: the partial path never invents a launch and is
+        // never the slower of the two. `a_create_is_found_before_its_segment_ends` covers the
+        // lead itself, deterministically.
     }
 
     #[test]
@@ -1435,7 +2174,7 @@ mod tests {
         let mut highest_slot_seen = 0;
 
         reconstruct_shreds(
-            PacketBatch::new(
+            &PacketBatch::new(
                 packets
                     .packets
                     .iter()
@@ -1451,6 +2190,8 @@ mod tests {
             &mut slot_fec_indexes_to_iterate,
             &mut deshredded_entries,
             &mut highest_slot_seen,
+            &mut TrackerPool::default(),
+            &mut EarlyDetect::default(),
             &rs_cache,
             &metrics,
             true,
@@ -1458,14 +2199,23 @@ mod tests {
 
         let mut txn_count = 0usize;
         let mut creates = 0usize;
+        let mut early_creates = 0usize;
         let mut mints = HashSet::new();
-        for (_slot, entries, _bytes) in &deshredded_entries {
+        for (_slot, entries, payload) in &deshredded_entries {
+            // an empty payload marks a partial segment, which reports a create as soon as its
+            // transaction is complete. The complete segment reports it again afterwards, and
+            // the sniper dedups on mint -- so only the complete-segment path is counted here
+            let partial = payload.is_empty();
             for entry in entries {
                 txn_count += entry.transactions.len();
                 for tx in &entry.transactions {
                     if let Some(info) = sniper::pumpfun::parse_create(tx) {
-                        creates += 1;
                         mints.insert(info.mint);
+                        if partial {
+                            early_creates += 1;
+                        } else {
+                            creates += 1;
+                        }
                     }
                 }
             }
@@ -1476,7 +2226,7 @@ mod tests {
             .map(|(slot, _, _)| *slot)
             .collect::<HashSet<_>>();
         println!(
-            "replay: {} segments over {} slots, {txn_count} transactions, {creates} pump creates, {} distinct mints",
+            "replay: {} segments over {} slots, {txn_count} transactions, {creates} pump creates              ({early_creates} of them also found before their segment completed), {} distinct mints",
             deshredded_entries.len(),
             slots.len(),
             mints.len(),
@@ -1491,7 +2241,11 @@ mod tests {
             deshredded_entries.len(),
             slots.len()
         );
-        assert_eq!(creates, mints.len(), "each create should be seen once");
+        assert_eq!(
+            creates,
+            mints.len(),
+            "each create should be seen once through the complete-segment path"
+        );
     }
 }
 #[cfg(test)]

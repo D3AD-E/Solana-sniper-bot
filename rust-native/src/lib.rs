@@ -176,7 +176,7 @@ pub fn parse_buy_tx(entry_b64: String, init_sol: String, init_token: String) -> 
 
 mod selection;
 
-pub use selection::{CreatorCfg, Plan, Reject, Registry};
+pub use selection::{CreatorCfg, CreatorState, Plan, Reject, Registry, Results};
 
 /// Result of the launch filter, flattened for JS. `accepted` gates the numeric fields; when it
 /// is false `reason` says which rule stopped it, which is what the counters upstream care about.
@@ -196,6 +196,7 @@ fn reject_name(r: Reject) -> &'static str {
         Reject::TooShallow => "too_shallow",
         Reject::TooDeep => "too_deep",
         Reject::Unfillable => "unfillable",
+        Reject::CreatorCold => "creator_cold",
     }
 }
 
@@ -239,7 +240,10 @@ pub fn decide_buy(
         .parse()
         .map_err(|_| Error::from_reason("curve_quote_lamports not a u64 decimal"))?;
 
-    Ok(match selection::decide_now(&key, dev, quote) {
+    // The napi surface is for parity checks and backtests, so the creator is treated as warm;
+    // the rolling gate lives in the proxy that owns the trade results.
+    let warm = selection::CreatorState::default();
+    Ok(match selection::decide_now(&key, dev, quote, &warm) {
         Ok(p) => BuyDecision {
             accepted: true,
             reason: "ok".into(),

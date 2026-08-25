@@ -84,7 +84,8 @@ pub fn start_forwarder_threads(
         panic!("Failed to bind listener sockets. Check that port {src_port} is not in use.")
     });
 
-    let (reconstruct_tx, reconstruct_rx) = crossbeam_channel::bounded(1_024);
+    let (reconstruct_tx, reconstruct_rx) =
+        crossbeam_channel::bounded::<Arc<PacketBatch>>(1_024);
     let mut thread_hdls = Vec::with_capacity(num_threads + 1);
 
     if should_reconstruct_shreds {
@@ -105,6 +106,11 @@ pub fn start_forwarder_threads(
                 let mut deshredded_entries =
                     Vec::<(Slot, Vec<solana_entry::entry::Entry>, Vec<u8>)>::new();
                 let mut highest_slot_seen: Slot = 0;
+                // per-slot trackers are 4MiB each; recycling them keeps that allocation and
+                // its zeroing off this thread at every slot boundary
+                let mut tracker_pool = deshred::TrackerPool::default();
+                // per-segment state for firing on a create before its segment is complete
+                let mut early = deshred::EarlyDetect::default();
                 let rs_cache = ReedSolomonCache::default();
                 // hot sniper state lives on this thread only: detection and firing happen
                 // inline, before anything is serialized or sent anywhere else
@@ -117,11 +123,13 @@ pub fn start_forwarder_threads(
                     match reconstruct_rx.recv_timeout(Duration::from_millis(100)) {
                         Ok(pkt_batch) => {
                             deshred::reconstruct_shreds(
-                                pkt_batch,
+                                &pkt_batch,
                                 &mut all_shreds,
                                 &mut slot_fec_indexes_to_iterate,
                                 &mut deshredded_entries,
                                 &mut highest_slot_seen,
+                                &mut tracker_pool,
+                                &mut early,
                                 &rs_cache,
                                 &metrics,
                                 // only segments that can hold a launch are worth deserializing
@@ -138,10 +146,15 @@ pub fn start_forwarder_threads(
                                         &fill_sender,
                                         &metrics,
                                     );
-                                    let _ = entry_sender.send(PbEntry {
-                                        slot,
-                                        entries: entries_bytes,
-                                    });
+                                    // an empty payload is an early detection: a partial
+                                    // segment, which the entry feed must not be given. The
+                                    // ordinary path publishes the whole segment later.
+                                    if !entries_bytes.is_empty() {
+                                        let _ = entry_sender.send(PbEntry {
+                                            slot,
+                                            entries: entries_bytes,
+                                        });
+                                    }
                                 },
                             );
                         }
@@ -316,6 +329,11 @@ fn scan_for_pump_creates(
 
 /// Broadcasts the same packet to multiple recipients, parses it into a Shred if possible,
 /// and stores that shred in `all_shreds`.
+///
+/// The batch reaches the sniper's thread before this one does anything else with it, and it
+/// gets there as an `Arc` rather than a copy: cloning a `PacketBatch` is a memcpy of every
+/// packet in it -- up to 80KB -- and the reconstructor cannot start until that memcpy is
+/// finished. Nothing here needs to mutate the batch, so nothing here has to own one.
 #[allow(clippy::too_many_arguments)]
 fn recv_from_channel_and_send_multiple_dest(
     maybe_packet_batch: Result<PacketBatch, RecvError>,
@@ -323,12 +341,18 @@ fn recv_from_channel_and_send_multiple_dest(
     send_socket: &UdpSocket,
     local_dest_sockets: &[SocketAddr],
     should_reconstruct_shreds: bool,
-    reconstruct_tx: &crossbeam_channel::Sender<PacketBatch>,
+    reconstruct_tx: &crossbeam_channel::Sender<Arc<PacketBatch>>,
     debug_trace_shred: bool,
     metrics: &ShredMetrics,
 ) -> Result<(), ShredstreamProxyError> {
-    let packet_batch = maybe_packet_batch.map_err(ShredstreamProxyError::RecvError)?;
+    let packet_batch = Arc::new(maybe_packet_batch.map_err(ShredstreamProxyError::RecvError)?);
     let trace_shred_received_time = SystemTime::now();
+
+    // first thing that happens to a batch, before metrics, dedup or forwarding
+    if should_reconstruct_shreds {
+        let _ = reconstruct_tx.try_send(packet_batch.clone());
+    }
+
     metrics
         .received
         .fetch_add(packet_batch.len() as u64, Ordering::Relaxed);
@@ -338,60 +362,62 @@ fn recv_from_channel_and_send_multiple_dest(
         packet_batch.iter().map(|x| x.meta().size).sum::<usize>()
     );
 
-    if should_reconstruct_shreds {
-        let _ = reconstruct_tx.try_send(packet_batch.clone());
+    // Dedup by hand instead of through `dedup_packets_and_count_discards`, which needs `&mut`
+    // on the batch so it can set the discard flag. Collecting the survivors is the same work
+    // without the mutation, and it leaves the batch shareable.
+    let mut kept: Vec<&[u8]> = Vec::with_capacity(packet_batch.len());
+    let mut num_deduped = 0u64;
+    // one DashMap entry per source address per batch instead of one per packet: the entry
+    // API hashes the address and takes a shard lock, and a batch is almost always one source
+    let mut run_addr: Option<IpAddr> = None;
+    let mut run_discarded = 0u64;
+    let mut run_kept = 0u64;
+    {
+        let deduper = deduper.read().unwrap();
+        for packet in packet_batch.iter() {
+            let data = packet.data(..);
+            let duplicate = packet.meta().discard()
+                || data.map(|d| deduper.dedup(d)).unwrap_or(true);
+
+            let addr = packet.meta().addr;
+            if run_addr != Some(addr) {
+                if let Some(prev) = run_addr {
+                    record_source(metrics, prev, run_discarded, run_kept);
+                }
+                run_addr = Some(addr);
+                run_discarded = 0;
+                run_kept = 0;
+            }
+            if duplicate {
+                num_deduped += 1;
+                run_discarded += 1;
+            } else if let Some(data) = data {
+                kept.push(data);
+                run_kept += 1;
+            }
+        }
     }
-
-    let mut packet_batch_vec = vec![packet_batch];
-
-    let num_deduped = solana_perf::deduper::dedup_packets_and_count_discards(
-        &deduper.read().unwrap(),
-        &mut packet_batch_vec,
-    );
-    // Store stats for each Packet
-    packet_batch_vec.iter().for_each(|batch| {
-        batch.iter().for_each(|packet| {
-            metrics
-                .packets_received
-                .entry(packet.meta().addr)
-                .and_modify(|(discarded, not_discarded)| {
-                    *discarded += packet.meta().discard() as u64;
-                    *not_discarded += (!packet.meta().discard()) as u64;
-                })
-                .or_insert_with(|| {
-                    (
-                        packet.meta().discard() as u64,
-                        (!packet.meta().discard()) as u64,
-                    )
-                });
-        });
-    });
+    if let Some(prev) = run_addr {
+        record_source(metrics, prev, run_discarded, run_kept);
+    }
+    metrics.duplicate.fetch_add(num_deduped, Ordering::Relaxed);
 
     // send out to RPCs
-    local_dest_sockets.iter().for_each(|outgoing_socketaddr| {
-        let packets_with_dest = packet_batch_vec[0]
-            .iter()
-            .filter_map(|pkt| {
-                let data = pkt.data(..)?;
-                let addr = outgoing_socketaddr;
-                Some((data, addr))
-            })
-            .collect::<Vec<(&[u8], &SocketAddr)>>();
+    let mut packets_with_dest: Vec<(&[u8], &SocketAddr)> = Vec::with_capacity(kept.len());
+    for outgoing_socketaddr in local_dest_sockets.iter() {
+        packets_with_dest.clear();
+        packets_with_dest.extend(kept.iter().map(|data| (*data, outgoing_socketaddr)));
 
         match batch_send(send_socket, &packets_with_dest) {
             Ok(_) => {
                 metrics
                     .success_forward
                     .fetch_add(packets_with_dest.len() as u64, Ordering::Relaxed);
-                metrics.duplicate.fetch_add(num_deduped, Ordering::Relaxed);
             }
             Err(SendPktsError::IoError(err, num_failed)) => {
                 metrics
                     .fail_forward
                     .fetch_add(packets_with_dest.len() as u64, Ordering::Relaxed);
-                metrics
-                    .duplicate
-                    .fetch_add(num_failed as u64, Ordering::Relaxed);
                 error!(
                     "Failed to send batch of size {} to {outgoing_socketaddr:?}. \
                      {num_failed} packets failed. Error: {err}",
@@ -399,11 +425,11 @@ fn recv_from_channel_and_send_multiple_dest(
                 );
             }
         }
-    });
+    }
 
     // Count TraceShred shreds
     if debug_trace_shred {
-        packet_batch_vec[0]
+        packet_batch
             .iter()
             .filter_map(|p| TraceShred::decode(p.data(..)?).ok())
             .filter(|t| t.created_at.is_some())
@@ -422,6 +448,22 @@ fn recv_from_channel_and_send_multiple_dest(
     }
 
     Ok(())
+}
+
+/// Folds one source address's counts into the receive-stats map.
+#[inline]
+fn record_source(metrics: &ShredMetrics, addr: IpAddr, discarded: u64, kept: u64) {
+    if discarded == 0 && kept == 0 {
+        return;
+    }
+    metrics
+        .packets_received
+        .entry(addr)
+        .and_modify(|(d, nd)| {
+            *d += discarded;
+            *nd += kept;
+        })
+        .or_insert((discarded, kept));
 }
 
 /// Starts a thread that updates our destinations used by the forwarder threads
@@ -590,6 +632,8 @@ pub struct ShredMetrics {
     pub snipes_fired: AtomicU64,
     /// Segments whose bincode deserialize was skipped because no create discriminator was present
     pub deserialize_skipped_count: AtomicU64,
+    /// Creates found in a partial segment, before the segment was complete
+    pub early_creates_count: AtomicU64,
 
     // cumulative metrics (persist after reset)
     pub agg_received_cumulative: AtomicU64,
@@ -623,6 +667,7 @@ impl ShredMetrics {
             pump_creates_emitted: Default::default(),
             snipes_fired: Default::default(),
             deserialize_skipped_count: Default::default(),
+            early_creates_count: Default::default(),
             unknown_start_position_error_count: Default::default(),
             agg_received_cumulative: Default::default(),
             agg_success_forward_cumulative: Default::default(),
@@ -696,6 +741,18 @@ impl ShredMetrics {
                 (
                     "deserialize_skipped_count",
                     self.deserialize_skipped_count.swap(0, Ordering::Relaxed),
+                    i64
+                ),
+                // stays at zero unless pump.fun moves a create account behind a lookup
+                // table, at which point launches would go silently undetected
+                (
+                    "early_creates_count",
+                    self.early_creates_count.swap(0, Ordering::Relaxed),
+                    i64
+                ),
+                (
+                    "unresolved_creates",
+                    pumpfun::UNRESOLVED_CREATES.swap(0, Ordering::Relaxed),
                     i64
                 ),
                 (

@@ -38,20 +38,44 @@ use crate::{
 /// Max serialized transaction size on Solana.
 pub const MAX_TX: usize = 1232;
 
-/// A transaction that is fully patched but not yet signed.
-#[derive(Clone)]
-pub struct Job {
+/// The body of one launch's buy: everything patched except the three fields that differ
+/// per provider. Shared by every provider variant of that launch, so the detect thread
+/// copies the transaction **once** no matter how many providers are configured.
+pub struct TxBuf {
     pub len: u16,
     pub tx: [u8; MAX_TX],
 }
 
-impl Default for Job {
+impl Default for TxBuf {
     fn default() -> Self {
         Self {
             len: 0,
             tx: [0u8; MAX_TX],
         }
     }
+}
+
+/// Byte offsets of the three fields a provider owns. Constant for the process; handed to
+/// each sender at spawn so the patching can happen on the sender's own thread.
+#[derive(Debug, Clone, Copy)]
+pub struct TipOffsets {
+    pub tip_account: usize,
+    pub tip_lamports: usize,
+    pub cu_price: usize,
+}
+
+/// One provider's variant of a launch.
+///
+/// Carrying the body behind an `Arc` instead of inline turns the fan-out from `N` copies of
+/// 1232 bytes into one copy plus `N` refcount bumps. That matters twice: it takes ~1.2µs per
+/// provider off the detect thread, and it stops the last provider from being queued ~10µs
+/// after the first — and which provider wins the race is not something we get to know.
+#[derive(Clone)]
+pub struct Job {
+    pub base: Arc<TxBuf>,
+    pub tip_account: [u8; 32],
+    pub tip_lamports: u64,
+    pub cu_price: u64,
 }
 
 #[derive(Default, Debug)]
@@ -101,6 +125,58 @@ impl Conn {
             Conn::Plain(s) => s.read(buf),
             Conn::Tls(s) => s.read(buf),
         }
+    }
+    fn set_nonblocking(&self, on: bool) -> std::io::Result<()> {
+        match self {
+            Conn::Plain(s) => s.set_nonblocking(on),
+            Conn::Tls(s) => s.sock.set_nonblocking(on),
+        }
+    }
+}
+
+/// True when a read on a non-blocking socket simply had nothing ready.
+#[inline]
+fn nothing_ready(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    )
+}
+
+/// Reads whatever the provider has already sent, without ever waiting for it.
+///
+/// The response to a submit arrives a whole network RTT after the write. Reading it with the
+/// ordinary blocking socket parks the sender thread for that RTT on *every endpoint in turn*
+/// — eight regions at 20ms is 160ms during which a launch sitting in the queue does not get
+/// sent at all. So the drain never blocks: it takes what the kernel already has and leaves
+/// the rest for the next launch's drain or the keep-alive tick.
+fn drain_ready(ep: &mut Endpoint, buf: &mut [u8]) {
+    let Some(conn) = ep.conn.as_mut() else { return };
+    if conn.set_nonblocking(true).is_err() {
+        ep.conn = None;
+        return;
+    }
+    let mut dead = false;
+    loop {
+        match conn.read(buf) {
+            // a keep-alive connection only reports 0 bytes when the peer closed it
+            Ok(0) => {
+                dead = true;
+                break;
+            }
+            // a full buffer means there may be more behind it
+            Ok(n) if n == buf.len() => continue,
+            Ok(_) => break,
+            Err(e) if nothing_ready(&e) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => {
+                dead = true;
+                break;
+            }
+        }
+    }
+    if dead || conn.set_nonblocking(false).is_err() {
+        ep.conn = None;
     }
 }
 
@@ -257,11 +333,27 @@ pub fn spawn(
     dry_run: bool,
     queue_depth: usize,
     spin_micros: u64,
+    offsets: TipOffsets,
+    tx_len: usize,
 ) -> Result<(ProviderHandle, JoinHandle<()>), String> {
     let tip_accounts = cfg.tip_account_bytes()?;
     let endpoints = cfg.endpoints();
     if endpoints.is_empty() {
         return Err(format!("provider {} has no endpoints", cfg.name));
+    }
+    // the sender patches by offset with no bounds check on the hot path, so prove here,
+    // once, that every field it writes is inside the transaction
+    for (what, end) in [
+        ("tip_account", offsets.tip_account + 32),
+        ("tip_lamports", offsets.tip_lamports + 8),
+        ("cu_price", offsets.cu_price + 8),
+    ] {
+        if end > tx_len {
+            return Err(format!(
+                "provider {}: {what} offset runs past the {tx_len} byte template",
+                cfg.name
+            ));
+        }
     }
 
     let (tx, rx): (Sender<Job>, Receiver<Job>) = crossbeam_channel::bounded(queue_depth);
@@ -278,7 +370,7 @@ pub fn spawn(
 
     let join = Builder::new()
         .name(format!("snipeTx_{}", cfg.name))
-        .spawn(move || run(cfg, signing_key, dry_run, rx, metrics, spin_micros))
+        .spawn(move || run(cfg, signing_key, dry_run, rx, metrics, spin_micros, offsets))
         .expect("spawn sender thread");
 
     Ok((handle, join))
@@ -291,6 +383,7 @@ fn run(
     rx: Receiver<Job>,
     metrics: Arc<SenderMetrics>,
     spin_micros: u64,
+    offsets: TipOffsets,
 ) {
     let mut endpoints = cfg
         .endpoints()
@@ -323,6 +416,9 @@ fn run(
     }
 
     let (body_prefix, body_suffix) = body_wrappers(cfg.body);
+    // this provider's own copy of the transaction: the shared body is patched into here so
+    // the detect thread never has to produce one buffer per provider
+    let mut tx = [0u8; MAX_TX];
     let mut b64 = vec![0u8; MAX_TX * 4 / 3 + 8];
     let mut body = Vec::with_capacity(2048);
     let mut drain = [0u8; 2048];
@@ -360,16 +456,29 @@ fn run(
         };
 
         match received {
-            Ok(mut job) => {
+            Ok(job) => {
                 spin_until = Instant::now() + spin_window;
-                let len = job.len as usize;
+                let len = job.base.len as usize;
                 if len <= MSG_OFFSET || len > MAX_TX {
                     continue;
                 }
 
+                // take the shared body and stamp this provider's tip and fee on it. Doing it
+                // here rather than on the detect thread is free: these threads are otherwise
+                // idle and there is one per provider.
+                tx[..len].copy_from_slice(&job.base.tx[..len]);
+                let o = offsets;
+                tx[o.tip_account..o.tip_account + 32].copy_from_slice(&job.tip_account);
+                tx[o.tip_lamports..o.tip_lamports + 8]
+                    .copy_from_slice(&job.tip_lamports.to_le_bytes());
+                tx[o.cu_price..o.cu_price + 8].copy_from_slice(&job.cu_price.to_le_bytes());
+                // release the shared body immediately so the detect thread's ring slot is
+                // reusable on the next launch
+                drop(job);
+
                 // sign once for the whole provider, not once per region
-                let sig = signing_key.sign(&job.tx[MSG_OFFSET..len]);
-                job.tx[1..1 + 64].copy_from_slice(&sig.to_bytes());
+                let sig = signing_key.sign(&tx[MSG_OFFSET..len]);
+                tx[1..1 + 64].copy_from_slice(&sig.to_bytes());
 
                 if dry_run {
                     metrics.sent.fetch_add(1, Ordering::Relaxed);
@@ -377,7 +486,7 @@ fn run(
                 }
 
                 let n = STANDARD
-                    .encode_slice(&job.tx[..len], &mut b64)
+                    .encode_slice(&tx[..len], &mut b64)
                     .expect("base64 buffer is large enough");
                 body.clear();
                 body.extend_from_slice(body_prefix);
@@ -465,13 +574,11 @@ fn run(
                     }
                 }
 
-                // drain responses so the connections stay usable for the next launch
+                // clear whatever has already come back, without waiting for what has not.
+                // this runs after the bytes are on the wire, so it is off the critical path,
+                // and the previous launch's response is picked up here too
                 for ep in endpoints.iter_mut() {
-                    if let Some(c) = ep.conn.as_mut() {
-                        if c.read(&mut drain).is_err() {
-                            ep.conn = None;
-                        }
-                    }
+                    drain_ready(ep, &mut drain);
                 }
             }
             Err(RecvTimeoutError::Timeout) => {

@@ -104,6 +104,12 @@ if [ "${1:-}" = "--pin" ]; then
         taskset -pc 0-3 "$tid" >/dev/null
         say "pinned $name ($tid)" "cores 0-3"
         ;;
+      *)
+        # Everything else -- nonce and global refreshers, the whitelist watcher, position
+        # polling, the gRPC runtime, the metrics thread. None of it is latency sensitive, and
+        # all of it will happily land on an isolated core if nothing says otherwise.
+        taskset -pc 0-3 "$tid" >/dev/null 2>&1 || true
+        ;;
     esac
   done
 fi
