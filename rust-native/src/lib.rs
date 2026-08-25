@@ -173,3 +173,102 @@ pub fn parse_buy_tx(entry_b64: String, init_sol: String, init_token: String) -> 
         other_value: other.to_str_radix(10),
     })
 }
+
+mod selection;
+
+pub use selection::{CreatorCfg, Plan, Reject, Registry};
+
+/// Result of the launch filter, flattened for JS. `accepted` gates the numeric fields; when it
+/// is false `reason` says which rule stopped it, which is what the counters upstream care about.
+#[napi(object)]
+pub struct BuyDecision {
+    pub accepted: bool,
+    pub reason: String,
+    pub token_amount: String,
+    pub max_sol_cost: String,
+    pub cu_price: String,
+}
+
+fn reject_name(r: Reject) -> &'static str {
+    match r {
+        Reject::NotWhitelisted => "not_whitelisted",
+        Reject::DevBuyBelowFloor => "dev_buy_below_floor",
+        Reject::TooShallow => "too_shallow",
+        Reject::TooDeep => "too_deep",
+        Reject::Unfillable => "unfillable",
+    }
+}
+
+/// Loads the creator table and publishes it to the buy path. Returns the number of creators.
+#[napi(js_name = "loadSelection")]
+pub fn load_selection(path: String) -> Result<u32> {
+    let (n, skipped) = selection::load_from_file(&path)
+        .map_err(|e| Error::from_reason(format!("selection table {path}: {e}")))?;
+    if n == 0 {
+        return Err(Error::from_reason(format!(
+            "selection table {path} has no usable rows ({skipped} malformed)"
+        )));
+    }
+    Ok(n as u32)
+}
+
+/// Reloads the table on an interval so the whitelist can rotate without a restart.
+#[napi(js_name = "startSelectionReload")]
+pub fn start_selection_reload(path: String, every_ms: u32) -> Result<()> {
+    selection::spawn_reloader(path, std::time::Duration::from_millis(every_ms.max(250) as u64));
+    Ok(())
+}
+
+/// The decision itself. Lamport values cross the boundary as decimal strings to keep u64
+/// precision, matching the other exports here.
+#[napi(js_name = "decideBuy")]
+pub fn decide_buy(
+    creator: Buffer,
+    dev_buy_lamports: String,
+    curve_quote_lamports: String,
+) -> Result<BuyDecision> {
+    let key: [u8; 32] = creator[..]
+        .try_into()
+        .map_err(|_| Error::from_reason("creator must be a 32-byte public key"))?;
+    let dev: u64 = dev_buy_lamports
+        .trim()
+        .parse()
+        .map_err(|_| Error::from_reason("dev_buy_lamports not a u64 decimal"))?;
+    let quote: u64 = curve_quote_lamports
+        .trim()
+        .parse()
+        .map_err(|_| Error::from_reason("curve_quote_lamports not a u64 decimal"))?;
+
+    Ok(match selection::decide_now(&key, dev, quote) {
+        Ok(p) => BuyDecision {
+            accepted: true,
+            reason: "ok".into(),
+            token_amount: p.token_amount.to_string(),
+            max_sol_cost: p.max_sol_cost.to_string(),
+            cu_price: p.cu_price.to_string(),
+        },
+        Err(r) => BuyDecision {
+            accepted: false,
+            reason: reject_name(r).into(),
+            token_amount: "0".into(),
+            max_sol_cost: "0".into(),
+            cu_price: "0".into(),
+        },
+    })
+}
+
+/// Exposed so the backtest can price a fill exactly the way the buy path will.
+#[napi(js_name = "tokensForBudget")]
+pub fn tokens_for_budget(curve_quote_lamports: String, budget_lamports: String) -> Result<String> {
+    let quote: u64 = curve_quote_lamports
+        .trim()
+        .parse()
+        .map_err(|_| Error::from_reason("curve_quote_lamports not a u64 decimal"))?;
+    let budget: u64 = budget_lamports
+        .trim()
+        .parse()
+        .map_err(|_| Error::from_reason("budget_lamports not a u64 decimal"))?;
+    Ok(selection::tokens_for_budget(quote, budget)
+        .ok_or_else(|| Error::from_reason("curve state cannot fill that budget"))?
+        .to_string())
+}

@@ -32,6 +32,8 @@ use crate::pumpfun::CurveParams;
 #[derive(Debug, Clone, Copy)]
 pub struct OpenPosition {
     pub mint: Pubkey,
+    /// slot the create was in, so the landed slot can be compared against it
+    pub create_slot: u64,
     pub bonding_curve: Pubkey,
     pub token_account: Pubkey,
     /// tokens requested
@@ -51,6 +53,12 @@ pub struct PositionMetrics {
     pub skipped_busy: AtomicU64,
     /// launches skipped because test mode has already completed its round trip
     pub skipped_disarmed: AtomicU64,
+    /// buys that landed in the same slot as the create
+    pub landed_same_slot: AtomicU64,
+    /// landed one slot later
+    pub landed_plus_one: AtomicU64,
+    /// landed two or more slots later
+    pub landed_later: AtomicU64,
     /// paper profit and loss, lamports, ghost mode only
     pub ghost_pnl_lamports: AtomicI64,
     pub ghost_wins: AtomicU64,
@@ -214,8 +222,12 @@ fn live_cycle(
             .map(|r| r.value.is_some())
             .unwrap_or(false);
 
+
         if exists {
-            landed = true;
+            if !landed {
+                landed = true;
+                record_landing(client, position, metrics);
+            }
         } else if landed {
             info!("position {} closed", position.mint);
             return;
@@ -270,6 +282,31 @@ fn ghost_cycle(
         metrics.ghost_wins.load(Ordering::Relaxed),
         metrics.ghost_losses.load(Ordering::Relaxed),
         metrics.ghost_pnl_lamports.load(Ordering::Relaxed),
+    );
+}
+
+/// Records how many slots behind the create our buy landed.
+///
+/// This is the number that says whether the sniper is actually competitive. Same slot means
+/// the buy reached the leader that was already building the block containing the create;
+/// anything later means the race was lost on the network, not in this process.
+fn record_landing(client: &RpcClient, position: &OpenPosition, metrics: &PositionMetrics) {
+    let Ok(landed_slot) = client.get_slot() else {
+        return;
+    };
+    let delta = landed_slot.saturating_sub(position.create_slot);
+    match delta {
+        0 => metrics.landed_same_slot.fetch_add(1, Ordering::Relaxed),
+        1 => metrics.landed_plus_one.fetch_add(1, Ordering::Relaxed),
+        _ => metrics.landed_later.fetch_add(1, Ordering::Relaxed),
+    };
+    info!(
+        "{} landed {} slot(s) after the create (same {} / +1 {} / later {})",
+        position.mint,
+        delta,
+        metrics.landed_same_slot.load(Ordering::Relaxed),
+        metrics.landed_plus_one.load(Ordering::Relaxed),
+        metrics.landed_later.load(Ordering::Relaxed),
     );
 }
 

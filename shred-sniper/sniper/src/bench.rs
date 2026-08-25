@@ -191,13 +191,13 @@ fn bench_on_create_end_to_end() {
             let (mut sniper, drains, stop) = hot(providers, spinning);
             // warm the allocator and branch predictors
             for i in 0..1000 {
-                sniper.on_create(&info(i));
+                sniper.on_create(&info(i), 1);
             }
             let mut samples = Vec::with_capacity(ITERS);
             for i in 1000..1000 + ITERS {
                 let launch = info(i);
                 let t = Instant::now();
-                let fired = sniper.on_create(&launch);
+                let fired = sniper.on_create(&launch, 1);
                 samples.push(t.elapsed().as_nanos());
                 assert!(fired.is_some());
             }

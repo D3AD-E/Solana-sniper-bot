@@ -19,10 +19,10 @@
 //! The registry is swapped wholesale by a background reloader, so the hot path never takes a
 //! lock and never sees a half-written table.
 
+use arc_swap::ArcSwapOption;
 use std::collections::HashMap;
 use std::fs;
 use std::hash::{BuildHasherDefault, Hasher};
-use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 
 /// pump.fun bonding curve, in raw units: 30 SOL and 1.073e9 tokens of virtual reserves.
@@ -292,30 +292,20 @@ pub fn bs58_decode_32(s: &str) -> Option<[u8; 32]> {
 // ---------------------------------------------------------------------------
 // Hot-swappable global registry.
 //
-// The buy path reads a raw pointer with an acquire load; the reloader publishes a new Arc and
-// leaks the old one for one generation rather than freeing it under a reader. The table is a
-// few hundred entries reloaded on a timer, so the leak is bounded and the read is free.
+// The buy path only ever loads an Arc; the reloader publishes a whole new table. ArcSwap makes
+// the load wait-free and, unlike swapping a raw pointer by hand, guarantees a reader that has
+// already grabbed the old table keeps it alive until it is done with it.
 // ---------------------------------------------------------------------------
 
-static CURRENT: AtomicPtr<Arc<Registry>> = AtomicPtr::new(std::ptr::null_mut());
+static CURRENT: ArcSwapOption<Registry> = ArcSwapOption::const_empty();
 
 pub fn publish(reg: Registry) {
-    let boxed = Box::into_raw(Box::new(Arc::new(reg)));
-    let prev = CURRENT.swap(boxed, Ordering::AcqRel);
-    if !prev.is_null() {
-        // A reader may still hold the previous Arc; dropping the Box only releases our own
-        // reference, and the Arc keeps the table alive until the last reader is done.
-        unsafe { drop(Box::from_raw(prev)) };
-    }
+    CURRENT.store(Some(Arc::new(reg)));
 }
 
 #[inline]
 pub fn current() -> Option<Arc<Registry>> {
-    let ptr = CURRENT.load(Ordering::Acquire);
-    if ptr.is_null() {
-        return None;
-    }
-    Some(unsafe { (*ptr).clone() })
+    CURRENT.load_full()
 }
 
 /// Loads the file and publishes it. Returns (creators, skipped lines).
@@ -327,7 +317,8 @@ pub fn load_from_file(path: &str) -> std::io::Result<(usize, usize)> {
     Ok((n, skipped))
 }
 
-/// Background reloader. The buy path is never blocked by it.
+/// Background reloader, so the whitelist can rotate without a restart. The buy path is never
+/// blocked by it and a failed read simply leaves the previous table in place.
 pub fn spawn_reloader(path: String, every: std::time::Duration) {
     std::thread::spawn(move || loop {
         let _ = load_from_file(&path);
@@ -409,6 +400,16 @@ mod tests {
         assert_eq!(plan.max_sol_cost, 500_000_000);
         assert_eq!(plan.cu_price, 10_000_000);
         assert!(plan.token_amount > 0);
+    }
+
+    #[test]
+    fn published_table_is_visible_to_the_hot_path() {
+        publish(reg());
+        let dev = bs58_decode_32(DEV).unwrap();
+        let quote = VIRT_SOL_0 + 8_000_000_000;
+        assert!(decide_now(&dev, 5_000_000_000, quote).is_ok());
+        publish(Registry::empty());
+        assert_eq!(decide_now(&dev, 5_000_000_000, quote), Err(Reject::NotWhitelisted));
     }
 
     #[test]

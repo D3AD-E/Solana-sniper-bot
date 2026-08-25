@@ -258,7 +258,7 @@ fn scan_for_pump_creates(
             metrics.pump_creates_seen.fetch_add(1, Ordering::Relaxed);
 
             // fire first: everything below allocates or formats
-            let fired = hot.as_mut().and_then(|h| h.on_create(&info));
+            let fired = hot.as_mut().and_then(|h| h.on_create(&info, slot));
 
             // the seller needs the seed: the buy creates its token account from one, so the
             // address cannot be re-derived from the mint alone

@@ -291,7 +291,7 @@ impl HotSniper {
     ///
     /// No allocation, no `String`/`format!`, no logging, no syscalls.
     #[inline]
-    pub fn on_create(&mut self, info: &PumpCreateInfo) -> Option<FiredLaunch> {
+    pub fn on_create(&mut self, info: &PumpCreateInfo, slot: u64) -> Option<FiredLaunch> {
         let m = &self.shared.metrics;
         m.creates_seen.fetch_add(1, Ordering::Relaxed);
 
@@ -346,12 +346,12 @@ impl HotSniper {
             Pubkey::create_with_seed(&self.shared.buyer, seed_str, &info.token_program)
                 .unwrap_or_default();
 
-        let slot = vault_slot(&info.creator);
-        let creator_vault = if self.vault_cache[slot].0 == info.creator {
-            self.vault_cache[slot].1
+        let cache_slot = vault_slot(&info.creator);
+        let creator_vault = if self.vault_cache[cache_slot].0 == info.creator {
+            self.vault_cache[cache_slot].1
         } else {
             let v = pumpfun::creator_vault(&info.creator);
-            self.vault_cache[slot] = (info.creator, v);
+            self.vault_cache[cache_slot] = (info.creator, v);
             v
         };
         let bonding_curve_v2 = pumpfun::bonding_curve_v2(&info.mint);
@@ -394,6 +394,7 @@ impl HotSniper {
         if self.shared.ghost_mode {
             self.shared.gate.opened(OpenPosition {
                 mint: info.mint,
+                create_slot: slot,
                 bonding_curve: info.bonding_curve,
                 token_account,
                 amount: plan.amount,
@@ -436,6 +437,7 @@ impl HotSniper {
         m.fired.fetch_add(1, Ordering::Relaxed);
         self.shared.gate.opened(OpenPosition {
             mint: info.mint,
+            create_slot: slot,
             bonding_curve: info.bonding_curve,
             token_account,
             amount: plan.amount,
