@@ -105,6 +105,12 @@ A/B before trusting it live.
 - [x] `FLASHBLOCK_KEY` set in `.env`, all 7 nodes verified (`GET /` 200 on every host, no
       auth -> 403). Min tip 0.0001 SOL. lucum and lunar lander (hellomoon) were dropped from
       the catalogue entirely — re-adding one means restoring its `ProviderSpec`, not a key.
+- [x] `FALCON_KEY` (Corvus Labs) set in `.env`, all 9 regions verified (`GET /health` 200 on
+      every host; submit with no key -> 401, with key -> reaches tip validation). Submits via
+      **`/binary`** — raw transaction bytes, same `BodyFormat::Binary` as blockrazor. Min tip
+      0.001 SOL. Their native UDP :9000 is faster still but is NOT wired: it needs a
+      non-stream transport and never replies, so it cannot be validated without a funded
+      live fire.
 - [x] **Keep-alive interval corrected.** `helius-sender` closes idle connections after **10
       seconds** (measured); the probe was at 50 s, so every helius send was reconnecting on
       the hot path. `KEEPALIVE_SECS` is now 6 and the probe no longer blocks on replies.

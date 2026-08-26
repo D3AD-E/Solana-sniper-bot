@@ -58,10 +58,11 @@ failed transactions (`fetch_enhanced.py`, `fetch_failed.py`, `e4ez_tips.py`).
 * Never floor flow at zero. `max(mkt_vq - vq - displace*eff, 0.0)` deletes every losing trade
   and yields a fake 95.7% win rate.
 
-## The two wallets studied
+## The wallets studied
 
-Both are pump.fun snipers (not token creators). Measured over the three replay days above, from
-real on-chain round trips — no simulation.
+The first two are pump.fun snipers (not token creators). Measured over the three replay days
+above, from real on-chain round trips — no simulation. A third wallet, "the drafter", was added
+2026-08-26 — a momentum buyer, not a sniper (see below).
 
 ### `24678QKx2Dy8ZCw6Ra8o9DeTqPLL5GR9ZQKxt5FddHmq` — "the target"
 
@@ -127,6 +128,53 @@ without creating it.
 **Exit is a ladder, and the ladder beats every fixed dump.** 99.5% of positions are laddered:
 ~30% at slot 1, then ~17% per leg at slots 6, 8, 12, 16. Price-conditional — at ≤0.8× he cuts
 55% in one leg; at ≥2× he trims only ~4.5% per leg over 24 slots.
+
+### `57stAMFvwctAjkBS76RXGoK4QKyS1QoxbGMbzFFe4DyZ` — "the drafter"
+
+Investigated 2026-08-26 on suspicion of being E4Ez under a second key. **He is not** — different
+strategy class entirely: a *momentum buyer* who enters well after launch, drafting behind the
+create-block fight instead of joining it. Full dossier: `analysis/W57ST.md`; script:
+`analysis/w57st.py`; positions: `analysis/data/w57st_positions.parquet`.
+
+| | (4 tape days: 08-13/20/23/24) |
+|---|---|
+| positions | 754 (188/day), 39 rebuys |
+| net (raw, realised) | +960.7 SOL (+240/day) — tips unknown, prio med 0.0043 |
+| win rate | 66% closed positions |
+| ROI per position | med +8.0%, p10 −16.4%, p90 +50.8% |
+| median entry | **46 blocks after create** (p10 7, p90 170), buy rank 46, vquote 47.3 |
+| create-block entries | **0 of 754** |
+| median size | 1.98 SOL (same 2-SOL convention as E4Ez) |
+| exit | ladder, med 5 legs; first sell 1 block after entry, last at block 18 |
+| max concurrent | 5 |
+| overlap | E4Ez 8% of his mints (E4Ez always first), target 14% |
+
+**He runs two books** (deep pass 2026-08-26, `analysis/w57st_deep.py`): a ~2-SOL bonding-curve
+momentum book (743 pos, +331 SOL, 65% win) and an ultra-selective **post-migration whale book**
+— 11 positions of 167–261 SOL on runaway AMM pools (med 624 SOL inflow/10 blocks pre-entry),
++1,056 SOL, 91% win, **76% of his net**. Blind migration-sniping loses (−8.4% med); his whale
+edge is selection, taking 0.23% of migrations. Bankroll implied: high hundreds of SOL.
+
+Selection is real, not luck: blind curve baseline (vquote≥45, offset≥7, exit +18 blocks) loses
+−11% med / 36% win vs his +8% / 66%. Trigger: sustained inflow (take rate 0.5% below 2 SOL/10
+blocks → ~4.5% above 5), broad participation (0.16% take at ≤5 unique buyers → 5.7% at 20–40),
+and dev-already-sold (1.2% vs 4.9%; hot+dev-sold 6.1%). **Unlike E4Ez, creator features are NOT
+flat for him**: take rate doubles (8.4%) at rug_coefficient 0.8–1.0 — he *prefers* guaranteed
+dev-dumpers and buys the survivors. Buys into strength: +16% med price slope in prior 5 blocks,
+44% within 5% of the local high. Sizing flat (no demand-tracking; 100% round 0.1 multiples);
+the whale/curve split is the sizing decision. Exit: 20% at block +1, then ~13.5% per leg every
+4–5 blocks; ≤0.8× cuts 30%/leg, ≥2× trims 8%/leg to block ~30.
+
+**Fees near zero** (156-tx on-chain sample): 81% of buys untipped, prio ~0.004 or nothing;
+sells 0.00036 flat; a sampled 152-SOL whale buy cost 0.001 total. ~0.004 median per landed buy
+vs the leader's 0.035/0.119 — but 41% of his txs fail (spray + slippage guards). Wallet is old:
+≥200k sigs, active before 2026-06-04 (E4Ez's wallet: born 2026-08-04) — kills "same guy" again.
+Not in `watch_wallets`, `creators`, or `creator_edge`.
+
+Why he matters: E4Ez-level net with **no latency race and ~30× lower fees**. Signals (10-block
+inflow, unique buyers, dev-sold, rug_coefficient) all computable from our stream at an
+18-second budget; `dev_history` plugs straight in. Candidate for a v1.2 side-strategy study;
+nothing adopted yet.
 
 ## Settled results (p99-trimmed, real fees charged)
 
@@ -489,7 +537,7 @@ findings verified against code before fixing; genuine ones fixed + tested.
 * **#5:** late durable-nonce fills are covered by reconciliation (#3); advancing the nonce on
   timeout to hard-invalidate is a documented future hardening, not yet built.
 
-Tests: Rust 72 (confirm 8 + tip 5 + pumpfun incl. the #1 regression + the rest), TS 21
+Tests: Rust 74 (confirm 8 + tip 5 + pumpfun incl. the #1 regression + the rest), TS 21
 (`src/pumpFun/ladder.test.ts`, run with `npm test` / vitest) covering parseLegs, reserves +
 creator offsets, constant-product sellValue, valueMultiple, and every `decideLegSize` branch
 (normal leg / stop-dump / moon-trim / force-out / clamp / final detection). Ladder math is
@@ -608,6 +656,23 @@ the `{"transactions":[...]}` body, 7 nodes (`ny slc ams fra singapore london tok
 **lucum and lunar lander (hellomoon) were deleted from the catalogue** on 2026-08-26. A test
 pins them out; re-adding one means restoring its `ProviderSpec` and re-verifying its tip list,
 not pasting a key into `.env`.
+
+**falcon (Corvus Labs)** is keyed and live: UUID in `?api-key=`, 9 regions
+(`fra ams lon nyc tyo dub sgp slc sqq` — the last is Siauliai, LT, its own metro), min tip
+0.001 SOL, keep-alive `GET /health` (no key needed). Submits via **`/binary`**, the same
+`BodyFormat::Binary` blockrazor uses. Their tip rule is the strictest of any provider — ONE
+top-level System `transfer` (not `transferWithSeed`, not a CPI, not split across two
+instructions) of >=1,000,000 lamports to a `Fa1con...` account that appears in the STATIC
+account keys, never via a lookup table. Our template's instruction 1 already satisfies all
+four. Falcon also caps a transaction at 1,232 bytes; ours is ~1,043, so a template change
+could close that gap silently.
+
+Two faster falcon transports exist and are deliberately NOT wired: native UDP on `:9000`
+(one datagram of `16-byte raw UUID || transaction`, no envelope, **no reply ever**) and QUIC
+on `:5000` via their `falcon-client` SDK. UDP needs a non-stream variant of `Conn`, and since
+it answers nothing there is no way to verify it short of a funded live fire. The gain is
+mostly *tail* latency — a warm `TCP_NODELAY` socket already emits one segment, so the median
+difference from `/binary` is small; what UDP avoids is a TCP stall or retransmit.
 
 ### Keep-alive: the interval is set by helius, and it was wrong
 

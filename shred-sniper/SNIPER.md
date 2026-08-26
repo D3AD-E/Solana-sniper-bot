@@ -125,6 +125,7 @@ python scripts/ping_providers.py --reuse-after 8   # connections survive the pro
 | nozomi (temporal) | `?c=` | 1,000,000 | 9 direct http regions, `GET /ping` keep-alive (idle >65s is closed) |
 | bloxroute | `Authorization` header | 1,000,000 | wrapped body, `GET /health` keep-alive, 5 regions + `global` edge, needs an ECS resolver |
 | flashblock | `Authorization` header | 100,000 | `/api/v2/submit-batch`, `GET /` keep-alive, closes idle at 30s, 7 nodes |
+| falcon (corvus) | `?api-key=` | 1,000,000 | **binary** body (`/binary`), 9 regions, `GET /health`. Faster UDP :9000 exists, not wired |
 | circular FAST | `x-api-key` header | 1,000,000 | `fast.circular.fi` |
 | blockrazor | `?auth=` + `apikey` header | 100,000 | **binary** body, plain HTTP on :443, 11 endpoints, `/health` keep-alive |
 
@@ -138,11 +139,23 @@ Body format is `json_rpc` (default), `wrapped` for nextblock style
 consecutive slots are clear of a leader they score as high-risk, which is fatal at slip 2),
 `plain_tx`, `batch`, or `binary`.
 
-`binary` is blockrazor's `/v2/sendBinaryTransaction`: the signed transaction goes on the wire
-as raw bytes under `application/octet-stream`, with no base64 and no JSON envelope. That is
-~26% fewer bytes than the JSON form and removes the encode from the hot path. Verified by
-posting one identically-serialised transaction both ways and getting the same downstream
-error from the provider.
+`binary` is blockrazor's `/v2/sendBinaryTransaction` and falcon's `/binary`: the signed
+transaction goes on the wire as raw bytes under `application/octet-stream`, with no base64 and
+no JSON envelope. That is ~26% fewer bytes than the JSON form and removes the encode from the
+hot path. Verified by posting one identically-serialised transaction both ways and getting the
+same downstream error from the provider.
+
+Falcon publishes two transports that are faster than anything wired up here, and neither is
+used yet:
+
+* **native UDP** on `<region>.falcon.wtf:9000` — one datagram of `16-byte raw UUID ||
+  transaction`, no envelope, and **no reply for any reason**. Needs a non-stream variant of
+  `Conn`, and because it never answers there is no way to test it short of a funded live fire.
+* **QUIC** on `:5000` via their `falcon-client` Rust SDK (stream or datagram mode).
+
+Both mainly buy *tail* latency — a warm TCP connection with `TCP_NODELAY` already puts the
+bytes out in one segment, so the median gain over `/binary` is small. What UDP avoids is a TCP
+stall or retransmit, which is precisely the case where a launch is lost.
 
 ## Configuration
 

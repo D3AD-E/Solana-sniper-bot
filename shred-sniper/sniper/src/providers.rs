@@ -177,6 +177,24 @@ pub const FLASHBLOCK_TIPS: &[&str] = &[
     "FLAsHZTRcf3Dy1APaz6j74ebdMC6Xx4g6i9YxjyrDybR",
 ];
 
+/// Falcon (Corvus Labs). Their tip rules are stricter than most: the tip must be ONE
+/// top-level System `transfer` (not `transferWithSeed`, not a CPI, not split across two
+/// instructions) of at least 1,000,000 lamports, to an account present in the transaction's
+/// STATIC keys — an address-lookup-table entry does not count. Our template's instruction 1
+/// is exactly that, so it already satisfies all four rules.
+pub const FALCON_TIPS: &[&str] = &[
+    "Fa1con11xLjPddfzRwRUB16sbFZggp2JeJkCeWREyR8X",
+    "Fa1con11TM1RuAQzbQzYjTy4Ekfap9Lnc9fnEbQYEd6Q",
+    "Fa1con113Bvi76nS5AzUiRDC2fqjfzkNMUNRLgQybMYt",
+    "Fa1con1QGHJK232s8yZpzZZwqPexnAKcoyKj626LNsMv",
+    "Fa1con1zUzb6qJVFz5tNkPq1Ahm8H1qKW7Q48252QbkQ",
+    "Fa1con16d3MSwd3SAiwvr2LwgkpE7ot8zntbpuec8HAx",
+    "Fa1con1i7mpa7Qc6epYJ6r4P9AbU77DFFz173r59Df1x",
+    "Fa1con18nWn8TdAGL7JX8PertfMUGVSc899NawokJ4Bq",
+    "Fa1con1GKusK2EqsfzrDzGPaYZSxQtFGzJiRMMU9Zm2g",
+    "Fa1con1RDwVwM9VrJ53CwVefD3VU9c58EMpDawV7fLMi",
+];
+
 pub const BLOCKRAZOR_TIPS: &[&str] = &[
     "FjmZZrFvhnqqb9ThCuMVnENaM3JGVuGWNyCAxRJcFpg9",
     "6No2i3aawzHsjtThw81iq1EXPJN6rh8eSJCLaYZfKDTG",
@@ -461,6 +479,45 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         ],
         tips: BLOCKRAZOR_TIPS,
     },
+    ProviderSpec {
+        name: "falcon",
+        env_key: "FALCON_KEY",
+        env_regions: "FALCON_REGIONS",
+        // `?api-key=<uuid>` on every HTTP route. No header form exists.
+        auth: Auth::Query,
+        port: 80,
+        tls: false,
+        // Falcon publishes four transports; this is the fastest one that fits a warm HTTP
+        // connection. `/binary` takes the serialized transaction as the entire body — no
+        // base64, no JSON envelope — so it reuses BodyFormat::Binary exactly as blockrazor
+        // does. The alternatives: `/plaintext` (base64, bigger) and JSON-RPC (base64 plus an
+        // envelope, bigger still).
+        //
+        // Strictly faster still is their native UDP on :9000 — one datagram of
+        // `16-byte raw UUID || transaction`, no envelope and no reply, ever. It is not wired
+        // up because it needs a new non-stream transport in `Conn`, and because it answers
+        // nothing there is no way to verify it short of a funded live fire. The win over
+        // this route is mostly tail latency (no TCP stall or retransmit), not median.
+        path: "/binary?api-key={KEY}",
+        // GET /health answers 200 on every region and needs no key
+        health_path: "/health",
+        body: "binary",
+        min_tip: 1_000_000,
+        signup: "https://docs.corvus-labs.io/falcon (dashboard issues the UUID)",
+        hosts: &[
+            ("fra", "fra.falcon.wtf"),
+            ("ams", "ams.falcon.wtf"),
+            ("lon", "lon.falcon.wtf"),
+            ("ny", "nyc.falcon.wtf"),
+            ("tyo", "tyo.falcon.wtf"),
+            ("dublin", "dub.falcon.wtf"),
+            ("sgp", "sgp.falcon.wtf"),
+            ("slc", "slc.falcon.wtf"),
+            // Šiauliai, Lithuania — their own metro, not an alias of anything
+            ("sqq", "sqq.falcon.wtf"),
+        ],
+        tips: FALCON_TIPS,
+    },
 ];
 
 #[cfg(test)]
@@ -639,6 +696,31 @@ mod tests {
             assert!(
                 !PROVIDERS.iter().any(|p| p.name == gone),
                 "{gone} was dropped on 2026-08-26"
+            );
+        }
+    }
+
+    /// Falcon takes the transaction as the whole body on `/binary`, so the key has nowhere to
+    /// live except the query string — there is no header form. It also caps a transaction at
+    /// 1,232 bytes; ours is ~1,043, but a template change could close that gap silently.
+    #[test]
+    fn falcon_submits_binary_with_the_key_in_the_query() {
+        let f = PROVIDERS
+            .iter()
+            .find(|p| p.name == "falcon")
+            .expect("falcon missing from the catalogue");
+
+        assert_eq!(f.body, "binary");
+        assert_eq!(f.path, "/binary?api-key={KEY}");
+        assert_eq!(f.auth, Auth::Query);
+        assert_eq!(f.health_path, "/health");
+        assert_eq!(f.min_tip, 1_000_000, "falcon rejects a tip under 0.001 SOL");
+        assert_eq!(f.hosts.len(), 9);
+        assert_eq!(f.tips.len(), 10);
+        for (region, host) in f.hosts {
+            assert!(
+                host.ends_with(".falcon.wtf"),
+                "{region}: {host} is not a falcon endpoint"
             );
         }
     }
