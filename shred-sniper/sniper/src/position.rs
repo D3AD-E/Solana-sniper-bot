@@ -223,11 +223,28 @@ fn live_cycle(
     let mut landed = false;
 
     loop {
-        let exists = client
-            .get_account_with_commitment(&position.token_account, CommitmentConfig::processed())
-            .map(|r| r.value.is_some())
-            .unwrap_or(false);
-
+        // Three outcomes, not two: Ok(Some) = account exists, Ok(None) = truly gone, Err =
+        // the RPC call failed and tells us NOTHING. Collapsing Err into "gone" (the old
+        // `.unwrap_or(false)`) let a single RPC blip after the buy landed look like the
+        // position closed, freeing the gate while the bag was still open - in sync mode that
+        // breaks the one-at-a-time invariant the gate exists to hold.
+        let account = client
+            .get_account_with_commitment(&position.token_account, CommitmentConfig::processed());
+        let exists = match account {
+            Ok(r) => r.value.is_some(),
+            Err(_) => {
+                // unknown: never treat as closed. If the buy already landed, keep waiting for
+                // it to close (the bag is open). If it never landed and we are past the
+                // deadline, release as never-landed rather than spin forever on a dead RPC.
+                if !landed && Instant::now() > deadline {
+                    metrics.never_landed.fetch_add(1, Ordering::Relaxed);
+                    info!("position {} never landed (rpc errors), releasing", position.mint);
+                    return;
+                }
+                std::thread::sleep(poll);
+                continue;
+            }
+        };
 
         if exists {
             if !landed {

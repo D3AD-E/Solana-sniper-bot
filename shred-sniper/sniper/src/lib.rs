@@ -18,6 +18,7 @@ pub mod position;
 pub mod pumpfun;
 pub mod sender;
 pub mod template;
+pub mod tip;
 pub mod whitelist;
 pub mod wire;
 
@@ -93,6 +94,8 @@ pub struct Shared {
     pub seed_table: SeedTable,
     /// v1.1 confirmation-trigger params, or None when the whitelist path is in use.
     pub confirm: Option<confirm::Params>,
+    /// dynamic Jito tip params, or None to use each provider's static tip.
+    pub tip: Option<tip::TipParams>,
 }
 
 pub struct Sniper {
@@ -253,6 +256,26 @@ impl Sniper {
             None
         };
 
+        // dynamic Jito tip. Fallback is the largest configured provider tip, so a tip is
+        // never below what the config already pays if the stream has not published yet.
+        let static_tip = cfg
+            .providers
+            .iter()
+            .filter(|p| p.enabled)
+            .map(|p| p.tip_lamports)
+            .max()
+            .unwrap_or(2_000_000);
+        let tip_params = tip::TipParams::from_env(static_tip);
+        if let Some(tp) = tip_params {
+            let url = std::env::var("SNIPER_JITO_TIP_FLOOR_URL")
+                .unwrap_or_else(|_| "https://bundles.jito.wtf/api/v1/bundles/tip_floor".into());
+            info!(
+                "sniper: dynamic tip ON (p{} floor, {} bps of size, +{} bps/buy, {}..{} lamports)",
+                tp.pctile, tp.size_bps, tp.comp_step_bps, tp.min_lamports, tp.max_lamports
+            );
+            tip::spawn_poller(url, std::time::Duration::from_secs(2));
+        }
+
         let shared = Arc::new(Shared {
             whitelist,
             nonces,
@@ -269,6 +292,7 @@ impl Sniper {
             ghost_mode: cfg.ghost_mode,
             seed_table,
             confirm,
+            tip: tip_params,
         });
 
         Ok(Self {
@@ -458,7 +482,8 @@ impl HotSniper {
         if plan.amount == 0 {
             return None;
         }
-        self.fire_launch(info, slot, plan)
+        // whitelist path has no create-block confirmation count; competition = 0.
+        self.fire_launch(info, slot, plan, 0)
     }
 
     /// v1.1 confirm mode: register a fresh deployer's launch so its create block can be
@@ -508,8 +533,10 @@ impl HotSniper {
         match result {
             Ok(fire) => {
                 self.pending.remove(&buy.mint);
+                // price against the FULL curve depth ahead of us (dev + confirmers), not just
+                // the dev buy, or the exact-token request exceeds max_sol_cost on chain.
                 let plan = self.shared.curve.plan_buy(
-                    fire.dev_buy_lamports,
+                    fire.prior_flow_lamports,
                     fire.budget_lamports,
                     self.shared.haircut_bps,
                     self.shared.slippage_bps,
@@ -518,7 +545,7 @@ impl HotSniper {
                     return None;
                 }
                 let _ = fire.book; // Book::{Main,FollowSymbiont,FollowWhale} — same fire path
-                self.fire_launch(&info, slot, plan)
+                self.fire_launch(&info, slot, plan, fire.n_conf)
             }
             Err(Pass::EliteAhead) => {
                 self.shared.metrics.confirm_elite_ahead.fetch_add(1, Ordering::Relaxed);
@@ -553,7 +580,13 @@ impl HotSniper {
     /// Builds and fires the buy for `info` with a priced `plan`. Shared by the whitelist path
     /// and the confirmation trigger, so both size, patch, and fan out identically.
     #[inline]
-    fn fire_launch(&mut self, info: &PumpCreateInfo, slot: u64, plan: BuyPlan) -> Option<FiredLaunch> {
+    fn fire_launch(
+        &mut self,
+        info: &PumpCreateInfo,
+        slot: u64,
+        plan: BuyPlan,
+        competition: u32,
+    ) -> Option<FiredLaunch> {
         let m = &self.shared.metrics;
 
         // one token at a time, or stopped after a test round trip
@@ -661,12 +694,20 @@ impl HotSniper {
             &self.template.tx[..len],
         );
 
+        // per-launch tip when dynamic tip is on, else each provider's static tip. Sized off
+        // the live Jito tip floor, our position size, and create-block competition (tip.rs).
+        let dyn_tip = self
+            .shared
+            .tip
+            .as_ref()
+            .map(|tp| tip::dynamic_tip(tp, tip::current(), plan.max_sol_cost, competition));
+
         let mut queued = 0u64;
         for p in self.shared.providers.iter() {
             p.try_send(Job {
                 base: base.clone(),
                 tip_account: p.tip_accounts[self.launch_counter % p.tip_accounts.len()],
-                tip_lamports: p.tip_lamports,
+                tip_lamports: dyn_tip.unwrap_or(p.tip_lamports),
                 cu_price: p.cu_price,
             });
             queued += 1;

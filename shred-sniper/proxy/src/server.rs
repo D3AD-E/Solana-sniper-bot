@@ -11,7 +11,7 @@ use jito_protos::shredstream::{
     Entry as PbEntry, Fill as PbFill, PumpCreate as PbPumpCreate, SubscribeEntriesRequest,
     SubscribeFillsRequest, SubscribePumpCreatesRequest,
 };
-use log::{debug, info};
+use log::{debug, info, warn};
 use tokio::sync::broadcast::{Receiver as BroadcastReceiver, Sender};
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
@@ -119,10 +119,23 @@ impl ShredstreamProxy for ShredstreamProxyService {
         let mut receiver: BroadcastReceiver<PbFill> = self.fill_sender.subscribe();
 
         tokio::spawn(async move {
-            while let Ok(fill) = receiver.recv().await {
-                if tx.send(Ok(fill)).await.is_err() {
-                    debug!("fill client disconnected");
-                    break;
+            loop {
+                match receiver.recv().await {
+                    Ok(fill) => {
+                        if tx.send(Ok(fill)).await.is_err() {
+                            debug!("fill client disconnected");
+                            break;
+                        }
+                    }
+                    // a slow client fell behind the broadcast ring. Dropping fills here would
+                    // orphan those bags, but ending the stream is worse - the seller then
+                    // reconnects and rebuilds from reconciliation. Skip the gap and keep going.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("fill stream lagged, {n} fills dropped (seller will reconcile)");
+                        continue;
+                    }
+                    // the sender was dropped (proxy shutting down): end the stream.
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
         });

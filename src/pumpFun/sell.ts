@@ -127,14 +127,19 @@ export async function sellPosition(
     /** send through Helius Sender (staked connections) instead of the plain RPC */
     sender?: (base64Tx: string) => Promise<unknown>;
     blockhash?: string;
+    /** close the token account after selling. Must be false on a partial (ladder) leg -
+     *  closing an account that still holds tokens fails. Defaults to true (full exit). */
+    close?: boolean;
   } = {},
 ): Promise<string> {
   const instructions: TransactionInstruction[] = [
     ComputeBudgetProgram.setComputeUnitLimit({ units: SELL_COMPUTE_UNIT_LIMIT }),
     ComputeBudgetProgram.setComputeUnitPrice({ microLamports: options.cuPrice ?? 100_000n }),
     sellInstruction(global, wallet.publicKey, position, amount, options.minSolOutput ?? 0n),
-    closeAccountInstruction(position, wallet.publicKey),
   ];
+  if (options.close ?? true) {
+    instructions.push(closeAccountInstruction(position, wallet.publicKey));
+  }
 
   if (options.tipAccount && options.tipLamports) {
     instructions.push(

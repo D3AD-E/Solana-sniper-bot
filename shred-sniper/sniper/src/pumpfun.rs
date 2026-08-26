@@ -414,6 +414,38 @@ mod tests {
         (lo as u128 * (10_000 + p.total_fee_bps()) as u128 / 10_000) as u64
     }
 
+    /// Regression for the confirm-mode pricing bug: the buy lands on top of ALL the flow ahead
+    /// (dev + confirming buys), so plan_buy must be priced against that full depth. Pricing
+    /// against the dev buy alone under-prices the shallow curve and the exact-token request
+    /// blows past max_sol_cost on chain -> TooMuchSolRequired -> 0% fill.
+    #[test]
+    fn confirm_flow_must_be_priced_or_the_request_exceeds_the_cap() {
+        let p = params();
+        let dev = 500_000_000u64; // 0.5 SOL dev buy
+        let confirmers = 6_000_000_000u64; // 6 SOL confirmed ahead of us
+        let prior_flow = dev + confirmers; // the real curve depth our buy lands in
+        let budget = 2_800_000_000u64;
+
+        // FIXED: price against the full prior flow -> the request fits under the cap.
+        let good = p.plan_buy(prior_flow, budget, 30, 100);
+        let good_cost = real_cost(&p, prior_flow, good.amount);
+        assert!(
+            good_cost <= good.max_sol_cost,
+            "correct pricing must fit: cost {good_cost} cap {}",
+            good.max_sol_cost
+        );
+
+        // BUG: pricing against the dev buy only, but executing at the real (deeper) curve,
+        // over-requests tokens and exceeds the cap. This is what used to happen every fire.
+        let bug = p.plan_buy(dev, budget, 30, 100);
+        let bug_cost = real_cost(&p, prior_flow, bug.amount);
+        assert!(
+            bug_cost > bug.max_sol_cost,
+            "dev-only pricing should over-request at the real depth: cost {bug_cost} cap {}",
+            bug.max_sol_cost
+        );
+    }
+
     #[test]
     fn buy_plan_lands_close_to_the_budget_and_under_the_cap() {
         let p = params();

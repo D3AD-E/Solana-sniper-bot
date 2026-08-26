@@ -200,15 +200,20 @@ export const HELIUS_SENDER_TIP_ACCOUNTS = [
   '4TQLFNWK8AovT1gFvda5jfw2oJeRMKEmw7aH6MGBJ3or',
 ].map((a) => new PublicKey(a));
 
-/** Sells go through Helius Sender rather than the plain RPC. No API key required. */
-export const sendTransactionHeliusSender = (tx: string) => {
+/** Sells go through Helius Sender rather than the plain RPC. No API key required.
+ *
+ *  callUpstream resolves on any HTTP 2xx, but a JSON-RPC rejection comes back as {"error":…}
+ *  with a 200 body. Left unchecked, a rejected sell would look like it landed - the ladder
+ *  would decrement `remaining` and mark the leg done while the tokens are still held. Parse
+ *  the body and throw on a JSON-RPC error so the caller retries. */
+export const sendTransactionHeliusSender = async (tx: string): Promise<string> => {
   const body = JSON.stringify({
     jsonrpc: '2.0',
     id: 1,
     method: 'sendTransaction',
     params: [tx, { encoding: 'base64', skipPreflight: true, maxRetries: 0 }],
   });
-  return callUpstream('heliusSender', '/fast', {
+  const raw = await callUpstream('heliusSender', '/fast', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -216,4 +221,14 @@ export const sendTransactionHeliusSender = (tx: string) => {
     },
     body,
   });
+  try {
+    const parsed = JSON.parse(String(raw));
+    if (parsed && parsed.error) {
+      throw new Error(`sendTransaction rejected: ${JSON.stringify(parsed.error)}`);
+    }
+  } catch (e) {
+    // a parse failure on a non-JSON body is itself suspicious for a submit - surface it
+    if (e instanceof Error && e.message.startsWith('sendTransaction rejected')) throw e;
+  }
+  return String(raw);
 };

@@ -426,6 +426,75 @@ devs, 76% of candidates correctly rejected as repeat deployers) — the freshnes
 aggressive by design, not broken. The live paper harness (`live_paper.py`) now has the
 watchdog and an env-driven `SNIPER_VQ_CAP_SOL` (default 60) matching prod.
 
+## Exit for the v1.1 strategy: dump@8 beats the ladder (2026-08-25)
+
+`analysis/exit_compare.py` holds the frozen v1.1 entry fixed and swaps only the exit, all 4
+days, p99-trimmed net SOL/trade:
+
+  dump@8 +0.199 · dump@5 +0.192 · dump@3 +0.185 · **ladder +0.172** · dump@12 +0.169 ·
+  dump@1 +0.166 · dump@16 +0.145
+
+The ladder is profitable but ranks 4th — a single dump at slot 8 wins on all four days. The
+"their own exit beats every fixed dump" result elsewhere in this file is **E4Ez-specific**
+(measured on HIS positions); it does NOT transfer to our fresh-dev + confirmation entries,
+which are a different population. Exit-optimal is entry-population-dependent. The headline
+backtest and every live-paper session used the ladder, so their PnL is the +0.172 line —
+real and profitable, just ~0.03/trade below the dump@8 optimum. **Action for the Node
+seller (`src/pump.ts`): keep the single-dump exit (it already does this), just move
+`SELL_HOLD_MS` from 1600 (~slot 3-4) toward ~3000 (~slot 8). Do NOT build a ladder — it
+underperforms here.** `SNIPER_EXIT_LEGS` in .env is therefore unused by the winning exit;
+left in place only for the (worse) ladder variant.
+
+## Exit decision: ladder implemented in the seller (overrides the dump@8 note above)
+
+The dump@8-beats-ladder result (previous section) is true on MEAN but the live A/B
+(`live_paper.py` A/B mode: prices ladder/dump8/stop8/dump3 on the same live entries,
+`ab_summary.py` tallies) showed the ladder wins on tail-crash tokens — a token fine at slot 3
+that dev-dumps before slot 8 is saved by the ladder's unconditional slot-1 30% sell, while
+dump@8 and even a reactive stop (which lags a fast crash) eat it. Over the first 7 live
+tokens the ladder led. It trades mean for tail risk — E4Ez's reason. **Decision: run the
+ladder**, now implemented in `src/pump.ts`: scheduled legs 30/20/20/15/15 @ +1/+6/+9/+13/+18,
+force-out @24, per-leg stop (<=0.8x dump all) / moon (>=2x trim 5%), `minSolOutput=0`, partial
+legs keep the account open, synchronous `selling` lock prevents double-sells, final leg
+retry-hammers. `SELL_LADDER=0` reverts to the single dump. sell tip/priority still static —
+dynamic sell tip is the next money-path task. Overnight A/B (`data/ab_overnight.json`) running
+to confirm at scale and by size band.
+
+## Money-path audit fixes (2026-08-25)
+
+External audit of template→plan_buy→confirm→sender→nonce→gate→fill→Node ladder→sell. All
+findings verified against code before fixing; genuine ones fixed + tested.
+
+* **P0 #1 (DoA):** confirm-mode `on_buy` priced `plan_buy` with the dev buy only, dropping the
+  ≥4 SOL of confirmed flow → exact-token request blew past `max_sol_cost` → every confirm
+  fire reverted (0% fill). Fix: `ConfirmFire` carries `prior_flow_lamports = vq − VIRT_SOL_0`
+  (dev + confirmers, net) and lib.rs prices against it. vq is now all-net (dev buy fee-adjusted
+  to match confirmer accounting). Proven by `pumpfun::confirm_flow_must_be_priced_or_the_request
+  _exceeds_the_cap` (dev-only pricing exceeds cap; prior-flow pricing fits).
+* **P0 #3 (bulletproof backstop):** added orphan reconciliation in `src/pump.ts` — on boot +
+  every `RECONCILE_MS` (60s), enumerate the wallet's token accounts (both token programs),
+  force-out any untracked bag. Creator read from the bonding-curve account @byte 49
+  (`readCreatorBytes`); the seeded account needs no seed to sell. Catches every orphan path
+  (#2 dropped fill, #5 late nonce fill, #6 blip, crashes). This is what makes "always sell" true.
+* **P0 #2:** `server.rs` fill stream now skips a broadcast `Lagged` instead of ending; Node
+  `subscribeToFills` reconnects on `end`/`close`, not just `error` — seller can't go deaf.
+* **#6:** `position.rs` distinguishes RPC `Err` from `Ok(None)` — a blip after landing no longer
+  fakes a position close (which freed the gate mid-bag in sync mode).
+* **#7:** sell retry no longer blind-re-sends the same tokens (would double-sell a landed-but-
+  timed-out submit); failed final leg re-enters `runLeg` which re-reads the balance first.
+* **#8:** `sendTransactionHeliusSender` parses the JSON-RPC body — a rejected sell (HTTP 200 +
+  error) now throws instead of counting as a landed sell.
+* **#4:** `SNIPER_SLIPPAGE_BPS` 100→500 (cap is a loss bound, not a spend; 100 reverted when one
+  co-sniper landed ahead). Spend still ≈ budget via the haircut.
+* **#5:** late durable-nonce fills are covered by reconciliation (#3); advancing the nonce on
+  timeout to hard-invalidate is a documented future hardening, not yet built.
+
+Tests: Rust 61 (confirm 8 + tip 5 + pumpfun incl. the #1 regression + the rest), TS 21
+(`src/pumpFun/ladder.test.ts`, run with `npm test` / vitest) covering parseLegs, reserves +
+creator offsets, constant-product sellValue, valueMultiple, and every `decideLegSize` branch
+(normal leg / stop-dump / moon-trim / force-out / clamp / final detection). Ladder math is
+extracted to `src/pumpFun/ladder.ts` (pure, testable).
+
 ## Standing caveats
 
 The +0.5/trade figures come from a self-selected population of good operators. Copying E4Ez's

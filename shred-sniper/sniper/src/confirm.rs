@@ -246,7 +246,12 @@ pub enum Book {
 pub struct ConfirmFire {
     pub book: Book,
     pub budget_lamports: u64,
-    pub dev_buy_lamports: u64,
+    /// total net curve SOL ahead of our buy (dev buy + all confirming buys). Pass this to
+    /// `CurveParams::plan_buy` as the "SOL already in the curve" so the exact-token request
+    /// fits under `max_sol_cost` — our buy lands on top of all of it.
+    pub prior_flow_lamports: u64,
+    /// confirming buys seen in the create block at fire time (for dynamic tip sizing)
+    pub n_conf: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -270,9 +275,12 @@ pub struct LaunchWatch {
 
 impl LaunchWatch {
     pub fn new(dev_buy_lamports: u64) -> Self {
+        // vq is tracked in NET curve SOL (what actually reaches the curve). The dev buy is a
+        // gross max_sol_cost, so back the 1.25% fee out to match the confirming-buy accounting.
+        let dev_net = (dev_buy_lamports as u128 * 10_000 / 10_125) as u64;
         LaunchWatch {
-            dev_buy_lamports,
-            vq_lamports: VIRT_SOL_0.saturating_add(dev_buy_lamports),
+            dev_buy_lamports: dev_net,
+            vq_lamports: VIRT_SOL_0.saturating_add(dev_net),
             n_conf: 0,
             conf_lamports: 0,
             elite_ahead: false,
@@ -294,7 +302,15 @@ impl LaunchWatch {
         if self.vq_lamports >= p.vq_cap_lamports {
             return Err(Pass::CurveCapped);
         }
-        Ok(ConfirmFire { book, budget_lamports: budget, dev_buy_lamports: self.dev_buy_lamports })
+        Ok(ConfirmFire {
+            book,
+            budget_lamports: budget,
+            // total NET curve SOL ahead of our buy (dev + every confirming buy). This is what
+            // plan_buy must price against - our buy lands on TOP of all of it. Passing only the
+            // dev buy underprices the curve and the request blows past max_sol_cost on chain.
+            prior_flow_lamports: self.vq_lamports.saturating_sub(VIRT_SOL_0),
+            n_conf: self.n_conf,
+        })
     }
 
     /// Feed one confirming buy from the create block, in landing order. `sol_lamports` is what
@@ -409,7 +425,9 @@ mod tests {
         assert_eq!(fire.book, Book::Main);
         // ~5.9 SOL confirmed net * 0.47 = 2.78 -> snapped to 2.7
         assert_eq!(fire.budget_lamports, 2 * SOL + 7 * SOL / 10);
-        assert_eq!(fire.dev_buy_lamports, 2 * SOL);
+        // prior flow = dev + 3 confirmers, all net of the 1.25% fee (~4 x 1.975 SOL)
+        let net = 2u64 * SOL * 10_000 / 10_125;
+        assert_eq!(fire.prior_flow_lamports, 4 * net);
         assert_eq!(lw.on_buy(&key(4), SOL, &p), Err(Pass::Dead));
     }
 
@@ -423,6 +441,27 @@ mod tests {
             assert_eq!(lw.on_buy(&key(i), SOL / 2, &p), Err(Pass::Watching));
         }
         assert!(lw.on_buy(&key(7), 2 * SOL, &p).is_ok());
+    }
+
+    #[test]
+    fn prior_flow_is_net_sum_of_dev_and_all_confirmers() {
+        let _g = lock();
+        publish_watch(Watch::default());
+        let p = params();
+        let net = |gross: u64| (gross as u128 * 10_000 / 10_125) as u64;
+        let mut lw = LaunchWatch::new(SOL); // dev 1 SOL gross
+        lw.on_buy(&key(1), 2 * SOL, &p).unwrap_err();
+        lw.on_buy(&key(2), 3 * SOL, &p).unwrap_err();
+        let fire = lw.on_buy(&key(3), 1 * SOL, &p).unwrap(); // 6 SOL gross confirmed -> fires
+        // prior flow = net(dev) + net(2) + net(3) + net(1), all fee-adjusted
+        let expected = net(SOL) + net(2 * SOL) + net(3 * SOL) + net(SOL);
+        assert_eq!(fire.prior_flow_lamports, expected);
+        // budget scales with confirmed flow only (excludes the dev buy): clamp then snap 0.1
+        let conf = net(2 * SOL) + net(3 * SOL) + net(SOL);
+        let clamped =
+            ((conf as u128 * 4700 / 10_000) as u64).clamp(p.size_lo_lamports, p.size_hi_lamports);
+        let want = (clamped / 100_000_000 * 100_000_000).max(p.size_lo_lamports);
+        assert_eq!(fire.budget_lamports, want);
     }
 
     #[test]

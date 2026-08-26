@@ -159,6 +159,7 @@ fn hot(providers: usize, spinning: bool) -> (HotSniper, Vec<std::thread::JoinHan
         .0,
         ghost_mode: false,
         confirm: None,
+        tip: None,
     });
 
     let static_accounts = template::StaticAccounts {

@@ -17,6 +17,7 @@ crossbeam-channel = { workspace = true }
 ed25519-dalek = { version = "2.1.1", features = ["std"] }
 log = { workspace = true }
 memchr = "2"
+reqwest = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pki-types = "1"
 serde = { workspace = true }

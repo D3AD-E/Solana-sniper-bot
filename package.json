@@ -4,6 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "test": "vitest run",
     "start": "ts-node index.ts snipe",
     "start:minimal": "ts-node index.ts snipe-minimal",
     "analyze": "ts-node index.ts analyze",
@@ -20,7 +21,8 @@
     "grpc-tools": "^1.13.0",
     "prettier": "^3.2.5",
     "ts-node": "^10.9.2",
-    "typescript": "^5.4.4"
+    "typescript": "^5.4.4",
+    "vitest": "^3.2.7"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.30.1",

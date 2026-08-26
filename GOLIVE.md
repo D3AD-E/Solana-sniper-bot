@@ -35,6 +35,31 @@ size = clamp(0.47 × confirmed_SOL, 1.5, 3.5) SOL, snapped down to 0.1
 `SNIPER_SIZE_HI_SOL=2.0`; the strategy is unchanged, the tail is just capped lower.
 Bankroll for full size: ~20 SOL (max 3 concurrent × 3.5 + fee float), fund ~25.
 
+## Exit: laddered (implemented in the Node seller)
+
+On mean, dump@8 slightly beats the ladder in backtest (+0.199 vs +0.172). But the live A/B
+(`live_paper.py` A/B mode) showed the ladder wins on the **tail-crash tokens**: when a token
+is fine at slot 3 then dev-dumps before slot 8, the ladder's *unconditional* 30%-at-slot-1
+sale saves the position while a fixed dump@8 (and even a reactive stop, which lags a fast
+crash) eats the full loss. Over the first 7 live tokens the ladder led. The ladder trades a
+little mean for much lower tail risk — E4Ez's reason for using it. **Decision: run the
+ladder.**
+
+Implemented in `src/pump.ts` (typechecks clean):
+- Scheduled legs 30/20/20/15/15 at slots +1/+6/+9/+13/+18, force-out @+24
+  (`SELL_LADDER_LEGS`, `SELL_LAST_SLOT`, `SELL_SLOT_MS=400`).
+- Per-leg price override: `<= SELL_STOP_X` (0.8) dumps all; `>= SELL_MOON_X` (2.0) trims
+  `SELL_MOON_FRAC` (0.05) and keeps riding.
+- `minSolOutput=0` (never reverts — always exits), partial legs don't close the account,
+  final leg closes. Per-position `selling` lock acquired synchronously so two legs can never
+  double-sell. Final leg retry-hammers so we never get stuck holding.
+- **Escape hatch `SELL_LADDER=0`** → old single dump at `SELL_HOLD_MS`, instant fallback.
+
+Still static and worth making dynamic next: `SELL_TIP_LAMPORTS` / `SELL_CU_PRICE` — laddered
+legs each compete to land, so a competitive dynamic sell tip (extend `tip.rs`'s logic) is the
+follow-up that keeps legs landing first try. Confirm the ladder at scale with the overnight
+A/B before trusting it live.
+
 ## 1. Code — DONE, pending full-crate compile on Linux
 
 - [x] Buy decoder `pumpfun::parse_buy` (create-block buys) + test.

@@ -9,6 +9,15 @@ import { ShredstreamProxyClient } from './generated/shredstream/shredstream_grpc
 import { SubscribeFillsRequest, Fill } from './generated/shredstream/shredstream_pb';
 import { fetchPumpGlobal, PumpGlobal, Position, sellPosition, amountFromAccountData } from './pumpFun';
 import { sendTransactionHeliusSender, HELIUS_SENDER_TIP_ACCOUNTS } from './keepAliveHttp/healthCheck';
+import { getAssociatedTokenAddressSync } from '@solana/spl-token';
+import {
+  PUMP_PROGRAM,
+  TOKEN_PROGRAM,
+  TOKEN_2022_PROGRAM,
+  ASSOCIATED_TOKEN_PROGRAM,
+  SEED_BONDING_CURVE,
+} from './pumpFun/constants';
+import { parseLegs, readReserves, valueMultiple, decideLegSize, readCreatorBytes } from './pumpFun/ladder';
 
 /**
  * Node process: sells, telemetry, telegram. It never touches the buy path.
@@ -29,6 +38,12 @@ type OpenPosition = Position & {
   subscription?: number;
   selling: boolean;
   timer?: NodeJS.Timeout;
+  // ladder exit state
+  original: bigint;            // token balance at confirmation
+  remaining: bigint;           // tokens still held
+  entryCostLamports: bigint;   // SOL spent on the buy (cost basis)
+  legTimers: NodeJS.Timeout[]; // scheduled ladder legs, cleared on full exit
+  done: boolean;               // position fully closed
 };
 
 const positions = new Map<string, OpenPosition>();
@@ -52,6 +67,45 @@ const SELL_CU_PRICE = BigInt(process.env.SELL_CU_PRICE ?? 100_000);
 const SELL_TIP_LAMPORTS = BigInt(process.env.SELL_TIP_LAMPORTS ?? 1_000_000);
 const PROXY_PORT = process.env.SHREDSTREAM_GRPC_PORT ?? '9999';
 
+/**
+ * Laddered exit, matching E4EzXdwf's behaviour and the backtested/validated ladder.
+ *
+ * Sells the position in scheduled legs rather than one dump: 30% at slot +1, 20% at +6/+9,
+ * 15% at +13/+18, and whatever remains at +24. The early unconditional legs are what protect
+ * against a dev dump between slots (the live A/B showed the schedule, not a reactive stop,
+ * saves the fast-crash tokens). Two price-conditional overrides at each leg: if the position
+ * has fallen to <= STOP_X of cost, dump everything now; if it is >= MOON_X, trim only
+ * MOON_FRAC and keep riding.
+ *
+ * SELL_LADDER=0 falls back to the old single dump at HOLD_AFTER_CONFIRM_MS - an instant
+ * escape hatch if the ladder ever misbehaves live.
+ */
+const USE_LADDER = (process.env.SELL_LADDER ?? '1') === '1';
+const SLOT_MS = Number(process.env.SELL_SLOT_MS ?? 400);
+const LADDER_LEGS: Array<[number, number]> =
+  parseLegs(process.env.SELL_LADDER_LEGS) ?? [
+    [1, 0.30], [6, 0.20], [9, 0.20], [13, 0.15], [18, 0.15],
+  ];
+const LADDER_LAST_SLOT = Number(process.env.SELL_LAST_SLOT ?? 24);
+const STOP_X = Number(process.env.SELL_STOP_X ?? 0.8);
+const MOON_X = Number(process.env.SELL_MOON_X ?? 2.0);
+const MOON_FRAC = Number(process.env.SELL_MOON_FRAC ?? 0.05);
+const DUST = 1000n; // ignore sub-dust remainders when deciding a position is closed
+const RECONCILE_MS = Number(process.env.RECONCILE_MS ?? 60_000);
+
+/** current value multiple of the remaining position vs its cost basis; null if unreadable */
+async function currentMultiple(p: OpenPosition): Promise<number | null> {
+  try {
+    const info = await solanaConnection.getAccountInfo(p.bondingCurve, 'processed');
+    if (!info) return null;
+    const r = readReserves(info.data as Buffer);
+    if (!r) return null;
+    return valueMultiple(r.vSol, r.vToken, p.remaining, p.original, p.entryCostLamports);
+  } catch {
+    return null;
+  }
+}
+
 eventEmitter.on(USER_STOP_EVENT, () => {
   softExit = true;
 });
@@ -66,16 +120,31 @@ export default async function snipe(isMinimalRun: boolean = false): Promise<void
   sendMessage(`Seller started${isMinimalRun ? ' (minimal)' : ''}`);
 
   subscribeToFills(PROXY_PORT);
+
+  // backstop: force-out any bag we are not tracking, on boot and on a timer. This is what
+  // makes "we always sell" true even when a fill was dropped or a buy landed late.
+  reconcileOrphans().catch((e) => logger.warn(`initial reconcile failed: ${(e as Error).message}`));
+  setInterval(() => {
+    reconcileOrphans().catch((e) => logger.warn(`reconcile failed: ${(e as Error).message}`));
+  }, RECONCILE_MS);
 }
 
 function subscribeToFills(port: string) {
   const client = new ShredstreamProxyClient(`localhost:${port}`, credentials.createInsecure());
   const stream = client.subscribeFills(new SubscribeFillsRequest());
 
-  stream.on('error', (err) => {
-    logger.warn(`fills stream error: ${err.message}`);
+  let reconnected = false;
+  const reconnect = (why: string) => {
+    if (reconnected) return; // 'error' and 'end' can both fire; reconnect once
+    reconnected = true;
+    logger.warn(`fills stream ${why}, resubscribing`);
     setTimeout(() => subscribeToFills(port), 1000);
-  });
+  };
+  stream.on('error', (err) => reconnect(`error: ${err.message}`));
+  // a broadcast lag on the proxy ends the gRPC stream cleanly (no 'error'); without this the
+  // seller would go permanently deaf while the sniper keeps buying.
+  stream.on('end', () => reconnect('ended'));
+  stream.on('close', () => reconnect('closed'));
 
   stream.on('data', (fill: Fill) => {
     const mint = new PublicKey(fill.getMint_asU8());
@@ -93,6 +162,11 @@ function subscribeToFills(port: string) {
       slot: fill.getSlot(),
       detectedAt: Date.now(),
       selling: false,
+      original: 0n,
+      remaining: 0n,
+      entryCostLamports: BigInt(fill.getMaxSolCost() || 0), // cost basis for the ladder's multiple
+      legTimers: [],
+      done: false,
     };
     positions.set(key, position);
     watchForConfirmation(key, position);
@@ -110,10 +184,17 @@ function watchForConfirmation(key: string, position: OpenPosition) {
       const amount = amountFromAccountData(account.data as Buffer);
       if (amount === 0n || position.confirmedAt) return;
       position.confirmedAt = Date.now();
+      position.original = amount;
+      position.remaining = amount;
       logger.info(
         `buy confirmed ${key} amount ${amount} after ${position.confirmedAt - position.detectedAt}ms`,
       );
-      position.timer = setTimeout(() => exitPosition(key, amount), HOLD_AFTER_CONFIRM_MS);
+      if (USE_LADDER) {
+        scheduleLadder(key);
+      } else {
+        // escape hatch: single dump at the old fixed hold
+        position.timer = setTimeout(() => runLeg(key, LADDER_LAST_SLOT, null), HOLD_AFTER_CONFIRM_MS);
+      }
     },
     'processed' as Commitment,
   );
@@ -128,48 +209,216 @@ function watchForConfirmation(key: string, position: OpenPosition) {
   }, BUY_TIMEOUT_MS);
 }
 
-async function exitPosition(key: string, amount: bigint) {
-  const position = positions.get(key);
-  if (!position || position.selling || !pumpGlobal) return;
-  position.selling = true;
+/** Schedules every ladder leg plus the force-out. Legs fire on wall-clock timers measured
+ *  from confirmation; each is guarded so a fired-then-closed position is a no-op. */
+function scheduleLadder(key: string) {
+  const p = positions.get(key);
+  if (!p) return;
+  const legs: Array<[number, number | null]> = [
+    ...LADDER_LEGS.filter(([slot]) => slot < LADDER_LAST_SLOT),
+    [LADDER_LAST_SLOT, null], // force-out: sell whatever remains
+  ];
+  p.legTimers = legs.map(([slot, frac]) =>
+    setTimeout(() => {
+      runLeg(key, slot, frac).catch((e) =>
+        logger.warn(`${key}: leg slot+${slot} errored: ${(e as Error).message}`),
+      );
+    }, Math.max(0, slot * SLOT_MS)),
+  );
+}
 
+/** One ladder leg. `frac` is the fraction of the ORIGINAL position to sell, or null for the
+ *  force-out (sell everything remaining). Price overrides: <=STOP_X dumps all now, >=MOON_X
+ *  trims only MOON_FRAC. A failed reserve read never blocks the scheduled sell.
+ *
+ *  `p.selling` is the per-position lock: acquired SYNCHRONOUSLY here before any await, so two
+ *  legs whose timers fire together can never both send a sell (which would double-spend). */
+async function runLeg(key: string, slot: number, frac: number | null): Promise<void> {
+  const p = positions.get(key);
+  if (!p || p.done || p.selling || !pumpGlobal) return;
+  p.selling = true; // lock, synchronously, before the first await
   try {
-    // Helius Sender takes staked connections and wants its own tip
-    const signature = await sellPosition(solanaConnection, wallet, pumpGlobal, position, amount, {
+    // re-read the on-chain balance so retries and partial fills stay correct
+    let remaining = p.remaining;
+    try {
+      const info = await solanaConnection.getAccountInfo(p.tokenAccount, 'processed');
+      if (info) remaining = amountFromAccountData(info.data as Buffer);
+    } catch {
+      /* fall through with the tracked remaining */
+    }
+    if (remaining <= DUST) {
+      p.remaining = 0n;
+      p.done = true;
+      return; // finalize handled in the finally via done
+    }
+    p.remaining = remaining;
+
+    const m = await currentMultiple(p);
+    const { sellTokens, isFinal } = decideLegSize(p.original, remaining, frac, m, {
+      stopX: STOP_X,
+      moonX: MOON_X,
+      moonFrac: MOON_FRAC,
+      dust: DUST,
+    });
+    if (sellTokens <= 0n) return;
+
+    await sendSell(key, p, sellTokens, isFinal, slot);
+  } finally {
+    if (p) p.selling = false;
+  }
+  // release happened above; act on terminal state outside the lock
+  const done = positions.get(key)?.done;
+  if (done) await finalize(key);
+}
+
+/** Sends one sell (partial or final). Caller holds the `selling` lock, so exactly one send is
+ *  in flight per position. minSolOutput 0 so it never reverts on price - on an exit we take the
+ *  fill. Closes the account only on the final leg.
+ *
+ *  A single submit only. On failure we NEVER blindly re-send the same token amount: a submit
+ *  that actually landed but whose HTTP response timed out would then sell twice. Instead a
+ *  failed final leg schedules a fresh runLeg force-out, which re-reads the on-chain balance
+ *  before deciding how much to sell - so a double-fill is impossible. A failed partial leg is
+ *  simply left for the next scheduled leg (which also re-reads); the tokens roll forward. */
+async function sendSell(
+  key: string,
+  p: OpenPosition,
+  tokens: bigint,
+  isFinal: boolean,
+  slot: number,
+): Promise<void> {
+  try {
+    const signature = await sellPosition(solanaConnection, wallet, pumpGlobal!, p, tokens, {
       cuPrice: SELL_CU_PRICE,
       tipAccount: HELIUS_SENDER_TIP_ACCOUNTS[Math.floor(Math.random() * HELIUS_SENDER_TIP_ACCOUNTS.length)],
       tipLamports: SELL_TIP_LAMPORTS,
+      minSolOutput: 0n,
+      close: isFinal,
       sender: sendTransactionHeliusSender,
     });
-    const held = position.confirmedAt ? Date.now() - position.confirmedAt : 0;
-    logger.info(`sold ${key} amount ${amount} held ${held}ms https://solscan.io/tx/${signature}`);
-    sendMessage(`Sold ${key}`);
+    p.remaining = p.remaining > tokens ? p.remaining - tokens : 0n;
+    logger.info(
+      `sold ${key} slot+${slot} tokens ${tokens} ${isFinal ? 'FINAL' : 'leg'} ` +
+        `remaining ${p.remaining} https://solscan.io/tx/${signature}`,
+    );
+    if (isFinal) p.done = true;
+  } catch (e) {
+    logger.warn(`${key}: sell slot+${slot} failed: ${(e as Error).message}`);
+    // final leg must eventually close: re-enter runLeg (re-reads balance, never double-sells).
+    if (isFinal && !softExit) {
+      setTimeout(() => runLeg(key, LADDER_LAST_SLOT, null).catch(() => {}), 1200);
+    }
+    // partial leg: leave it; the next scheduled leg re-reads and covers the remainder.
+  }
+}
 
+/** Confirms the account is empty, reports, and cleans up. */
+async function finalize(key: string) {
+  const p = positions.get(key);
+  if (!p) return;
+  try {
     await new Promise((resolve) => setTimeout(resolve, 4000));
-    const info = await solanaConnection.getAccountInfo(position.tokenAccount, 'confirmed');
-    if (info && amountFromAccountData(info.data) > 0n) {
-      logger.warn(`${key}: still holding, retrying sell`);
-      position.selling = false;
-      setTimeout(() => exitPosition(key, amountFromAccountData(info.data)), 1000);
+    const info = await solanaConnection.getAccountInfo(p.tokenAccount, 'confirmed');
+    if (info && amountFromAccountData(info.data) > DUST) {
+      logger.warn(`${key}: still holding after final leg, dumping remainder`);
+      p.done = false;
+      p.remaining = amountFromAccountData(info.data);
+      await runLeg(key, LADDER_LAST_SLOT, null); // re-acquire lock, force-out; re-finalizes on success
       return;
     }
-    cleanup(key);
-    await reportBalance();
-  } catch (e) {
-    logger.warn(`${key}: sell failed: ${(e as Error).message}`);
-    position.selling = false;
-    if (!softExit) setTimeout(() => exitPosition(key, amount), 1200);
+  } catch {
+    /* best-effort verification */
   }
+  sendMessage(`Closed ${key}`);
+  cleanup(key);
+  await reportBalance();
 }
 
 function cleanup(key: string) {
   const position = positions.get(key);
   if (!position) return;
   if (position.timer) clearTimeout(position.timer);
+  for (const t of position.legTimers) clearTimeout(t);
   if (position.subscription !== undefined) {
     solanaConnection.removeAccountChangeListener(position.subscription).catch(() => {});
   }
   positions.delete(key);
+}
+
+/**
+ * Orphan reconciliation - the real backstop that makes "always sell" true. A bag can slip the
+ * tracker any number of ways: the fill was dropped because the seller was down, a durable-nonce
+ * buy landed after we gave up, an RPC blip, a crash. None of those are recoverable from the
+ * fill stream. So on boot and every RECONCILE_MS, enumerate the wallet's own token accounts and
+ * force-out anything held that we are not already tracking. Bags cannot be held forever.
+ *
+ * The seeded token account is not an ATA, but we do not need the seed to sell it: the sell only
+ * needs the account address (which the enumeration gives) plus the mint's derivable curve
+ * accounts and the creator, which is read from the bonding-curve account.
+ */
+async function reconcileOrphans(): Promise<void> {
+  for (const program of [TOKEN_PROGRAM, TOKEN_2022_PROGRAM]) {
+    try {
+      const resp = await solanaConnection.getParsedTokenAccountsByOwner(wallet.publicKey, {
+        programId: program,
+      });
+      for (const { pubkey, account } of resp.value) {
+        const info = (account.data as any).parsed?.info;
+        if (!info) continue;
+        const amountRaw = BigInt(info.tokenAmount?.amount ?? '0');
+        if (amountRaw <= DUST) continue;
+        const mint = new PublicKey(info.mint);
+        const key = mint.toBase58();
+        if (positions.has(key)) continue; // already tracked/selling
+
+        const bondingCurve = PublicKey.findProgramAddressSync(
+          [SEED_BONDING_CURVE, mint.toBuffer()],
+          PUMP_PROGRAM,
+        )[0];
+        const curveInfo = await solanaConnection.getAccountInfo(bondingCurve, 'confirmed');
+        const creatorBytes = curveInfo ? readCreatorBytes(curveInfo.data) : null;
+        if (!creatorBytes) {
+          logger.warn(`orphan ${key}: creator unreadable, leaving for manual review`);
+          sendMessage(`ORPHAN ${key} bal ${amountRaw} - cannot auto-sell (no creator)`);
+          continue;
+        }
+        const creator = new PublicKey(creatorBytes);
+        const associatedBondingCurve = getAssociatedTokenAddressSync(
+          mint,
+          bondingCurve,
+          true,
+          program,
+          ASSOCIATED_TOKEN_PROGRAM,
+        );
+        const position: OpenPosition = {
+          mint,
+          tokenAccount: pubkey,
+          seed: '',
+          tokenProgram: program,
+          bondingCurve,
+          associatedBondingCurve,
+          creator,
+          slot: 0,
+          detectedAt: Date.now(),
+          confirmedAt: Date.now(),
+          selling: false,
+          original: amountRaw,
+          remaining: amountRaw,
+          entryCostLamports: 0n, // unknown -> force-out ignores the price multiple
+          legTimers: [],
+          done: false,
+        };
+        positions.set(key, position);
+        logger.warn(`RECONCILE orphan ${key} balance ${amountRaw} - forcing out`);
+        sendMessage(`Reconciling orphan ${key}`);
+        runLeg(key, LADDER_LAST_SLOT, null).catch((e) =>
+          logger.warn(`reconcile ${key} force-out failed: ${(e as Error).message}`),
+        );
+      }
+    } catch (e) {
+      logger.warn(`reconcile sweep (${program.toBase58().slice(0, 4)}) failed: ${(e as Error).message}`);
+    }
+  }
 }
 
 async function reportBalance() {
