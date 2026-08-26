@@ -148,6 +148,7 @@ fn hot(providers: usize, spinning: bool) -> (HotSniper, Vec<std::thread::JoinHan
         seed_table: template::SeedTable::build(&buyer, 1, 1024).expect("seed table"),
         gate: crate::position::start(
             "http://127.0.0.1:1".to_string(),
+            String::new(),
             crate::position::ModeConfig {
                 // the benchmark measures the fire path, not the one-at-a-time gate
                 sync_mode: false,

@@ -251,9 +251,13 @@ pub struct SniperConfig {
     /// buy is known to have failed. Off means positions may overlap.
     #[serde(default = "SniperConfig::default_true")]
     pub sync_mode: bool,
-    /// Stop after one completed round trip, a buy that landed and a sell that closed it.
+    /// Stop after `test_trips` completed round trips, each a buy that landed and a sell
+    /// that closed it. Lost races and reverted buys do not count.
     #[serde(default)]
     pub test_mode: bool,
+    /// How many landed round trips test mode allows before disarming (default 1).
+    #[serde(default = "SniperConfig::default_test_trips")]
+    pub test_trips: u32,
     /// Never touch the chain. Buys are priced, recorded and exited on paper against the real
     /// curve, so a strategy can be measured without spending anything.
     #[serde(default)]
@@ -300,6 +304,9 @@ impl SniperConfig {
     }
     fn default_true() -> bool {
         true
+    }
+    fn default_test_trips() -> u32 {
+        1
     }
     fn default_hold_ms() -> u64 {
         1_600
@@ -364,6 +371,11 @@ impl SniperConfig {
         }
         if let Some(v) = flag("SNIPER_TEST_MODE") {
             self.test_mode = v;
+        }
+        if let Ok(v) = std::env::var("SNIPER_TEST_TRIPS") {
+            if let Ok(n) = v.trim().parse() {
+                self.test_trips = n;
+            }
         }
         if let Some(v) = flag("SNIPER_GHOST_MODE") {
             self.ghost_mode = v;

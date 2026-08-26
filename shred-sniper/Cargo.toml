@@ -31,7 +31,9 @@ serde_json = "1"
 signal-hook = "0.3"
 solana-client = "=2.2.1"
 solana-entry = "=2.2.1"
-solana-ledger = { git = "https://github.com/jito-foundation/jito-solana.git", branch = "eric/v2.2-merkle-recovery" }
+# pinned by rev: the eric/v2.2-merkle-recovery branch was deleted upstream (2026-08, shredstream
+# sunset); the commit itself is still fetchable and is what Cargo.lock always resolved to.
+solana-ledger = { git = "https://github.com/jito-foundation/jito-solana.git", rev = "cafa3ba4d4c6c3702d13545d9b434861ebc06036" }
 solana-metrics = "=2.2.1"
 solana-net-utils = "=2.2.1"
 solana-perf = "=2.2.1"

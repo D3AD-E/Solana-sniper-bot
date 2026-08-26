@@ -16,7 +16,6 @@ import {
   PUMP_PROGRAM,
   SEED_BONDING_CURVE_V2,
   SEED_CREATOR_VAULT,
-  SEED_USER_VOLUME_ACCUMULATOR,
   SYSTEM_PROGRAM,
 } from './constants';
 import { PumpGlobal } from './global';
@@ -56,10 +55,16 @@ export type Position = {
 /**
  * pump.fun `sell`, built by hand.
  *
- * The deployed program takes 14 IDL accounts plus three remaining accounts:
- * `user_volume_accumulator`, `bonding_curve_v2` and a buyback fee recipient. Note the order
- * differs from `buy`: `creator_vault` comes before `token_program` here, and there is no
+ * The deployed program takes 14 IDL accounts plus TWO remaining accounts, in order:
+ * `bonding_curve_v2` then a buyback fee recipient. Note the order differs from `buy`:
+ * `creator_vault` comes before `token_program` here, and there is no
  * `global_volume_accumulator`.
+ *
+ * `user_volume_accumulator` was REMOVED from sell by a pump upgrade (verified 2026-08-26):
+ * when a token's buyback fee tier is active the program validates remaining[0] as
+ * bonding_curve_v2, and an accumulator sitting there fails with InvalidBondingCurveV2 (6074)
+ * — which trapped a live bag on mint BxPwpob5… until it was exited by hand. The layout here
+ * matches a verified successful sell (tx 2eCGyjeB…).
  */
 export function sellInstruction(
   global: PumpGlobal,
@@ -70,7 +75,6 @@ export function sellInstruction(
 ): TransactionInstruction {
   const creatorVault = pda([SEED_CREATOR_VAULT, position.creator.toBuffer()], PUMP_PROGRAM);
   const bondingCurveV2 = pda([SEED_BONDING_CURVE_V2, position.mint.toBuffer()], PUMP_PROGRAM);
-  const userVolumeAccumulator = pda([SEED_USER_VOLUME_ACCUMULATOR, seller.toBuffer()], PUMP_PROGRAM);
 
   return new TransactionInstruction({
     programId: PUMP_PROGRAM,
@@ -89,7 +93,6 @@ export function sellInstruction(
       ro(PUMP_PROGRAM),
       ro(FEE_CONFIG),
       ro(FEE_PROGRAM),
-      rw(userVolumeAccumulator),
       rw(bondingCurveV2),
       rw(global.buybackFeeRecipients[0]),
     ],

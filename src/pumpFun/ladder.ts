@@ -75,6 +75,10 @@ export function decideLegSize(
   if (sellTokens > remaining) sellTokens = remaining;
   if (sellTokens < 0n) sellTokens = 0n;
   const isFinal = dumpAll || remaining - sellTokens <= opts.dust;
+  // the final leg closes the token account, and Token-2022 refuses to close a non-empty
+  // account — a fractional leg that leaves even 1 raw token reverts the whole sell (seen
+  // live: leg+18 of mint 2j6sw4Wy…, 2026-08-26). Final always sells the full remainder.
+  if (isFinal) sellTokens = remaining;
   return { sellTokens, isFinal };
 }
 

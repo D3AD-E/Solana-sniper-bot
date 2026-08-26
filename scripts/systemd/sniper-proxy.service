@@ -13,7 +13,7 @@ EnvironmentFile=-@REPO@/.env
 ExecStart=@REPO@/jito-shredstream-proxy shredstream \
   --block-engine-url https://frankfurt.mainnet.block-engine.jito.wtf \
   --auth-keypair @REPO@/shred-sniper/auth.json \
-  --desired-regions ${NODE_REGION} \
+  --desired-regions frankfurt \
   --dest-ip-ports 127.0.0.1:9900 \
   --sniper-config @REPO@/shred-sniper/sniper.json \
   --grpc-service-port 9999

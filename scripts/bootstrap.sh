@@ -85,6 +85,8 @@ else
 fi
 # rust-toolchain.toml pins the version; this makes rustup fetch it now rather than mid-build
 as_user "cd '$RUST_DIR' && rustup show active-toolchain || rustup toolchain install \$(grep -oP 'channel = \"\\K[^\"]+' rust-toolchain.toml)"
+# rust-native/ has no toolchain file, so builds outside shred-sniper need a rustup default
+as_user "rustup default \$(grep -oP 'channel = \"\\K[^\"]+' '$RUST_DIR/rust-toolchain.toml') 2>/dev/null || rustup default stable" || true
 note "toolchain: $(as_user "cd '$RUST_DIR' && rustc --version" 2>/dev/null || echo unknown)"
 
 step "Node.js"
@@ -126,7 +128,9 @@ as_user "cd '$REPO_DIR' && npm ci --silent 2>/dev/null || npm install --silent"
 as_user "cd '$REPO_DIR/rust-native' && \
   export CARGO_TARGET_DIR='$TARGET_DIR/napi' OPENSSL_NO_VENDOR=1 && \
   npx --yes @napi-rs/cli@2 build --release"
-as_user "cd '$REPO_DIR' && npx tsc"
+# npm run build = tsc + copying proto/, generated/ grpc stubs and the napi addon into dist —
+# bare tsc leaves dist without them and the seller dies with MODULE_NOT_FOUND
+as_user "cd '$REPO_DIR' && npm run build"
 note "seller built"
 
 step "Configuration"

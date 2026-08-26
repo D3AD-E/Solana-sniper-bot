@@ -213,14 +213,19 @@ pub fn parse_create(tx: &VersionedTransaction) -> Option<PumpCreateInfo> {
 /// accounts: 0 mint, 1 mint_authority, 2 bonding_curve, 3 associated_bonding_curve,
 ///           4 global, 5 user, 6 system, 7 token_2022, ...
 /// args: name:String, symbol:String, uri:String, creator:Pubkey,
-///       is_mayhem_mode:bool, is_cashback_enabled:OptionBool
+///       is_mayhem_mode:bool, is_cashback_enabled:Option<bool>
+///
+/// The trailing fields are VARIABLE length (borsh Option<bool>: None = 1 byte, Some = 2),
+/// so the creator must be located by walking the three strings forward, never by a fixed
+/// offset from the end. A tail-anchored read shifted by one byte produced a garbage creator
+/// and a creator_vault that failed ConstraintSeeds on-chain (tx YMLcoHDw…, 2026-08-26).
 #[inline(always)]
 fn read_create_v2(keys: &[Pubkey], ix: &CompiledInstruction) -> Option<PumpCreateInfo> {
     Some(PumpCreateInfo {
         mint: *key_at(keys, ix, 0)?,
         bonding_curve: *key_at(keys, ix, 2)?,
         associated_bonding_curve: *key_at(keys, ix, 3)?,
-        creator: trailing_pubkey(&ix.data, 2)?,
+        creator: creator_after_strings(&ix.data)?,
         user: *key_at(keys, ix, 5)?,
         token_program: *key_at(keys, ix, 7).unwrap_or(&TOKEN_2022_PROGRAM),
         dev_buy_lamports: 0,
@@ -237,7 +242,7 @@ fn read_create(keys: &[Pubkey], ix: &CompiledInstruction) -> Option<PumpCreateIn
         mint: *key_at(keys, ix, 0)?,
         bonding_curve: *key_at(keys, ix, 2)?,
         associated_bonding_curve: *key_at(keys, ix, 3)?,
-        creator: trailing_pubkey(&ix.data, 0)?,
+        creator: creator_after_strings(&ix.data)?,
         user: *key_at(keys, ix, 7)?,
         token_program: *key_at(keys, ix, 9).unwrap_or(&TOKEN_PROGRAM),
         dev_buy_lamports: 0,
@@ -250,16 +255,17 @@ fn key_at<'a>(keys: &'a [Pubkey], ix: &CompiledInstruction, pos: usize) -> Optio
     keys.get(*ix.accounts.get(pos)? as usize)
 }
 
-/// Reads the `creator` pubkey argument, which sits `tail_bytes` before the end of the
-/// instruction data (create: nothing after it, create_v2: is_mayhem_mode + OptionBool).
+/// Reads the `creator` pubkey argument by walking the three length-prefixed borsh strings
+/// (name, symbol, uri) that precede it. Exact for both create and create_v2 regardless of
+/// how many trailing flag bytes follow — those vary (Option<bool> None = 1 byte, Some = 2).
 #[inline(always)]
-fn trailing_pubkey(data: &[u8], tail_bytes: usize) -> Option<Pubkey> {
-    let end = data.len().checked_sub(tail_bytes)?;
-    let start = end.checked_sub(32)?;
-    if start < 8 {
-        return None;
+fn creator_after_strings(data: &[u8]) -> Option<Pubkey> {
+    let mut off = 8usize; // discriminator
+    for _ in 0..3 {
+        let len = u32::from_le_bytes(data.get(off..off + 4)?.try_into().ok()?) as usize;
+        off = off.checked_add(4 + len)?;
     }
-    let bytes: [u8; 32] = data.get(start..end)?.try_into().ok()?;
+    let bytes: [u8; 32] = data.get(off..off + 32)?.try_into().ok()?;
     Some(Pubkey::new_from_array(bytes))
 }
 
@@ -598,7 +604,7 @@ mod tests {
         let data = hex_to_vec(CREATE_V2_DATA);
         assert_eq!(data.len(), 146);
         assert_eq!(&data[..8], &DISC_CREATE_V2);
-        let creator = trailing_pubkey(&data, 2).unwrap();
+        let creator = creator_after_strings(&data).unwrap();
         assert_eq!(
             creator.to_bytes(),
             [
@@ -607,6 +613,37 @@ mod tests {
                 0xb6, 0x5b, 0x30, 0x93
             ]
         );
+    }
+
+    /// The trailing flags after `creator` vary in length: Option<bool> None is ONE byte,
+    /// Some(x) is two. A tail-anchored creator read is off by one on the None variant —
+    /// that exact bug produced a wrong creator_vault and an on-chain ConstraintSeeds revert
+    /// (mint 72cp8YEP…, tx YMLcoHDw…, 2026-08-26). Forward parsing must be immune to any
+    /// tail length, including future appended fields.
+    #[test]
+    fn creator_read_is_immune_to_variable_trailing_flags() {
+        let creator = Pubkey::new_unique();
+        let build = |tail: &[u8]| {
+            let mut d = Vec::new();
+            d.extend_from_slice(&DISC_CREATE_V2);
+            for s in ["CHILL PISTACIO", "CHILLPIST", "https://ipfs.io/ipfs/bafkrei"] {
+                d.extend_from_slice(&(s.len() as u32).to_le_bytes());
+                d.extend_from_slice(s.as_bytes());
+            }
+            d.extend_from_slice(&creator.to_bytes());
+            d.extend_from_slice(tail);
+            d
+        };
+        for tail in [&[0u8][..], &[0, 1][..], &[1, 1, 7][..], &[][..]] {
+            assert_eq!(
+                creator_after_strings(&build(tail)),
+                Some(creator),
+                "tail {tail:?}"
+            );
+        }
+        // truncated data must refuse, not misread
+        let d = build(&[0]);
+        assert_eq!(creator_after_strings(&d[..d.len() - 40]), None);
     }
 
     #[test]

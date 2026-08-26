@@ -19,10 +19,17 @@ MODE="${2:-}"
 DEST="${SNIPER_DEST:-/opt/sniper}"
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# first run: the destination may not exist and /opt is root-owned
+ssh "$HOST" "[ -d '$DEST' ] || sudo mkdir -p '$DEST' && sudo chown \$(id -un): '$DEST'"
+
+# box-generated artifacts (built binary, exported tables, whitelist, generated config) must
+# be excluded or --delete removes them on every sync
 rsync -az --delete --info=stats1 \
   --exclude .git --exclude node_modules --exclude target --exclude dist \
   --exclude 'analysis/data/replay*' --exclude 'analysis/data/*.jsonl' \
-  --exclude '*.lock' --exclude 'shred-sniper/sniper.json' \
+  --exclude 'yarn.lock' --exclude 'pnpm-lock.yaml' --exclude 'shred-sniper/sniper.json' \
+  --exclude 'jito-shredstream-proxy' --exclude 'dev_history.txt' \
+  --exclude 'watch_wallets.tsv' --exclude 'shred-sniper/whitelist.txt' \
   "$SRC/" "$HOST:$DEST/"
 ssh "$HOST" "chmod 600 '$DEST/.env' 2>/dev/null || true"
 # sniper.json is generated from .env and carries API keys - never clobber the box's copy with a

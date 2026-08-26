@@ -169,6 +169,7 @@ fn main() {
         "cu_limit": num("SNIPER_CU_LIMIT", 90_000),
         "sync_mode": get_or("SNIPER_SYNC_MODE", "1") != "0",
         "test_mode": get("SNIPER_TEST_MODE") == "1",
+        "test_trips": num("SNIPER_TEST_TRIPS", 1),
         "ghost_mode": get("SNIPER_GHOST_MODE") == "1",
         "hold_ms": num("SNIPER_HOLD_MS", 1_600),
         "position_poll_ms": num("SNIPER_POSITION_POLL_MS", 200),

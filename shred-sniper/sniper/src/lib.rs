@@ -218,6 +218,7 @@ impl Sniper {
         let modes = ModeConfig {
             sync_mode: cfg.sync_mode,
             test_mode: cfg.test_mode,
+            test_trips: cfg.test_trips,
             ghost_mode: cfg.ghost_mode,
             hold_ms: cfg.hold_ms,
             poll_ms: cfg.position_poll_ms,
@@ -231,7 +232,13 @@ impl Sniper {
             info!("sniper: ghost mode, nothing will be sent to a provider");
         }
         let (gate, gate_thread) =
-            position::start(cfg.rpc_url.clone(), modes, global.curve, exit.clone());
+            position::start(
+                cfg.rpc_url.clone(),
+                cfg.keypair_path.clone(),
+                modes,
+                global.curve,
+                exit.clone(),
+            );
         threads.push(gate_thread);
 
         // start the seed counter somewhere unpredictable, so a restart cannot collide with a
@@ -740,6 +747,7 @@ impl HotSniper {
                 // is the pre-slippage-pad spend (what the old max_sol_cost/(1+slip)
                 // arithmetic reconstructed); under buy_exact_sol_in it is sol_in exactly.
                 cost: plan.budget_lamports,
+                nonce_account: Pubkey::new_from_array(nonce_account),
                 ghost: true,
             });
             m.fired.fetch_add(1, Ordering::Relaxed);
@@ -805,6 +813,7 @@ impl HotSniper {
             // wire args (plan.amount / plan.max_sol_cost) must not be used here.
             amount: plan.expected_tokens,
             cost: plan.budget_lamports,
+            nonce_account: Pubkey::new_from_array(nonce_account),
             ghost: false,
         });
 
@@ -904,6 +913,7 @@ mod tests {
         let exit = Arc::new(AtomicBool::new(true));
         let (gate, _handle) = position::start(
             "http://127.0.0.1:1".to_string(),
+            String::new(),
             ModeConfig { ghost_mode: true, ..ModeConfig::default() },
             test_curve(),
             exit,

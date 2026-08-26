@@ -27,7 +27,14 @@ use solana_client::{
     rpc_client::{GetConfirmedSignaturesForAddress2Config, RpcClient},
     rpc_response::RpcConfirmedTransactionStatusWithSignature,
 };
-use solana_sdk::{commitment_config::CommitmentConfig, pubkey::Pubkey};
+use solana_sdk::{
+    commitment_config::CommitmentConfig,
+    pubkey::Pubkey,
+    signature::{read_keypair_file, Keypair},
+    signer::Signer,
+    system_instruction,
+    transaction::Transaction,
+};
 
 use crate::pumpfun::CurveParams;
 
@@ -45,6 +52,9 @@ pub struct OpenPosition {
     /// cost basis in lamports: the priced budget, fees included, pre-slippage-pad
     /// (instruction-independent — never the raw `max_sol_cost` wire arg)
     pub cost: u64,
+    /// durable nonce backing this launch's buy. Advancing it hard-invalidates a buy that
+    /// has not landed yet — the nonce-kill path uses it.
+    pub nonce_account: Pubkey,
     pub ghost: bool,
 }
 
@@ -54,6 +64,8 @@ pub struct PositionMetrics {
     pub closed: AtomicU64,
     /// buys that never appeared on chain
     pub never_landed: AtomicU64,
+    /// buys hard-invalidated by advancing their durable nonce after the kill window
+    pub nonce_killed: AtomicU64,
     /// landed positions whose gate was force-released after the hold ceiling (seller stuck;
     /// the bag is left to the Node reconcileOrphans backstop)
     pub stuck_released: AtomicU64,
@@ -79,6 +91,8 @@ pub struct PositionMetrics {
 pub struct ModeConfig {
     pub sync_mode: bool,
     pub test_mode: bool,
+    /// landed round trips test mode allows before disarming
+    pub test_trips: u32,
     pub ghost_mode: bool,
     /// how long a ghost position is held before it is priced out
     pub hold_ms: u64,
@@ -93,6 +107,7 @@ impl Default for ModeConfig {
         Self {
             sync_mode: true,
             test_mode: false,
+            test_trips: 1,
             ghost_mode: false,
             hold_ms: 1600,
             poll_ms: 200,
@@ -158,8 +173,12 @@ impl PositionGate {
 }
 
 /// Starts the tracker and returns the gate the hot path holds.
+/// `keypair_path` is the buying wallet keypair file — the nonce-kill path signs an
+/// `advance_nonce_account` with it to hard-invalidate a buy that has not landed. Pass an
+/// empty string to disable (ghost/bench).
 pub fn start(
     rpc_url: String,
+    keypair_path: String,
     modes: ModeConfig,
     curve: CurveParams,
     exit: Arc<AtomicBool>,
@@ -178,7 +197,7 @@ pub fn start(
         let gate = gate.clone();
         Builder::new()
             .name("snipePositions".to_string())
-            .spawn(move || track(rpc_url, modes, curve, rx, gate, metrics, exit))
+            .spawn(move || track(rpc_url, keypair_path, modes, curve, rx, gate, metrics, exit))
             .expect("spawn position tracker")
     };
     (gate, handle)
@@ -186,6 +205,7 @@ pub fn start(
 
 fn track(
     rpc_url: String,
+    keypair_path: String,
     modes: ModeConfig,
     curve: CurveParams,
     rx: Receiver<OpenPosition>,
@@ -194,35 +214,76 @@ fn track(
     exit: Arc<AtomicBool>,
 ) {
     let client = RpcClient::new_with_commitment(rpc_url.clone(), CommitmentConfig::confirmed());
+    let mut trips_done = 0u32;
+    // nonce-kill signer: advancing the launch's durable nonce hard-invalidates a buy that
+    // has not landed, so it can never fill minutes late with no exit machinery attached
+    // (that failure cost -0.68 SOL live on 2026-08-26). Missing/unreadable keypair = kill off.
+    let kill_keypair: Option<Keypair> = if keypair_path.is_empty() {
+        None
+    } else {
+        match read_keypair_file(&keypair_path) {
+            Ok(k) => Some(k),
+            Err(e) => {
+                warn!("nonce-kill disabled, cannot read keypair {keypair_path}: {e}");
+                None
+            }
+        }
+    };
 
     while !exit.load(Ordering::Relaxed) {
         let Ok(position) = rx.recv_timeout(Duration::from_millis(250)) else {
             continue;
         };
 
-        if position.ghost {
+        let landed = if position.ghost {
             ghost_cycle(&client, &modes, &curve, &position, &metrics);
+            true
         } else {
-            live_cycle(&client, &rpc_url, &modes, &position, &metrics);
-        }
+            live_cycle(&client, &rpc_url, &modes, &position, &metrics, kill_keypair.as_ref())
+        };
 
         metrics.closed.fetch_add(1, Ordering::Relaxed);
         if modes.test_mode {
-            gate.armed.store(false, Ordering::Release);
-            info!("test mode: one round trip complete, no further buys");
+            // REAL round trips only: a buy that never landed (lost race, slippage revert)
+            // costs only fees and must not consume a test slot — it burned two live test
+            // sessions before this check existed.
+            if landed {
+                trips_done += 1;
+                if trips_done >= modes.test_trips.max(1) {
+                    gate.armed.store(false, Ordering::Release);
+                    info!(
+                        "test mode: {trips_done}/{} round trips complete, no further buys",
+                        modes.test_trips.max(1)
+                    );
+                } else {
+                    info!(
+                        "test mode: trip {trips_done}/{} complete, staying armed",
+                        modes.test_trips.max(1)
+                    );
+                }
+            } else {
+                info!("test mode: buy never landed, staying armed for the next launch");
+            }
         }
         gate.busy.store(false, Ordering::Release);
     }
 }
 
 /// Waits for the buy to appear, then for the sell to close the account.
+/// Returns whether the buy ever landed (a lost race / reverted buy returns false).
+///
+/// Nonce-kill: if the buy is not visible after `SNIPER_NONCE_KILL_MS` (default 3000, 0 = off)
+/// the launch's durable nonce is advanced, hard-invalidating the floating buy — it can never
+/// land minutes later with no ladder attached. A fill that landed but is not yet visible to
+/// the RPC survives this: the advance just advances again and the position proceeds.
 fn live_cycle(
     client: &RpcClient,
     rpc_url: &str,
     modes: &ModeConfig,
     position: &OpenPosition,
     metrics: &Arc<PositionMetrics>,
-) {
+    kill_keypair: Option<&Keypair>,
+) -> bool {
     let poll = Duration::from_millis(modes.poll_ms);
     let deadline = Instant::now() + Duration::from_millis(modes.buy_timeout_ms);
     // hard ceiling on how long a landed-but-not-closed position may hold the gate. The exit
@@ -236,8 +297,49 @@ fn live_cycle(
     );
     let mut landed = false;
     let mut landed_at: Option<Instant> = None;
+    let kill_after = Duration::from_millis(
+        std::env::var("SNIPER_NONCE_KILL_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(3_000),
+    );
+    let started = Instant::now();
+    let mut kill_attempted = false;
+    // set ONLY when the advance was accepted: a failed send must fall back to the long
+    // timeout, not fake-certify the buy as dead
+    let mut nonce_killed_at: Option<Instant> = None;
 
     loop {
+        // hard-invalidate a buy that is taking too long to appear
+        if !landed && !kill_attempted && !kill_after.is_zero() && started.elapsed() > kill_after {
+            kill_attempted = true;
+            if let Some(kp) = kill_keypair {
+                match kill_floating_buy(client, kp, &position.nonce_account) {
+                    Ok(sig) => {
+                        metrics.nonce_killed.fetch_add(1, Ordering::Relaxed);
+                        nonce_killed_at = Some(Instant::now());
+                        info!(
+                            "position {}: buy not visible after {}ms, nonce {} advanced ({sig})",
+                            position.mint,
+                            kill_after.as_millis(),
+                            position.nonce_account
+                        );
+                    }
+                    Err(e) => warn!(
+                        "position {}: nonce-kill send failed ({e}), falling back to the long timeout",
+                        position.mint
+                    ),
+                }
+            }
+        }
+        // once the kill is confirmed and a grace window has passed with no account, the buy
+        // is dead for certain - release early instead of waiting out the full deadline
+        if !landed {
+            if let Some(t) = nonce_killed_at {
+                if t.elapsed() > Duration::from_secs(6) {
+                    metrics.never_landed.fetch_add(1, Ordering::Relaxed);
+                    info!("position {} never landed (nonce killed), releasing", position.mint);
+                    return false;
+                }
+            }
+        }
         // Three outcomes, not two: Ok(Some) = account exists, Ok(None) = truly gone, Err =
         // the RPC call failed and tells us NOTHING. Collapsing Err into "gone" (the old
         // `.unwrap_or(false)`) let a single RPC blip after the buy landed look like the
@@ -254,7 +356,7 @@ fn live_cycle(
                 if !landed && Instant::now() > deadline {
                     metrics.never_landed.fetch_add(1, Ordering::Relaxed);
                     info!("position {} never landed (rpc errors), releasing", position.mint);
-                    return;
+                    return false;
                 }
                 std::thread::sleep(poll);
                 continue;
@@ -281,18 +383,37 @@ fn live_cycle(
                     position.mint,
                     hold_ceiling.as_secs()
                 );
-                return;
+                return true;
             }
         } else if landed {
             info!("position {} closed", position.mint);
-            return;
+            return true;
         } else if Instant::now() > deadline {
             metrics.never_landed.fetch_add(1, Ordering::Relaxed);
             info!("position {} never landed, releasing", position.mint);
-            return;
+            return false;
         }
         std::thread::sleep(poll);
     }
+}
+
+/// Advances the launch's durable nonce, invalidating any not-yet-landed transaction built on
+/// its previous value. The background NoncePool refresher absorbs the new value on its next
+/// cycle, so the account returns to the pool automatically.
+fn kill_floating_buy(
+    client: &RpcClient,
+    keypair: &Keypair,
+    nonce_account: &Pubkey,
+) -> Result<solana_sdk::signature::Signature, String> {
+    let ix = system_instruction::advance_nonce_account(nonce_account, &keypair.pubkey());
+    let blockhash = client.get_latest_blockhash().map_err(|e| e.to_string())?;
+    let tx = Transaction::new_signed_with_payer(
+        &[ix],
+        Some(&keypair.pubkey()),
+        &[keypair],
+        blockhash,
+    );
+    client.send_transaction(&tx).map_err(|e| e.to_string())
 }
 
 /// Prices the position out against the real curve without touching it.
@@ -577,6 +698,7 @@ mod tests {
         let exit = Arc::new(AtomicBool::new(true));
         let (gate, handle) = start(
             "http://127.0.0.1:1".to_string(),
+            String::new(),
             ModeConfig {
                 sync_mode: true,
                 ..ModeConfig::default()
@@ -598,6 +720,7 @@ mod tests {
         let exit = Arc::new(AtomicBool::new(true));
         let (gate, handle) = start(
             "http://127.0.0.1:1".to_string(),
+            String::new(),
             ModeConfig {
                 sync_mode: false,
                 ..ModeConfig::default()

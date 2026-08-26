@@ -143,6 +143,14 @@ describe('decideLegSize — the money decision', () => {
     expect(sellTokens).toBe(400_000n);
     expect(isFinal).toBe(true);
   });
+  it('final leg sells the FULL remainder, never leaving rounding dust (live regression)', () => {
+    // mint 2j6sw4Wy… 2026-08-26: odd remainder 3737163854755, 15% leg floored to …754,
+    // leaving 1 raw token — the account close reverted the whole sell (Token-2022 error 11).
+    const odd = 3_737_163_854_755n;
+    const { sellTokens, isFinal } = decideLegSize(24_914_425_698_361n, odd, 0.15, 1.1, opts);
+    expect(isFinal).toBe(true);
+    expect(sellTokens).toBe(odd); // everything, not the floored fraction
+  });
   it('STOP: multiple <= stopX dumps all remaining now, marked final', () => {
     const { sellTokens, isFinal } = decideLegSize(original, 700_000n, 0.2, 0.75, opts);
     expect(sellTokens).toBe(700_000n);
