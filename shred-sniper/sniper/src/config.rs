@@ -222,6 +222,31 @@ pub struct SniperConfig {
     /// a spinning one costs ~150ns but burns a core while it spins. 0 disables spinning.
     #[serde(default = "SniperConfig::default_sender_spin_micros")]
     pub sender_spin_micros: u64,
+    /// Boot-time latency gate: an endpoint whose measured round trip exceeds this many
+    /// milliseconds is dropped from the fan-out for the life of the process. 0 disables the
+    /// gate and fires at every endpoint.
+    ///
+    /// This has to be measured on the box that will run, not chosen from a table. From a
+    /// colocated host the local metro answers in well under a millisecond and a distant
+    /// region is 100ms+, so the two populations are obvious and a 20ms line separates them
+    /// cleanly. From a random development machine *nothing* is under 20ms, which is exactly
+    /// why `min_endpoints` exists — a threshold that matches nothing must not silently
+    /// empty the fan-out.
+    ///
+    /// Note what this does and does not buy. Every provider owns its own thread and its
+    /// plain endpoints leave in a single `io_uring_enter`, so a slow endpoint does not delay
+    /// a fast one: dropping it does not make Frankfurt land sooner. What it saves is the
+    /// per-launch work of building and writing requests nobody can win with, the sockets to
+    /// keep warm, and the keep-alive traffic. Set it to 0 if you would rather have the
+    /// redundancy.
+    #[serde(default = "SniperConfig::default_max_endpoint_ms")]
+    pub max_endpoint_ms: u64,
+    /// Never let the gate leave a provider with fewer than this many endpoints. The fastest
+    /// survivors are kept regardless of the threshold, so a mis-set `max_endpoint_ms` (or a
+    /// box further from every provider than expected) degrades to "use the closest few"
+    /// rather than "send nothing".
+    #[serde(default = "SniperConfig::default_min_endpoints")]
+    pub min_endpoints: usize,
     /// One token at a time: nothing new is bought until the open position closes or its
     /// buy is known to have failed. Off means positions may overlap.
     #[serde(default = "SniperConfig::default_true")]
@@ -263,6 +288,12 @@ impl SniperConfig {
     }
     fn default_nonce_ms() -> u64 {
         300
+    }
+    fn default_max_endpoint_ms() -> u64 {
+        20
+    }
+    fn default_min_endpoints() -> usize {
+        2
     }
     fn default_sender_spin_micros() -> u64 {
         2_000_000

@@ -458,6 +458,35 @@ impl Endpoint {
         Ok(())
     }
 
+    /// One blocking request/response round trip, for the boot-time latency gate only.
+    ///
+    /// Deliberately blocking and deliberately not on any hot path: this runs once, before the
+    /// first launch can arrive, and it is the only place in this module that waits for a
+    /// reply. The status does not matter — several providers answer the probe 404 or 405 by
+    /// design — only the time and the fact that something came back.
+    fn probe_rtt(&mut self, buf: &mut [u8]) -> Option<Duration> {
+        if self.health.is_empty() || self.conn.is_none() {
+            return None;
+        }
+        let health = std::mem::take(&mut self.health);
+        let started = Instant::now();
+        let conn = self.conn.as_mut()?;
+        let out = conn.write_all(&health).and_then(|()| conn.read(buf));
+        self.health = health;
+        match out {
+            // a 0-byte read is a closed peer, not a fast one
+            Ok(0) => {
+                self.conn = None;
+                None
+            }
+            Ok(_) => Some(started.elapsed()),
+            Err(_) => {
+                self.conn = None;
+                None
+            }
+        }
+    }
+
     /// Records that one more reply is outstanding, so `note_status` can tell a probe reply
     /// from a submit reply.
     fn expect_reply(&mut self, probe: bool) {
@@ -651,6 +680,121 @@ fn write_usize(buf: &mut [u8; 20], mut v: usize) -> &[u8] {
     &buf[i..]
 }
 
+/// Boot-time latency gate settings, from `SniperConfig`.
+#[derive(Debug, Clone, Copy)]
+pub struct LatencyGate {
+    /// drop an endpoint slower than this, in milliseconds. 0 disables the gate.
+    pub max_ms: u64,
+    /// but never leave a provider with fewer than this many endpoints
+    pub min_endpoints: usize,
+}
+
+impl Default for LatencyGate {
+    fn default() -> Self {
+        Self {
+            max_ms: 20,
+            min_endpoints: 2,
+        }
+    }
+}
+
+/// How many times each endpoint is timed at boot. The minimum of the samples is used: a
+/// single round trip can be inflated by a cold cache or a scheduler hiccup, and one slow
+/// sample must not retire an endpoint that is genuinely close.
+const RTT_SAMPLES: usize = 3;
+
+/// Drops endpoints slower than `max_endpoint_ms`, keeping at least `min_endpoints`.
+///
+/// Runs once, at startup, on the box that will actually be sending — which is the only place
+/// the numbers mean anything. A distance table cannot substitute: the same hostname is a
+/// different round trip from Frankfurt than from a laptop, and 0slot's Cloudflare-fronted
+/// regions are slow for a reason no geography lookup would predict.
+///
+/// The fail-safe is the important half. A threshold that matches nothing would otherwise
+/// leave a provider with no endpoints and the sniper would silently stop sending — the exact
+/// class of quiet failure this module has been chasing. So the survivors are sorted by
+/// measured latency and the fastest `min_endpoints` are kept regardless of the threshold,
+/// which degrades a bad setting into "use the closest few" instead of "send nothing".
+///
+/// Endpoints that could not be measured at all (never connected, or a provider with no
+/// health path, or UDP, which never answers) are kept. An unmeasurable endpoint is not
+/// evidence of a slow one, and the keep-alive tick may well repair it later.
+fn apply_latency_gate(
+    endpoints: &mut Vec<Endpoint>,
+    provider: &str,
+    gate: LatencyGate,
+    buf: &mut [u8],
+) {
+    let LatencyGate { max_ms, min_endpoints } = gate;
+    if max_ms == 0 || endpoints.len() <= min_endpoints.max(1) {
+        return;
+    }
+
+    let mut timed: Vec<(usize, Option<Duration>)> = Vec::with_capacity(endpoints.len());
+    for (i, ep) in endpoints.iter_mut().enumerate() {
+        let mut best: Option<Duration> = None;
+        for _ in 0..RTT_SAMPLES {
+            match ep.probe_rtt(buf) {
+                Some(d) => best = Some(best.map_or(d, |b: Duration| b.min(d))),
+                // a failed sample dropped the connection; stop poking at it
+                None => break,
+            }
+        }
+        timed.push((i, best));
+    }
+
+    let limit = Duration::from_millis(max_ms);
+    // fastest first, unmeasured last (they are kept either way, but must not occupy the
+    // "fastest N" slots that the fail-safe hands out)
+    let mut ranked: Vec<&(usize, Option<Duration>)> = timed.iter().collect();
+    ranked.sort_by_key(|(_, d)| d.unwrap_or(Duration::MAX));
+
+    let mut keep = vec![false; endpoints.len()];
+    let mut kept = 0usize;
+    for (i, d) in ranked.iter() {
+        let within = d.map_or(true, |d| d <= limit);
+        if within || kept < min_endpoints {
+            keep[*i] = true;
+            kept += 1;
+        }
+    }
+
+    for (i, d) in timed.iter() {
+        if !keep[*i] {
+            info!(
+                "{}: dropping {} - {:.1}ms round trip, over the {}ms gate",
+                provider,
+                endpoints[*i].host,
+                d.map_or(f64::NAN, |d| d.as_secs_f64() * 1000.0),
+                max_ms
+            );
+        }
+    }
+
+    let forced: Vec<&str> = ranked
+        .iter()
+        .filter(|(i, d)| keep[*i] && d.is_some_and(|d| d > limit))
+        .map(|(i, _)| endpoints[*i].host.as_str())
+        .collect();
+    if !forced.is_empty() {
+        warn!(
+            "{}: every endpoint is slower than the {}ms gate; keeping the {} fastest ({}) so \
+             the provider still sends. Re-check SNIPER_MAX_ENDPOINT_MS on this box.",
+            provider,
+            max_ms,
+            forced.len(),
+            forced.join(", ")
+        );
+    }
+
+    let mut i = 0;
+    endpoints.retain(|_| {
+        let k = keep[i];
+        i += 1;
+        k
+    });
+}
+
 /// Spawns one sender thread for a provider and returns the handle the hot path pushes to.
 pub fn spawn(
     cfg: ProviderConfig,
@@ -658,6 +802,7 @@ pub fn spawn(
     dry_run: bool,
     queue_depth: usize,
     spin_micros: u64,
+    gate: LatencyGate,
     offsets: TipOffsets,
     tx_len: usize,
 ) -> Result<(ProviderHandle, JoinHandle<()>), String> {
@@ -695,7 +840,7 @@ pub fn spawn(
 
     let join = Builder::new()
         .name(format!("snipeTx_{}", cfg.name))
-        .spawn(move || run(cfg, signing_key, dry_run, rx, metrics, spin_micros, offsets))
+        .spawn(move || run(cfg, signing_key, dry_run, rx, metrics, spin_micros, gate, offsets))
         .expect("spawn sender thread");
 
     Ok((handle, join))
@@ -708,6 +853,7 @@ fn run(
     rx: Receiver<Job>,
     metrics: Arc<SenderMetrics>,
     spin_micros: u64,
+    gate: LatencyGate,
     offsets: TipOffsets,
 ) {
     let udp = cfg.body.is_udp();
@@ -785,6 +931,25 @@ fn run(
                 Ok(()) => info!("{}: connected to {}:{}", cfg.name, ep.host, ep.port),
                 Err(e) => warn!("{}: initial connect to {} failed: {e}", cfg.name, ep.host),
             }
+        }
+        // then retire the ones too far away to be worth a request, measured here rather
+        // than assumed from a region name
+        let before = endpoints.len();
+        apply_latency_gate(&mut endpoints, &cfg.name, gate, &mut drain);
+        if endpoints.len() != before {
+            info!(
+                "{}: latency gate kept {}/{} endpoints under {}ms",
+                cfg.name,
+                endpoints.len(),
+                before,
+                gate.max_ms
+            );
+        }
+        // the gate leaves the sockets mid-conversation; start the launch path from a clean
+        // slate so no stale reply can be attributed to a submit
+        for ep in endpoints.iter_mut() {
+            ep.awaiting.clear();
+            drain_ready(ep, &mut drain, &metrics);
         }
     }
 
@@ -1163,6 +1328,82 @@ mod tests {
         );
         assert_eq!(metrics.rejected.load(Ordering::Relaxed), 2);
         assert!(ep.awaiting.is_empty(), "every reply was attributed");
+    }
+
+    fn ep_named(host: &str) -> Endpoint {
+        Endpoint {
+            provider: "t".into(),
+            host: host.into(),
+            port: 80,
+            tls: false,
+            udp: false,
+            addr: None,
+            head: Vec::new(),
+            health: Vec::new(),
+            conn: None,
+            request: Vec::new(),
+            awaiting: Default::default(),
+            consecutive_rejects: 0,
+        }
+    }
+
+    /// The gate must never be able to leave a provider unable to send. An endpoint that could
+    /// not be measured at all (no connection, no health path, UDP) is not evidence of a slow
+    /// endpoint, so it is kept.
+    #[test]
+    fn latency_gate_keeps_unmeasurable_endpoints() {
+        let mut eps: Vec<Endpoint> = ["a", "b", "c", "d"].iter().map(|h| ep_named(h)).collect();
+        let mut buf = [0u8; 256];
+        // none of these has a connection or a health request, so every probe returns None
+        apply_latency_gate(
+            &mut eps,
+            "t",
+            LatencyGate {
+                max_ms: 1,
+                min_endpoints: 2,
+            },
+            &mut buf,
+        );
+        assert_eq!(eps.len(), 4, "unmeasurable endpoints must not be dropped");
+    }
+
+    /// A gate wider than the endpoint count, or a disabled one, is a no-op.
+    #[test]
+    fn latency_gate_is_a_noop_when_disabled_or_too_small_to_matter() {
+        let mut buf = [0u8; 256];
+
+        let mut eps: Vec<Endpoint> = ["a", "b", "c"].iter().map(|h| ep_named(h)).collect();
+        apply_latency_gate(
+            &mut eps,
+            "t",
+            LatencyGate {
+                max_ms: 0,
+                min_endpoints: 1,
+            },
+            &mut buf,
+        );
+        assert_eq!(eps.len(), 3, "max_ms 0 disables the gate");
+
+        let mut eps: Vec<Endpoint> = ["a", "b"].iter().map(|h| ep_named(h)).collect();
+        apply_latency_gate(
+            &mut eps,
+            "t",
+            LatencyGate {
+                max_ms: 1,
+                min_endpoints: 5,
+            },
+            &mut buf,
+        );
+        assert_eq!(eps.len(), 2, "cannot drop below min_endpoints");
+    }
+
+    /// The default has to be safe to ship: a gate that keeps nothing would stop the sniper
+    /// sending at all, silently.
+    #[test]
+    fn default_gate_always_leaves_something_to_send() {
+        let g = LatencyGate::default();
+        assert_eq!(g.max_ms, 20);
+        assert!(g.min_endpoints >= 1, "a provider with no endpoints cannot send");
     }
 
     /// `awaiting` grows on every write and shrinks on every reply, so a peer that stops

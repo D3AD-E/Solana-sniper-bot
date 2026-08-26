@@ -799,6 +799,41 @@ still batch through io_uring like any plain-TCP provider.
 pins them out; re-adding one means restoring its `ProviderSpec` and re-verifying its tip list,
 not pasting a key into `.env`.
 
+### Boot-time latency gate (2026-08-26)
+
+Each sender times every one of its endpoints at startup and drops the ones slower than
+`SNIPER_MAX_ENDPOINT_MS` (default 20) for the life of the process. `SNIPER_MIN_ENDPOINTS`
+(default 2) is the floor: the fastest N survive regardless of the threshold. 0 disables it.
+
+**The threshold only means anything on the box that sends.** Measured from the Windows dev
+box, `--gate 20` keeps 20 of 81 endpoints and *every one of the ten providers* falls back to
+the floor, because the network baseline here is ~21ms to Frankfurt and nothing clears 20ms:
+
+```
+astralane      keep  2/10  fr 21ms, fr2 22ms   (all over the gate - kept to stay alive)
+blockrazor     keep  2/11  frankfurt-cherryservers 21ms, frankfurt 21ms   (all over ...)
+...            20 kept, 61 dropped
+```
+
+Without the floor that configuration sends nothing at all. From a colocated host the two
+populations are obvious instead — local metro well under 1ms, distant regions 100ms+ — and
+20ms is a clean line. **Preview before trusting it, on the target box:**
+
+```
+python scripts/ping_providers.py --gate 20        # add --min-endpoints N to match .env
+```
+
+If every provider prints "all over the gate", the number is wrong for that box.
+
+What the gate buys: less per-launch request building, fewer warm sockets, less keep-alive
+traffic. What it does **not** buy: a faster near endpoint. Each provider owns a thread and its
+plain endpoints leave in one `io_uring_enter`, so a slow endpoint never delayed a fast one —
+dropping Tokyo does not make Frankfurt land sooner. It is a tidiness and cost win, not a
+latency win, and it trades away redundancy. `SNIPER_MAX_ENDPOINT_MS=0` keeps everything.
+
+Endpoints that cannot be measured (never connected, no health path, or UDP, which never
+answers) are kept: unmeasurable is not evidence of slow.
+
 ### DNS and reconnects are off the hot path (2026-08-26)
 
 `Endpoint::connect` used to call `to_socket_addrs` — a blocking getaddrinfo — and then

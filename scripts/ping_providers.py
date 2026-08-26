@@ -161,6 +161,46 @@ def load(config):
     return eps, skipped
 
 
+def gate_report(by_provider, max_ms, min_endpoints):
+    """Preview the sniper's boot-time latency gate without changing anything.
+
+    Mirrors `apply_latency_gate` in sender.rs: rank an endpoint by its probe round trip,
+    drop anything over the threshold, but keep the fastest `min_endpoints` regardless so a
+    threshold that matches nothing degrades to "use the closest few" instead of
+    "send nothing".
+    """
+    print(f"{BOLD}latency gate preview: {max_ms:g}ms, min {min_endpoints} per provider{RESET}")
+    total_keep = total_drop = 0
+    forced_any = False
+    for provider, rows in sorted(by_provider.items()):
+        ranked = sorted((r for r in rows if r["ok"]), key=lambda r: r["ms"])
+        keep, drop = [], []
+        for r in ranked:
+            if r["ms"] <= max_ms or len(keep) < min_endpoints:
+                keep.append(r)
+            else:
+                drop.append(r)
+        forced = [r for r in keep if r["ms"] > max_ms]
+        forced_any = forced_any or bool(forced)
+        total_keep += len(keep)
+        total_drop += len(drop)
+
+        kept = ", ".join(f"{r['host'].split('.')[0]} {r['ms']:.0f}ms" for r in keep) or "-"
+        mark = colour(" (all over the gate - kept to stay alive)", RED) if forced else ""
+        print(f"  {provider:<14} keep {len(keep):>2}/{len(ranked):<2} {DIM}{kept}{RESET}{mark}")
+        if drop:
+            print(f"  {'':<14} {DIM}drop {len(drop):>2}: "
+                  f"{', '.join(r['host'].split('.')[0] for r in drop)}{RESET}")
+
+    print(f"  {BOLD}{total_keep} kept, {total_drop} dropped{RESET}")
+    if forced_any:
+        print(colour(
+            "  Some providers had NO endpoint under the gate. That is what min_endpoints is "
+            "for, but it means this threshold is wrong for this box - raise "
+            "SNIPER_MAX_ENDPOINT_MS until the split looks deliberate.", RED))
+    print()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default=os.path.join("shred-sniper", "sniper.json"))
@@ -174,6 +214,23 @@ def main():
         "8 is what the running sniper does; 10 kills helius-sender, 31 kills flashblock.",
     )
     ap.add_argument("--provider", help="only this provider")
+    ap.add_argument(
+        "--gate",
+        type=float,
+        metavar="MS",
+        help="preview the sniper's boot-time latency gate (SNIPER_MAX_ENDPOINT_MS): "
+             "show which endpoints would be kept and which dropped, without changing "
+             "anything. Run this ON THE BOX THAT WILL SEND - the numbers mean nothing "
+             "from anywhere else.",
+    )
+    ap.add_argument(
+        "--min-endpoints",
+        type=int,
+        default=2,
+        metavar="N",
+        help="with --gate: the fastest N survive regardless, matching "
+             "SNIPER_MIN_ENDPOINTS (default 2)",
+    )
     args = ap.parse_args()
 
     eps, skipped = load(args.config)
@@ -226,6 +283,9 @@ def main():
         for name, n in skipped:
             print(f"  {name} ({n} endpoints)")
         print()
+
+    if args.gate is not None:
+        gate_report(by_provider, args.gate, args.min_endpoints)
 
     total = len(results)
     print(f"{BOLD}{total - len(failures)}/{total} endpoints healthy{RESET}")

@@ -156,6 +156,12 @@ fn main() {
         "nonce_accounts": nonce_accounts,
         "nonce_refresh_ms": num("SNIPER_NONCE_REFRESH_MS", 300),
         "sender_spin_micros": num("SNIPER_SENDER_SPIN_MICROS", 2_000_000),
+        // boot-time latency gate. Measured on the box that runs, not chosen from a table:
+        // from a colocated host the local metro is well under a millisecond and a distant
+        // region is 100ms+, but from a development machine nothing at all is under 20ms.
+        // `min_endpoints` is what stops a mis-set threshold from emptying the fan-out.
+        "max_endpoint_ms": num("SNIPER_MAX_ENDPOINT_MS", 20),
+        "min_endpoints": num("SNIPER_MIN_ENDPOINTS", 2),
         "buy_lamports": num("SNIPER_BUY_LAMPORTS", 1_000_000_000),
         "max_dev_buy_lamports": num("SNIPER_MAX_DEV_BUY_LAMPORTS", 2_900_000_000),
         "haircut_bps": num("SNIPER_HAIRCUT_BPS", 30),

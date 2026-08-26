@@ -179,6 +179,10 @@ impl Sniper {
                 cfg.dry_run,
                 64,
                 cfg.sender_spin_micros,
+                sender::LatencyGate {
+                    max_ms: cfg.max_endpoint_ms,
+                    min_endpoints: cfg.min_endpoints,
+                },
                 tip_offsets,
                 template.tx.len(),
             )?;
