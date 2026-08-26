@@ -107,10 +107,16 @@ const MOON_X = Number(process.env.SELL_MOON_X ?? 2.0);
 const MOON_FRAC = Number(process.env.SELL_MOON_FRAC ?? 0.05);
 const DUST = 1000n; // ignore sub-dust remainders when deciding a position is closed
 const RECONCILE_MS = Number(process.env.RECONCILE_MS ?? 60_000);
-// max_sol_cost = budget × (1 + slippage_bps). The actual spend ≈ budget (the haircut sizes
-// the token amount), so the fill's maxSolCost overstates the cost basis by the slippage. Back
-// it out or every value multiple reads low and the 0.8× stop fires early (~0.84× real).
-const SLIPPAGE_BPS = Number(process.env.SNIPER_SLIPPAGE_BPS ?? 500);
+// The sim prices each leg at the reserves at slot N assuming an INSTANT fill. A real sell tx
+// lands ~1 slot after we fire it, so to make the actual fill land at the sim's slot N we fire
+// the leg `lead` earlier. Default = one slot; set it to the MEASURED fire->land latency after
+// the first live sells (and a competitive tip shrinks the latency you need to lead).
+const SELL_LEAD_MS = Number(process.env.SELL_LEAD_MS ?? SLOT_MS);
+// NOTE: this is the BUY slippage, NOT a sell slippage. The sell itself never fails on price -
+// sellPosition uses minSolOutput=0, so it always executes at whatever the curve gives (matching
+// the sim, which always prices the exit). We only need this to back the buy's max_sol_cost
+// (= budget × (1+slippage)) down to the real spend, so the stop-loss value multiple is right.
+const BUY_SLIPPAGE_BPS = Number(process.env.SNIPER_SLIPPAGE_BPS ?? 500);
 
 /** current value multiple of the remaining position vs its cost basis; null if unreadable */
 async function currentMultiple(p: OpenPosition): Promise<number | null> {
@@ -190,7 +196,7 @@ function subscribeToFills(port: string) {
       original: 0n,
       remaining: 0n,
       // cost basis = the priced budget, not max_sol_cost (which is budget × (1+slippage))
-      entryCostLamports: (BigInt(fill.getMaxSolCost() || 0) * 10_000n) / BigInt(10_000 + SLIPPAGE_BPS),
+      entryCostLamports: (BigInt(fill.getMaxSolCost() || 0) * 10_000n) / BigInt(10_000 + BUY_SLIPPAGE_BPS),
       legTimers: [],
       done: false,
       finalRetries: 0,
@@ -236,8 +242,9 @@ function watchForConfirmation(key: string, position: OpenPosition) {
   }, BUY_TIMEOUT_MS);
 }
 
-/** Schedules every ladder leg plus the force-out. Legs fire on wall-clock timers measured
- *  from confirmation; each is guarded so a fired-then-closed position is a no-op. */
+/** Schedules every ladder leg plus the force-out. Legs fire on wall-clock timers measured from
+ *  confirmation, `SELL_LEAD_MS` earlier than the target slot so the tx LANDS at the sim's slot
+ *  rather than a slot or two late. Each is guarded so a fired-then-closed position is a no-op. */
 function scheduleLadder(key: string) {
   const p = positions.get(key);
   if (!p) return;
@@ -250,7 +257,7 @@ function scheduleLadder(key: string) {
       runLeg(key, slot, frac).catch((e) =>
         logger.warn(`${key}: leg slot+${slot} errored: ${(e as Error).message}`),
       );
-    }, Math.max(0, slot * SLOT_MS)),
+    }, Math.max(0, slot * SLOT_MS - SELL_LEAD_MS)),
   );
 }
 

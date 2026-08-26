@@ -9,7 +9,6 @@
   "whitelist_path": "/etc/sniper/whitelist.txt",
   "whitelist_disabled": false,
   "rpc_url": "http://127.0.0.1:8899",
-
   "nonce_accounts": [
     "REPLACE_NONCE_ACCOUNT_1",
     "REPLACE_NONCE_ACCOUNT_2",
@@ -17,14 +16,12 @@
     "REPLACE_NONCE_ACCOUNT_4"
   ],
   "nonce_refresh_ms": 300,
-
   "buy_lamports": 1000000000,
   "max_dev_buy_lamports": 2900000000,
   "haircut_bps": 30,
   "slippage_bps": 100,
   "cu_limit": 90000,
   "dry_run": false,
-
   "providers": [
     {
       "name": "jito-ny",
@@ -32,7 +29,7 @@
       "port": 443,
       "tls": true,
       "path": "/api/v1/transactions?bundleOnly=true",
-      "health_path": "",
+      "health_path": "/",
       "tip_lamports": 1000000,
       "cu_price": 6000000,
       "tip_accounts": [
@@ -52,7 +49,7 @@
       "host": "ewr-sender.helius-rpc.com",
       "port": 80,
       "path": "/fast",
-      "health_path": "",
+      "health_path": "/ping",
       "tip_lamports": 1000000,
       "cu_price": 4000000,
       "tip_accounts": [
@@ -115,7 +112,12 @@
       "port": 80,
       "path": "/",
       "health_path": "/ping",
-      "headers": [["api-key", "REPLACE_NODE_ONE_KEY"]],
+      "headers": [
+        [
+          "api-key",
+          "REPLACE_NODE_ONE_KEY"
+        ]
+      ],
       "tip_lamports": 1000000,
       "cu_price": 6000000,
       "tip_accounts": [
@@ -135,8 +137,13 @@
       "port": 80,
       "path": "/api/v2/submit",
       "body": "wrapped",
-      "health_path": "",
-      "headers": [["Authorization", "REPLACE_NEXTBLOCK_KEY"]],
+      "health_path": "/",
+      "headers": [
+        [
+          "Authorization",
+          "REPLACE_NEXTBLOCK_KEY"
+        ]
+      ],
       "tip_lamports": 1000000,
       "cu_price": 5000000,
       "tip_accounts": [
@@ -153,11 +160,11 @@
     {
       "name": "nozomi-ewr",
       "enabled": false,
-      "_note": "temporal/nozomi, min tip 0.001 SOL, api key goes in the ?c= parameter",
+      "_note": "temporal/nozomi, min tip 0.001 SOL, api key goes in the ?c= parameter. Direct hosts (ewr1/fra2/ams1/lon1/lax1/tyo1/sgp1/pit1/ash1) are http on :80; the cloudflare aliases without the digit are https only. Idle connections are dropped after 65s, hence health_path.",
       "host": "ewr1.nozomi.temporal.xyz",
       "port": 80,
       "path": "/?c=REPLACE_NOZOMI_KEY",
-      "health_path": "",
+      "health_path": "/ping",
       "tip_lamports": 1000000,
       "cu_price": 5000000,
       "tip_accounts": [
@@ -183,17 +190,21 @@
     {
       "name": "bloxroute",
       "enabled": false,
-      "_note": "set host to your regional Trader API endpoint and the Authorization header to your token; min tip 0.001 SOL. HWEoBx.. is the tip account the reference sell used.",
+      "_note": "host is a submission endpoint: ny / germany / amsterdam / uk / tokyo / global .solana.dex.blxrbdn.com (there is no LA one - it resolves to the NY host). Authorization is the raw base64 accountID:secret, no Bearer prefix. Min tip 0.001 SOL. Resolve these through an ECS-capable DNS server (8.8.8.8), not Cloudflare, or the region routing is wrong.",
       "host": "REPLACE_BLOXROUTE_HOST",
       "port": 80,
       "path": "/api/v2/submit",
-      "body": "wrapped",
-      "health_path": "",
-      "headers": [["Authorization", "REPLACE_BLOXROUTE_TOKEN"]],
+      "body": "wrapped_blox",
+      "health_path": "/health",
+      "headers": [
+        [
+          "Authorization",
+          "REPLACE_BLOXROUTE_TOKEN"
+        ]
+      ],
       "tip_lamports": 1000000,
       "cu_price": 5000000,
       "tip_accounts": [
-        "HWEoBxYs7ssKuudEjzjmpfJVX7Dvi7wescFsVx2L5yoY",
         "3UQUKjhMKaY2S6bjcQD6yHB7utcZt5bfarRCmctpRtUd",
         "FogxVNs6Mm2w9rnGL1vkARSwJxvLE8mujTv3LK8RnUhF",
         "bLx7MvxGaKdKL7mEbpk9tC79z6MnBSJoJkuaEAPu6Nd",
@@ -221,7 +232,12 @@
       "tls": true,
       "path": "/transactions",
       "health_path": "",
-      "headers": [["x-api-key", "REPLACE_CIRCULAR_KEY"]],
+      "headers": [
+        [
+          "x-api-key",
+          "REPLACE_CIRCULAR_KEY"
+        ]
+      ],
       "tip_lamports": 1000000,
       "cu_price": 5000000,
       "tip_accounts": [
@@ -238,15 +254,23 @@
     {
       "name": "blockrazor",
       "enabled": false,
-      "_note": "FjmZZr.. is the tip account the reference buy used. Set host/path from your BlockRazor dashboard.",
+      "_note": "binary submission: raw transaction bytes, no base64 and no JSON envelope (~26% fewer bytes than /sendTransaction). Plain HTTP on port 443, not a typo. The key goes in the ?auth= query AND the apikey header - the query is what the submit path reads, the header is what /health needs. Hosts: newyork / frankfurt / frankfurt-allnodes / frankfurt-cherryservers / amsterdam / amsterdam-cherryservers / london / tokyo / singapore / losangeles / toronto .solana.blockrazor.xyz. Min tip 0.0001 SOL. Rotate the tip account.",
       "host": "REPLACE_BLOCKRAZOR_HOST",
-      "port": 80,
-      "path": "/",
-      "health_path": "",
-      "headers": [["apikey", "REPLACE_BLOCKRAZOR_KEY"]],
+      "port": 443,
+      "path": "/v2/sendBinaryTransaction?auth=REPLACE_BLOCKRAZOR_KEY",
+      "body": "binary",
+      "health_path": "/health",
+      "headers": [
+        [
+          "apikey",
+          "REPLACE_BLOCKRAZOR_KEY"
+        ]
+      ],
       "tip_lamports": 2000000,
       "cu_price": 6000000,
-      "tip_accounts": ["FjmZZrFvhnqqb9ThCuMVnENaM3JGVuGWNyCAxRJcFpg9"]
+      "tip_accounts": [
+        "FjmZZrFvhnqqb9ThCuMVnENaM3JGVuGWNyCAxRJcFpg9"
+      ]
     }
   ]
 }

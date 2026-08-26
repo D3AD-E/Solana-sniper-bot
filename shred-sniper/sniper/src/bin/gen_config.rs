@@ -43,7 +43,10 @@ fn main() {
     };
     let num = |k: &str, d: u64| get(k).parse::<u64>().unwrap_or(d);
 
-    let default_region = get_or("NODE_REGION", "fra");
+    // NODE_REGION is deliberately not consulted here. It says where the box is; it does not
+    // say which endpoints to fire at, and those are different questions — firing at every
+    // region is free because all variants share one durable nonce, so only the first to land
+    // can succeed. The region filter is `<PROVIDER>_REGIONS`, defaulting to `all`.
     let default_tip = num("SNIPER_TIP_LAMPORTS", 2_000_000);
     let default_cu_price = num("SNIPER_CU_PRICE", 6_000_000);
 
@@ -72,7 +75,7 @@ fn main() {
                     || wanted
                         .split(',')
                         .map(|r| r.trim())
-                        .any(|r| r == *region || r == default_region && r == *region)
+                        .any(|r| r == *region)
             })
             .map(|(_, host)| host.to_string())
             .collect();

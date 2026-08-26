@@ -249,6 +249,28 @@ impl Endpoint {
     }
 }
 
+/// How long the sender sits idle before probing every endpoint to keep its connection warm.
+///
+/// Set by the **tightest** provider window, not by a round number. Measured, not assumed
+/// (`scripts/ping_providers.py --reuse-after N` holds a real connection open and probes again):
+///
+/// | provider        | idle window |
+/// |-----------------|-------------|
+/// | helius-sender   | **10 s**    |
+/// | flashblock      | 30 s        |
+/// | nozomi          | 65 s        |
+/// | the rest        | longer      |
+///
+/// helius-sender is the binding constraint by a wide margin, and it is easy to miss because a
+/// dead warm connection is not an error — the sender just reconnects, on the hot path, which
+/// is exactly the handshake the warm connection exists to avoid.
+///
+/// The probe also has to clear `sender_spin_micros` (the spin window runs before this
+/// timeout), so the real gap between a launch and the next probe is this plus ~2 s. 6 s keeps
+/// that under 10 s with room to spare. The probe itself is cheap: one small GET per endpoint,
+/// written without waiting for the replies.
+const KEEPALIVE_SECS: u64 = 6;
+
 const JSON_RPC_PREFIX: &[u8] =
     br#"{"jsonrpc":"2.0","id":1,"method":"sendTransaction","params":[""#;
 const JSON_RPC_SUFFIX: &[u8] = br#"",{"encoding":"base64","skipPreflight":true,"maxRetries":0}]}"#;
@@ -256,6 +278,13 @@ const JSON_RPC_SUFFIX: &[u8] = br#"",{"encoding":"base64","skipPreflight":true,"
 // nextblock / bloxroute
 const WRAPPED_PREFIX: &[u8] = br#"{"transaction":{"content":""#;
 const WRAPPED_SUFFIX: &[u8] = br#""},"skipPreFlight":true,"frontRunningProtection":false}"#;
+
+// bloxroute, with their leader-risk hold turned off. SP_MEDIUM (the default when the field
+// is absent) waits for four consecutive safe slots when it scores the current or next-3
+// leader as high-risk; we cannot afford that. `"low"` is rejected as unparseable — the enum
+// spelling is the one that works.
+const WRAPPED_BLOX_SUFFIX: &[u8] =
+    br#""},"skipPreFlight":true,"frontRunningProtection":false,"submitProtection":"SP_LOW"}"#;
 
 // lucum / blockrazor
 const PLAIN_PREFIX: &[u8] = br#"{"transaction":""#;
@@ -269,8 +298,20 @@ fn body_wrappers(format: BodyFormat) -> (&'static [u8], &'static [u8]) {
     match format {
         BodyFormat::JsonRpc => (JSON_RPC_PREFIX, JSON_RPC_SUFFIX),
         BodyFormat::Wrapped => (WRAPPED_PREFIX, WRAPPED_SUFFIX),
+        BodyFormat::WrappedBlox => (WRAPPED_PREFIX, WRAPPED_BLOX_SUFFIX),
         BodyFormat::PlainTx => (PLAIN_PREFIX, PLAIN_SUFFIX),
         BodyFormat::Batch => (BATCH_PREFIX, BATCH_SUFFIX),
+        // the transaction is the body; there is nothing to wrap it in
+        BodyFormat::Binary => (b"", b""),
+    }
+}
+
+/// `Binary` posts the transaction bytes as-is, so it needs the octet-stream content type and
+/// must skip the base64 step. Everything else is JSON.
+fn content_type(format: BodyFormat) -> &'static [u8] {
+    match format {
+        BodyFormat::Binary => b"application/octet-stream",
+        _ => b"application/json",
     }
 }
 
@@ -282,7 +323,9 @@ fn request_head(cfg: &ProviderConfig, host: &str, path: &str) -> Vec<u8> {
     head.extend_from_slice(path.as_bytes());
     head.extend_from_slice(b" HTTP/1.1\r\nHost: ");
     head.extend_from_slice(host.as_bytes());
-    head.extend_from_slice(b"\r\nContent-Type: application/json\r\nConnection: keep-alive\r\n");
+    head.extend_from_slice(b"\r\nContent-Type: ");
+    head.extend_from_slice(content_type(cfg.body));
+    head.extend_from_slice(b"\r\nConnection: keep-alive\r\n");
     for (k, v) in &cfg.headers {
         head.extend_from_slice(k.as_bytes());
         head.extend_from_slice(b": ");
@@ -452,7 +495,7 @@ fn run(
                 Err(TryRecvError::Disconnected) => Err(RecvTimeoutError::Disconnected),
             }
         } else {
-            rx.recv_timeout(Duration::from_secs(50))
+            rx.recv_timeout(Duration::from_secs(KEEPALIVE_SECS))
         };
 
         match received {
@@ -485,13 +528,18 @@ fn run(
                     continue;
                 }
 
-                let n = STANDARD
-                    .encode_slice(&tx[..len], &mut b64)
-                    .expect("base64 buffer is large enough");
                 body.clear();
-                body.extend_from_slice(body_prefix);
-                body.extend_from_slice(&b64[..n]);
-                body.extend_from_slice(body_suffix);
+                if cfg.body == BodyFormat::Binary {
+                    // the wire format is the transaction itself: no base64, no JSON
+                    body.extend_from_slice(&tx[..len]);
+                } else {
+                    let n = STANDARD
+                        .encode_slice(&tx[..len], &mut b64)
+                        .expect("base64 buffer is large enough");
+                    body.extend_from_slice(body_prefix);
+                    body.extend_from_slice(&b64[..n]);
+                    body.extend_from_slice(body_suffix);
+                }
 
                 let mut num = [0u8; 20];
                 let digits = write_usize(&mut num, body.len());
@@ -582,7 +630,16 @@ fn run(
                 }
             }
             Err(RecvTimeoutError::Timeout) => {
-                // 50s keep-alive probe on every endpoint, matching what the providers expect
+                // keep-alive probe on every endpoint — see KEEPALIVE_SECS for the interval.
+                //
+                // The writes go out first and the replies are drained afterwards WITHOUT
+                // blocking. An earlier version did a blocking read per endpoint, which meant
+                // a provider with eleven regions could sit in this loop for over a second;
+                // a launch arriving in that window waited behind it. Since the probe interval
+                // had to come down to single digits (helius-sender hangs up at 10s), that
+                // window would have been hit often. Nothing here needs the response — the
+                // point is to put bytes on the socket — so it is send-all-then-drain, exactly
+                // like the launch path above.
                 if dry_run {
                     continue;
                 }
@@ -593,12 +650,17 @@ fn run(
                     if ep.conn.is_none() && ep.connect().is_err() {
                         continue;
                     }
-                    let health = ep.health.clone();
+                    let health = std::mem::take(&mut ep.health);
                     if let Some(c) = ep.conn.as_mut() {
-                        if c.write_all(&health).is_err() || c.read(&mut drain).is_err() {
+                        if c.write_all(&health).is_err() {
                             ep.conn = None;
                         }
                     }
+                    ep.health = health;
+                }
+                // pick up the replies, and notice any peer that hung up, without waiting
+                for ep in endpoints.iter_mut() {
+                    drain_ready(ep, &mut drain);
                 }
             }
             Err(RecvTimeoutError::Disconnected) => break,
@@ -653,6 +715,7 @@ mod tests {
         for (format, expect) in [
             (BodyFormat::JsonRpc, r#""method":"sendTransaction""#),
             (BodyFormat::Wrapped, r#"{"transaction":{"content":"QUJD"}"#),
+            (BodyFormat::WrappedBlox, r#"{"transaction":{"content":"QUJD"}"#),
             (BodyFormat::PlainTx, r#"{"transaction":"QUJD"}"#),
             (BodyFormat::Batch, r#"{"transactions":["QUJD"]}"#),
         ] {
@@ -662,6 +725,37 @@ mod tests {
             assert!(body.contains(expect), "{format:?} produced {body}");
             assert!(body.contains(b64));
         }
+    }
+
+    /// bloXroute holds a transaction for up to four slots under its default SP_MEDIUM, and
+    /// nextblock shares the same wrapper, so the two must not collapse back into one format.
+    /// `"low"` is rejected by their parser — only the enum spelling works.
+    #[test]
+    fn bloxroute_body_disables_the_leader_risk_hold() {
+        let (_, blox) = body_wrappers(BodyFormat::WrappedBlox);
+        let blox = std::str::from_utf8(blox).unwrap();
+        assert!(blox.contains(r#""submitProtection":"SP_LOW""#), "{blox}");
+        assert!(blox.contains(r#""frontRunningProtection":false"#), "{blox}");
+
+        let (_, plain) = body_wrappers(BodyFormat::Wrapped);
+        let plain = std::str::from_utf8(plain).unwrap();
+        assert!(!plain.contains("submitProtection"), "nextblock must not get it: {plain}");
+    }
+
+    /// Binary submission is the whole reason the format exists: the transaction bytes go on
+    /// the wire untouched, so there must be nothing wrapped around them and the content type
+    /// has to say octet-stream or blockrazor will try to parse them as JSON.
+    #[test]
+    fn binary_body_is_the_raw_transaction() {
+        let (prefix, suffix) = body_wrappers(BodyFormat::Binary);
+        assert!(prefix.is_empty() && suffix.is_empty());
+        assert_eq!(content_type(BodyFormat::Binary), b"application/octet-stream");
+        assert_eq!(content_type(BodyFormat::JsonRpc), b"application/json");
+
+        let cfg = cfg_with(vec!["a.example.com"], BodyFormat::Binary);
+        let head = String::from_utf8(request_head(&cfg, "a.example.com", &cfg.path)).unwrap();
+        assert!(head.contains("Content-Type: application/octet-stream"), "{head}");
+        assert!(!head.contains("application/json"), "{head}");
     }
 
     #[test]

@@ -158,6 +158,7 @@ fn hot(providers: usize, spinning: bool) -> (HotSniper, Vec<std::thread::JoinHan
         )
         .0,
         ghost_mode: false,
+        buy_exact_sol_in: false,
         confirm: None,
         tip: None,
     });
@@ -168,7 +169,7 @@ fn hot(providers: usize, spinning: bool) -> (HotSniper, Vec<std::thread::JoinHan
         user: buyer,
         user_volume_accumulator: crate::pumpfun::user_volume_accumulator(&buyer),
     };
-    let tmpl = template::build(&static_accounts, 90_000);
+    let tmpl = template::build(&static_accounts, 90_000, false);
 
     (
         HotSniper {
@@ -283,7 +284,7 @@ fn bench_hot_path_stages() {
         user: buyer,
         user_volume_accumulator: crate::pumpfun::user_volume_accumulator(&buyer),
     };
-    let mut tmpl = template::build(&static_accounts, 90_000);
+    let mut tmpl = template::build(&static_accounts, 90_000, false);
     let patch_key = key(0x99).to_bytes();
     let mut s = Vec::with_capacity(ITERS);
     for _ in 0..ITERS {

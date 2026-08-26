@@ -19,10 +19,21 @@ pub enum BodyFormat {
     JsonRpc,
     /// `{"transaction":{"content":"<base64>"},...}` — nextblock and bloxroute style.
     Wrapped,
+    /// `Wrapped` plus bloXroute's `submitProtection`. Their default is `SP_MEDIUM`, which
+    /// *holds* a transaction until four consecutive slots are clear of a leader they score
+    /// as high-risk. That is a sane default for a swap and fatal for a create-block snipe,
+    /// where the edge is gone by slip 2 — so bloxroute gets its own format pinned to
+    /// `SP_LOW` rather than sharing nextblock's. `"low"` is rejected: the enum spelling is
+    /// the one `/api/v2/submit` parses.
+    WrappedBlox,
     /// `{"transaction":"<base64>"}` — lucum and blockrazor.
     PlainTx,
     /// `{"transactions":["<base64>"]}` — flashblock's submit-batch.
     Batch,
+    /// Raw transaction bytes as the request body, `application/octet-stream`, auth in the
+    /// query string — blockrazor's `/v2/sendBinaryTransaction`. Skips base64 entirely, so
+    /// the request is ~26% smaller than the JSON form and the hot path does no encoding.
+    Binary,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -59,7 +70,7 @@ pub struct ProviderConfig {
     /// compute unit price in micro-lamports
     #[serde(default)]
     pub cu_price: u64,
-    /// keep-alive probe path (GET). Empty disables probing.
+    /// keep-alive probe path (GET, carrying this provider's headers). Empty disables probing.
     #[serde(default)]
     pub health_path: String,
     #[serde(default = "default_true")]

@@ -26,7 +26,7 @@ fn main() {
         user_volume_accumulator: Pubkey::new_from_array([0xB4; 32]),
     };
 
-    let template = sniper::template::build(&accounts, cu_limit);
+    let template = sniper::template::build(&accounts, cu_limit, false);
     println!("compute unit limit: {cu_limit}");
     println!("{}", template.describe());
 

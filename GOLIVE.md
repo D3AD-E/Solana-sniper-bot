@@ -83,9 +83,32 @@ A/B before trusting it live.
 
 - [ ] **Jito ShredStream auth keypair** — THE blocker. No create-block visibility, no
       slip-1, no strategy without it. Register/approve now (longest lead time).
-- [ ] `NEXTBLOCK_KEY` is a trial key — renew or drop before relying on it.
-- [ ] Optional extra senders (each = one more race entry, add after baseline works):
-      nozomi, bloxroute, flashblock, blockrazor, lucum, hellomoon. `.env` has the slots.
+- [x] `NEXTBLOCK_KEY` set in `.env` and **verified working** — auth passes on
+      `/api/v2/submit` (reaches tx validation), no auth -> 401. 8 endpoints enabled.
+- [ ] ...but it is still a **trial** key (the value literally starts `trial…`). It works
+      today; nothing warns you when it lapses, and a dead key looks like "nextblock never
+      wins a race". Renew or replace before real size.
+- [x] `NOZOMI_KEY` set in `.env`, all 9 direct regions enabled and verified (`/ping` 200 on
+      every host, bogus key -> 401). Regenerate `sniper.json` after any `.env` edit.
+- [x] `BLOXROUTE_KEY` set in `.env`, 6 endpoints (ny/germany/amsterdam/uk/tokyo + `global`
+      edge) verified against `/api/v2/rate-limit` and `/api/v2/submit`; bogus header -> 401.
+      Rate limit on this account is 3,000 per 60 s — the whole fan-out is 1 request per
+      launch per region, so ~500 launches/min before it binds.
+- [ ] **Set an ECS-capable DNS resolver on the box** (`8.8.8.8`, or OpenDNS
+      `208.67.222.222`) — *not* Cloudflare `1.1.1.1`. bloXroute routes each region's
+      hostname to the nearest bare-metal DC using EDNS Client Subnet; a resolver that hides
+      the client ASN silently lands us on a far POP. Nothing in `bootstrap.sh` sets this yet.
+- [x] `BLOCKRAZOR_KEY` set in `.env`, all 11 endpoints verified (`/health` 200 on every host,
+      no auth -> 403). Uses **binary** submission (`/v2/sendBinaryTransaction`, raw bytes, no
+      base64): proven by posting one identically-serialised tx as binary and as JSON and
+      getting the same downstream error. Min tip is 0.0001 SOL, the lowest of any provider.
+- [x] `FLASHBLOCK_KEY` set in `.env`, all 7 nodes verified (`GET /` 200 on every host, no
+      auth -> 403). Min tip 0.0001 SOL. lucum and lunar lander (hellomoon) were dropped from
+      the catalogue entirely — re-adding one means restoring its `ProviderSpec`, not a key.
+- [x] **Keep-alive interval corrected.** `helius-sender` closes idle connections after **10
+      seconds** (measured); the probe was at 50 s, so every helius send was reconnecting on
+      the hot path. `KEEPALIVE_SECS` is now 6 and the probe no longer blocks on replies.
+      Re-check any time with `python scripts/ping_providers.py --reuse-after 8`.
 
 ## 3. Wallet & accounts
 

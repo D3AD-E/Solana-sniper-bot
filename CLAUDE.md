@@ -489,7 +489,7 @@ findings verified against code before fixing; genuine ones fixed + tested.
 * **#5:** late durable-nonce fills are covered by reconciliation (#3); advancing the nonce on
   timeout to hard-invalidate is a documented future hardening, not yet built.
 
-Tests: Rust 61 (confirm 8 + tip 5 + pumpfun incl. the #1 regression + the rest), TS 21
+Tests: Rust 72 (confirm 8 + tip 5 + pumpfun incl. the #1 regression + the rest), TS 21
 (`src/pumpFun/ladder.test.ts`, run with `npm test` / vitest) covering parseLegs, reserves +
 creator offsets, constant-product sellValue, valueMultiple, and every `decideLegSize` branch
 (normal leg / stop-dump / moon-trim / force-out / clamp / final detection). Ladder math is
@@ -537,6 +537,140 @@ Still genuinely un-fixable in code (ops): provision ≥4 nonce accounts to cover
 nonce-refresh window — requires creating + funding nonce accounts with the wallet. A fill
 dropped while the seller is down still exits at force-out prices via reconciliation (not the
 ladder); acceptable and bounded at ≤60 s.
+
+## Sender providers
+
+Catalogue is `shred-sniper/sniper/src/providers.rs` (data only); `gen-config` turns it plus
+`.env` into `sniper.json`. A provider with no key in `.env` is silently omitted — check the
+"not enabled" list gen-config prints.
+
+**nozomi (temporal)** is keyed and live: `NOZOMI_KEY` in `.env`, `NOZOMI_REGIONS=all` → all
+9 direct regions (`ewr1 fra2 ams1 lon1 lax1 tyo1 sgp1 pit1 ash1`, plain http on :80; the
+digit-less `ewr./fra./…` aliases are Cloudflare, https-only and slower — do not use them).
+Auth is the `?c=<key>` query parameter; a bad key returns HTTP 401 `Unauthorized`, a good one
+returns a JSON-RPC error for a bad payload. Nozomi **closes any connection idle >65s**, so its
+spec carries `health_path: "/ping"` — the sender only keep-alives endpoints that declare one,
+and an empty value silently costs a fresh TCP handshake on every launch. Probe cadence is
+`sender_spin_micros` (2 s) + the 50 s `recv_timeout` ≈ 52 s, inside the 65 s window.
+Regression-guarded by `providers::tests::nozomi_declares_a_keepalive_path`.
+
+**bloxroute** is keyed and live: `BLOXROUTE_KEY` in `.env` is the raw base64 `accountID:secret`
+sent as the `Authorization` header (no `Bearer` prefix; a bad one returns HTTP 401 with a
+base64-decode message). 6 endpoints — `ny / germany / amsterdam / uk / tokyo` plus the `global`
+edge that routes to the nearest POP. **There is no LA endpoint**: `la.solana.dex.blxrbdn.com`
+appears nowhere in their docs and resolves to the same IP as `ny`, so the entry we used to carry
+was a duplicate send to New York. Keep-alive is `GET /health` (returns `ok`, no auth). Moved to
+port 80 / no TLS so it stays eligible for the io_uring batch writer — rustls owns its record
+framing, so a TLS endpoint costs one write syscall per region; the cost is the auth header
+crossing the wire in clear text.
+
+Two live traps here:
+
+* **Tip addresses.** The published table has 17. `95cfoy47...` is absent from bloXroute's docs
+  entirely and `HWEoBxYs...` survives only in SDK samples that say "as of 2/12/2024 … check docs
+  for the latest tip wallet" — both were at the head of our list. A tip to a superseded address
+  still leaves the wallet and buys nothing.
+* **DNS.** bloXroute picks the datacenter from EDNS Client Subnet. On Cloudflare `1.1.1.1` the
+  client ASN is hidden and a region hostname can resolve to a distant POP. The box must resolve
+  through Google `8.8.8.8` or OpenDNS. Nothing in `bootstrap.sh` sets this yet — see `INFRA.md`.
+
+**`submitProtection` is now pinned to `SP_LOW`.** Their default, `SP_MEDIUM`, *holds* a
+transaction until four consecutive slots are clear of a leader they score as high-risk —
+fine for a swap, fatal for a create-block snipe that dies at slip 2. Sending no field means
+taking the delaying default, which is what we were doing. `"low"` is rejected with
+`Failed to parse request`; the enum spelling `SP_LOW` is the one `/api/v2/submit` parses.
+This needed its own `BodyFormat::WrappedBlox` because nextblock shares the `wrapped` body and
+must not get the field. Still not set: `useStakedRPCs: true` (weighted-stake QoS; needs
+`frontRunningProtection=false`, which the body already sends).
+
+**blockrazor** is keyed and live on **binary submission**: `POST /v2/sendBinaryTransaction`
+with the signed transaction as raw bytes under `application/octet-stream` — no base64, no JSON
+envelope, ~26% fewer bytes than `/sendTransaction` and no encode in the hot path
+(`BodyFormat::Binary`). Verified by posting one identically-serialised transaction as binary
+and as base64 JSON and getting the same downstream error from the provider, so the framing is
+right — raw bytes, no length prefix.
+
+* The key must appear **twice**: `?auth=` in the query, which the submit path reads, and the
+  `apikey` header, which `/health` requires (it 403s without it). `gen-config` emits both
+  because the spec keeps `Auth::Header("apikey")` *and* a `{KEY}` in the path.
+* **Plain HTTP on port 443** — that is genuinely what blockrazor publishes, not a typo, and
+  TLS there fails the handshake.
+* 11 endpoints, not 7: Frankfurt runs three datacenters (`frankfurt`, `-allnodes`,
+  `-cherryservers`) and Amsterdam two, plus a Toronto region we were missing. Each is its own
+  race entry.
+* Min tip is **100,000 lamports (0.0001 SOL)**, the lowest of any provider here; the spec
+  previously claimed 1,000,000. Confirmed by the provider's own rejection message.
+
+**flashblock** is keyed and live: bare `Authorization` header, `/api/v2/submit-batch` with
+the `{"transactions":[...]}` body, 7 nodes (`ny slc ams fra singapore london tokyo`), min tip
+0.0001 SOL. Keep-alive is `GET /`.
+
+**lucum and lunar lander (hellomoon) were deleted from the catalogue** on 2026-08-26. A test
+pins them out; re-adding one means restoring its `ProviderSpec` and re-verifying its tip list,
+not pasting a key into `.env`.
+
+### Keep-alive: the interval is set by helius, and it was wrong
+
+Each endpoint is held open by a periodic GET to the provider's `health_path`. **A provider
+with an empty `health_path` is never probed at all**, so its connections go cold and every
+launch pays a TCP handshake on the hot path — silently, because reconnecting is not an error.
+jito, helius-sender, nextblock and flashblock were all in that state.
+
+Idle windows, measured with `scripts/ping_providers.py --reuse-after N` (it holds a real
+connection open and probes again), not assumed:
+
+| provider | idle window |
+|---|---|
+| **helius-sender** | **10 s** (survives 9, gone at 10) |
+| flashblock | 30 s (documented; survived 31 in practice) |
+| nozomi | 65 s (documented) |
+| everything else | longer |
+
+`KEEPALIVE_SECS` in `sender.rs` was **50 s**, so helius-sender's warm connections were always
+dead. It is now **6 s** (plus the ~2 s spin window = ~8 s real gap). The probe was also
+rewritten to write all endpoints then drain replies non-blocking, via the existing
+`drain_ready`: the old version did a blocking read per endpoint, which at 11 endpoints could
+park a sender thread for over a second — tolerable at a 50 s interval, not at 6 s, and a
+launch arriving in that window would have waited behind it.
+
+A non-200 is fine. jito publishes no health endpoint (every path 404s) and nextblock's
+`/health` 401s for our key; both answer `/` with a 404 on a connection they keep open, which
+is all the probe needs. `every_provider_declares_a_keepalive_path` pins that none is empty.
+
+`scripts/ping_providers.py` probes every endpoint in the generated `sniper.json` and exits
+non-zero on any failure or any provider missing a `health_path`:
+
+```
+python scripts/ping_providers.py                   # reachability, 72/72 expected
+python scripts/ping_providers.py --reuse-after 8   # connections survive the probe interval
+python scripts/ping_providers.py --reuse-after 10  # helius-sender should drop — proves the window
+```
+
+Re-run after any `.env` edit (WSL, not Windows):
+
+```
+cd shred-sniper && cargo run -p sniper --bin gen-config -- --env ../.env --out sniper.json
+```
+
+## Buy instruction: buy_exact_sol_in (aligned with the leader, 2026-08-26)
+
+Decoded from E4Ez's 439 own-signed buys (feePayer = E4Ez): **74% use `buy_exact_sol_in`**
+(fix the SOL, floor the tokens), 26% classic `buy` via a router. His token slippage: median
+**6.4%** (p25 4.6%, p75 11%). NOTE: the `proVF4pMXVaYqmy4NjniPh4pqKNfMmsihgd4wdkCX3u` router
+program seen earlier was OTHER wallets delivering to him, not his own buys - his own buys call
+pump directly.
+
+Switched our buy path to `buy_exact_sol_in` (`SNIPER_BUY_EXACT_SOL_IN=1`, default on). Verified
+his instruction uses the SAME 18-account layout as `buy`, so the change is localized: template
+swaps the discriminator (`[56,252,116,8,158,223,205,95]`) and the two u64s become (sol_in,
+min_tokens_out) at the same offsets. `CurveParams::plan_exact_sol_in` sets sol_in = budget,
+min_tokens = expected × (1 − slippage). Why it's better for us: the spend is fixed (never
+overshoots) and there's NO exact-token depth computation whose error blows `max_sol_cost` - the
+depth estimate only sets the floor. `SNIPER_SLIPPAGE_BPS` = 650 (his median), and its meaning is
+now instruction-dependent: exact_sol_in → min-tokens floor below expected; buy → max_sol_cost
+headroom. Both revert on a ~2-buy up-move (slip-0/1 fills, later reverts). Test:
+`pumpfun::exact_sol_in_fixes_spend_and_floors_tokens`. **MUST be validated in SNIPER_TEST_MODE=1
+(one real buy) before live** - a wrong discriminator/arg = a failed buy.
 
 ## Standing caveats
 

@@ -137,11 +137,31 @@ pub const NOZOMI_TIPS: &[&str] = &[
     "nozxNBgWohjR75vdspfxR5H9ceC7XXH99xpxhVGt3Bb",
 ];
 
+/// The 17 addresses in bloXroute's published tip table. The two that used to head this list
+/// are not in it: `95cfoy47...` appears nowhere in their docs at all, and `HWEoBxYs...`
+/// survives only in SDK code samples that themselves say "as of 2/12/2024 ... check docs to
+/// see latest up to date tip wallet". A tip to a superseded address still leaves the wallet
+/// but buys no priority, so it is a silent fee leak.
+/// bloXroute asks for rotation across the list to avoid write-lock contention, which is
+/// what `tip_accounts` already does per launch.
 pub const BLOX_TIPS: &[&str] = &[
-    "HWEoBxYs7ssKuudEjzjmpfJVX7Dvi7wescFsVx2L5yoY",
-    "95cfoy472fcQHaw4tPGBTKpn6ZQnfEPfBgDQx6gcRmRg",
     "3UQUKjhMKaY2S6bjcQD6yHB7utcZt5bfarRCmctpRtUd",
     "FogxVNs6Mm2w9rnGL1vkARSwJxvLE8mujTv3LK8RnUhF",
+    "bLx7MvxGaKdKL7mEbpk9tC79z6MnBSJoJkuaEAPu6Nd",
+    "bLx7XBqSg3LUPVf1bRgCnkJmgVZR8QEgDJBPqcRLHvp",
+    "bLx8KeZxinPwy6kkUgyzMLeqb2ARNsWjADG1dhSsVba",
+    "bLxADBknoNj8WAGw2W6GBYeq848Xx6ajhaymV1YvrHm",
+    "bLxAc88vRBwvcUQJEgcxNfBLvHPikY4csNsUmPeWea2",
+    "bLxQ88oCiTsL8Xj4YWekKi1hjrgmbE3J3FFZ2xZHR3h",
+    "bLxS7NoLuynNRJ4mCnEE2YbtwJFttYsEyp2ME7rp2yt",
+    "bLxW6mCov7VEbrKc3S9tcBRcfSzRnLCbNp3Dfn3SJG5",
+    "bLxXSGXs4mYPTC5okZXed1qzvjNwNJ48QJ82hT2V7w7",
+    "bLxYi3vojbbB7hVzVDVTdBLVPhp7GJ3ZB3BwdK5sFXi",
+    "bLxhLPgBXtUpX4b1bH3HatuMGMSKT9GnwtuCGiMSAqe",
+    "bLxpY1mniuFW4PgkNA4JiNxoeKHFszryi6tNgyZAiAA",
+    "bLxuETxd2tgWxBALNwPzAfHhsik4BzD3nrEBCiPNZQD",
+    "bLxuL2gK5FW7xfahvwLrxLyW76vcCpNsKQY2CmnE6kV",
+    "bLxv4Hnub7nDJWHs8s17o9bGU65Bnx6Yqp2fqtMgHmm",
 ];
 
 pub const FLASHBLOCK_TIPS: &[&str] = &[
@@ -174,32 +194,6 @@ pub const BLOCKRAZOR_TIPS: &[&str] = &[
     "AP6qExwrbRgBAVaehg4b5xHENX815sMabtBzUzVB4v8S",
 ];
 
-pub const LUCUM_TIPS: &[&str] = &[
-    "Lucum3sDVsPmHnQVaRKGpLXVPQLhcUqJqmcN5Tn9xuR",
-    "Lucum2REE14nX1xBJee9RR24gMaM878icjigfuvWy7H",
-    "Lucum2g9HQeHdXEaENapK66C9bgprAMADsg1XijoW2m",
-    "Lucum3TJzgBRMZV5CgkmsH6jnE9YKa9ceAQDrUQQuA6",
-    "Lucum3TosrLyi8nwP9L9E6s9HWRTg8Y8kv67MjWpkKk",
-    "Lucum3yhZeqqXxW3yeTRheBRqwwXnr285HzTiyWKrgm",
-    "Lucum4XaQeeARcS4EwmJsGpjNWUNH75hAD2k7jsxSKD",
-    "Lucum4r22CCf5M5Zsj4PvhxYJ8CGz4QQMUCrL89Rupz",
-    "Lucum5FeurZkc7qrKadaWmzsZ6L1ig79EHGXJU65rPn",
-    "Lucum6s8rtKN5n7oWMm1h2Afm18DxWuA8Fgmraikxa3",
-];
-
-pub const LUNARLANDER_TIPS: &[&str] = &[
-    "moon17L6BgxXRX5uHKudAmqVF96xia9h8ygcmG2sL3F",
-    "moon26Sek222Md7ZydcAGxoKG832DK36CkLrS3PQY4c",
-    "moon7fwyajcVstMoBnVy7UBcTx87SBtNoGGAaH2Cb8V",
-    "moonBtH9HvLHjLqi9ivyrMVKgFUsSfrz9BwQ9khhn1u",
-    "moonCJg8476LNFLptX1qrK8PdRsA1HD1R6XWyu9MB93",
-    "moonF2sz7qwAtdETnrgxNbjonnhGGjd6r4W4UC9284s",
-    "moonKfftMiGSak3cezvhEqvkPSzwrmQxQHXuspC96yj",
-    "moonQBUKBpkifLcTd78bfxxt4PYLwmJ5admLW6cBBs8",
-    "moonXwpKwoVkMegt5Bc776cSW793X1irL5hHV1vJ3JA",
-    "moonZ6u9E2fgk6eWd82621eLPHt9zuJuYECXAYjMY1C",
-];
-
 pub const PROVIDERS: &[ProviderSpec] = &[
     ProviderSpec {
         name: "jito",
@@ -209,7 +203,11 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         port: 443,
         tls: true,
         path: "/api/v1/transactions?bundleOnly=true",
-        health_path: "",
+        // jito publishes no health endpoint — every path 404s. That is still a perfectly
+        // good keep-alive: the probe exists to put bytes on the socket and read a reply, and
+        // a 404 comes back on a connection the server leaves open. Do not "fix" this to a
+        // 200-returning path; there isn't one.
+        health_path: "/",
         body: "json_rpc",
         min_tip: 1_000,
         signup: "https://docs.jito.wtf/ (no key required)",
@@ -233,7 +231,9 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         port: 80,
         tls: false,
         path: "/fast",
-        health_path: "",
+        // GET /ping -> 200 on every sender region. helius hangs up after only TEN seconds
+        // idle — the tightest window of any provider here and what sets KEEPALIVE_SECS.
+        health_path: "/ping",
         body: "json_rpc",
         min_tip: 1_000_000,
         signup: "https://www.helius.dev/docs/sending-transactions/sender (key optional)",
@@ -320,7 +320,9 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         port: 80,
         tls: false,
         path: "/api/v2/submit",
-        health_path: "",
+        // /health exists but 401s for our key; `/` 404s and answers `Connection: keep-alive`,
+        // which is all the probe needs. Any reply keeps the socket warm.
+        health_path: "/",
         body: "wrapped",
         min_tip: 1_000_000,
         signup: "https://docs.nextblock.io/ (t.me/nextblock_support)",
@@ -344,7 +346,10 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         port: 80,
         tls: false,
         path: "/?c={KEY}",
-        health_path: "",
+        // nozomi closes an idle connection after 65s and publishes a lightweight GET /ping
+        // for exactly this. Without it the sender's 50s probe skips nozomi and every launch
+        // pays a fresh TCP handshake.
+        health_path: "/ping",
         body: "json_rpc",
         min_tip: 1_000_000,
         signup: "https://use.temporal.xyz/ (dashboard issues the key)",
@@ -365,21 +370,34 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         name: "bloxroute",
         env_key: "BLOXROUTE_KEY",
         env_regions: "BLOXROUTE_REGIONS",
+        // the auth header is the raw base64 `accountID:secret` value, no `Bearer` prefix
         auth: Auth::Header("Authorization"),
-        port: 443,
-        tls: true,
+        // plain HTTP, like every other keyed provider here: rustls owns its own record
+        // framing, so a TLS endpoint cannot go through the io_uring batch writer and costs
+        // one write syscall per region instead of one batched submit for all of them. The
+        // tradeoff is that the auth header crosses the wire in the clear — flip both fields
+        // back to 443/true to undo it.
+        port: 80,
+        tls: false,
         path: "/api/v2/submit",
-        health_path: "",
-        body: "wrapped",
+        // GET /health returns `ok` on every region and needs no auth
+        health_path: "/health",
+        // not plain `wrapped`: bloXroute's submitProtection default holds the transaction
+        // for up to four slots. See BodyFormat::WrappedBlox.
+        body: "wrapped_blox",
         min_tip: 1_000_000,
         signup: "https://bloxroute.com/products/solana-trader-api/",
+        // `la.solana.dex.blxrbdn.com` is gone from the published region table and resolves
+        // to the same address as `ny` — firing at it was a duplicate send to New York, not
+        // a Los Angeles entry. `global` is the edge endpoint that routes to the nearest
+        // submission POP; worth keeping while we are not colocated.
         hosts: &[
             ("ny", "ny.solana.dex.blxrbdn.com"),
             ("fra", "germany.solana.dex.blxrbdn.com"),
             ("ams", "amsterdam.solana.dex.blxrbdn.com"),
             ("lon", "uk.solana.dex.blxrbdn.com"),
-            ("la", "la.solana.dex.blxrbdn.com"),
             ("tyo", "tokyo.solana.dex.blxrbdn.com"),
+            ("global", "global.solana.dex.blxrbdn.com"),
         ],
         tips: BLOX_TIPS,
     },
@@ -391,9 +409,11 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         port: 80,
         tls: false,
         path: "/api/v2/submit-batch",
-        health_path: "",
+        // flashblock documents `GET /` as the keep-alive and caps a connection at 30s idle
+        health_path: "/",
         body: "batch",
-        min_tip: 1_000_000,
+        // documented floor is 0.0001 SOL, same as blockrazor
+        min_tip: 100_000,
         signup: "https://flashblock.trade/ (doc.flashblock.trade, t.me/FlashBlock_support)",
         hosts: &[
             ("ny", "ny.flashblock.trade"),
@@ -410,69 +430,36 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         name: "blockrazor",
         env_key: "BLOCKRAZOR_KEY",
         env_regions: "BLOCKRAZOR_REGIONS",
+        // the key goes in BOTH places on purpose: `/v2/sendBinaryTransaction` reads it from
+        // the query string, while the `/health` keep-alive is a GET that only carries
+        // headers and 403s without `apikey`.
         auth: Auth::Header("apikey"),
+        // plain HTTP on :443. That is genuinely what blockrazor publishes, not a typo.
         port: 443,
         tls: false,
-        path: "/sendTransaction",
-        health_path: "",
-        body: "plain_tx",
-        min_tip: 1_000_000,
+        // binary submission: raw transaction bytes, no base64 and no JSON envelope, which is
+        // ~26% fewer bytes on the wire than `/sendTransaction` and no encode in the hot path.
+        path: "/v2/sendBinaryTransaction?auth={KEY}",
+        health_path: "/health",
+        body: "binary",
+        // blockrazor's documented floor is 0.0001 SOL, the lowest of any provider here
+        min_tip: 100_000,
         signup: "https://blockrazor.io/ (docs.blockrazor.io)",
+        // several metros run more than one datacenter and each is its own race entry
         hosts: &[
             ("ny", "newyork.solana.blockrazor.xyz"),
             ("fra", "frankfurt.solana.blockrazor.xyz"),
+            ("fra", "frankfurt-allnodes.solana.blockrazor.xyz"),
+            ("fra", "frankfurt-cherryservers.solana.blockrazor.xyz"),
             ("ams", "amsterdam.solana.blockrazor.xyz"),
+            ("ams", "amsterdam-cherryservers.solana.blockrazor.xyz"),
             ("lon", "london.solana.blockrazor.xyz"),
             ("tyo", "tokyo.solana.blockrazor.xyz"),
             ("sgp", "singapore.solana.blockrazor.xyz"),
             ("la", "losangeles.solana.blockrazor.xyz"),
+            ("tor", "toronto.solana.blockrazor.xyz"),
         ],
         tips: BLOCKRAZOR_TIPS,
-    },
-    ProviderSpec {
-        name: "lucum",
-        env_key: "LUCUM_KEY",
-        env_regions: "LUCUM_REGIONS",
-        auth: Auth::Query,
-        port: 80,
-        tls: false,
-        path: "/?api-key={KEY}",
-        health_path: "",
-        body: "plain_tx",
-        min_tip: 1_000_000,
-        signup: "https://lucum.io/docs/",
-        hosts: &[
-            ("ny", "ny.lucum.io"),
-            ("fra", "fra.lucum.io"),
-            ("ams", "ams.lucum.io"),
-            ("lon", "lon.lucum.io"),
-        ],
-        tips: LUCUM_TIPS,
-    },
-    ProviderSpec {
-        name: "lunarlander",
-        env_key: "HELLOMOON_KEY",
-        env_regions: "HELLOMOON_REGIONS",
-        auth: Auth::Header("x-api-key"),
-        port: 80,
-        tls: false,
-        path: "/send",
-        health_path: "/ping",
-        body: "json_rpc",
-        min_tip: 1_000_000,
-        signup: "https://docs.hellomoon.io/reference/lunar-lander",
-        hosts: &[
-            ("ny", "nyc.lunar-lander.hellomoon.io"),
-            ("fra", "fra.lunar-lander.hellomoon.io"),
-            ("ams", "ams.lunar-lander.hellomoon.io"),
-            ("lon", "lon.lunar-lander.hellomoon.io"),
-            ("la", "lax.lunar-lander.hellomoon.io"),
-            ("tyo", "tyo.lunar-lander.hellomoon.io"),
-            ("sgp", "sgp.lunar-lander.hellomoon.io"),
-            ("ash", "ash.lunar-lander.hellomoon.io"),
-            ("chi", "chi.lunar-lander.hellomoon.io"),
-        ],
-        tips: LUNARLANDER_TIPS,
     },
 ];
 
@@ -501,7 +488,10 @@ mod tests {
         for p in PROVIDERS {
             assert!(!p.hosts.is_empty(), "{} has no hosts", p.name);
             assert!(
-                matches!(p.body, "json_rpc" | "wrapped" | "plain_tx" | "batch"),
+                matches!(
+                    p.body,
+                    "json_rpc" | "wrapped" | "wrapped_blox" | "plain_tx" | "batch" | "binary"
+                ),
                 "{}: unknown body format {}",
                 p.name,
                 p.body
@@ -526,6 +516,130 @@ mod tests {
                 Auth::Header(h) => assert!(!h.is_empty(), "{}: empty header name", p.name),
                 Auth::None => panic!("{}: has an env key but no auth", p.name),
             }
+        }
+    }
+
+    /// nozomi closes any connection idle for more than 65s. The sender only sends its
+    /// keep-alive probe to endpoints that declare a `health_path`, so an empty one here
+    /// silently costs a TCP handshake on every launch - the opposite of the point.
+    #[test]
+    fn nozomi_declares_a_keepalive_path() {
+        let nozomi = PROVIDERS
+            .iter()
+            .find(|p| p.name == "nozomi")
+            .expect("nozomi missing from the catalogue");
+        assert_eq!(nozomi.health_path, "/ping");
+        assert_eq!(nozomi.hosts.len(), 9, "nozomi publishes 9 direct regions");
+        for (region, host) in nozomi.hosts {
+            assert!(
+                host.ends_with(".nozomi.temporal.xyz"),
+                "{region}: {host} is not a nozomi host"
+            );
+            let sub = host.split('.').next().unwrap();
+            assert!(
+                sub.chars().last().unwrap().is_ascii_digit(),
+                "{region}: {host} is a cloudflare alias (https only), not a direct endpoint"
+            );
+        }
+    }
+
+    /// Two things here were silently wrong and neither would have surfaced as an error:
+    /// tips went to addresses bloXroute has retired (the lamports leave, the priority does
+    /// not arrive), and `la` resolved to the New York host, so a sixth of the fan-out was a
+    /// duplicate send. Both are the kind of fault that only shows up as "we keep losing
+    /// races", so pin them.
+    #[test]
+    fn bloxroute_tips_and_regions_match_the_published_set() {
+        let blox = PROVIDERS
+            .iter()
+            .find(|p| p.name == "bloxroute")
+            .expect("bloxroute missing from the catalogue");
+
+        assert_eq!(blox.tips.len(), 17, "bloXroute's published tip table has 17 addresses");
+        for superseded in ["HWEoBxYs7ssKuudEjzjmpfJVX7Dvi7wescFsVx2L5yoY",
+                           "95cfoy472fcQHaw4tPGBTKpn6ZQnfEPfBgDQx6gcRmRg"] {
+            assert!(
+                !blox.tips.contains(&superseded),
+                "{superseded} is not in the published tip table"
+            );
+        }
+
+        assert!(
+            !blox.hosts.iter().any(|(r, _)| *r == "la"),
+            "bloxroute has no LA endpoint - la.solana.dex.blxrbdn.com is the NY host"
+        );
+        for (region, host) in blox.hosts {
+            assert!(
+                host.ends_with(".solana.dex.blxrbdn.com"),
+                "{region}: {host} is not a bloXroute submission endpoint"
+            );
+        }
+
+        // /health is what keeps the connection warm; an empty value skips the probe entirely
+        assert_eq!(blox.health_path, "/health");
+        // plain HTTP so the endpoints stay eligible for the io_uring batch writer
+        assert_eq!((blox.port, blox.tls), (80, false));
+    }
+
+    /// blockrazor's key has to appear twice — the binary submit path reads it from the query
+    /// string, the `/health` keep-alive only sends headers and 403s without `apikey`. Drop
+    /// either half and the failure is quiet: no keep-alive, or no sends.
+    #[test]
+    fn blockrazor_carries_its_key_in_both_places() {
+        let br = PROVIDERS
+            .iter()
+            .find(|p| p.name == "blockrazor")
+            .expect("blockrazor missing from the catalogue");
+
+        assert_eq!(br.path, "/v2/sendBinaryTransaction?auth={KEY}");
+        assert!(br.path.contains("{KEY}"), "binary submit needs the key in the query");
+        assert_eq!(br.auth, Auth::Header("apikey"), "/health needs the apikey header");
+        assert_eq!(br.body, "binary");
+        assert_eq!(br.health_path, "/health");
+        // plain HTTP on 443 is what blockrazor publishes; TLS here would fail the handshake
+        assert_eq!((br.port, br.tls), (443, false));
+        assert_eq!(br.hosts.len(), 11);
+    }
+
+    /// The whole point of giving bloxroute its own body format.
+    #[test]
+    fn bloxroute_does_not_share_nextblocks_body() {
+        let blox = PROVIDERS.iter().find(|p| p.name == "bloxroute").unwrap();
+        let nextblock = PROVIDERS.iter().find(|p| p.name == "nextblock").unwrap();
+        assert_eq!(blox.body, "wrapped_blox");
+        assert_eq!(nextblock.body, "wrapped");
+    }
+
+    /// The sender only probes endpoints that declare a `health_path`, so an empty one means
+    /// that provider's connections go cold and every launch pays a TCP handshake. It does not
+    /// have to be a path that returns 200 — jito and nextblock 404 and that is fine, the point
+    /// is to get *a* reply on a connection the server keeps open — but it has to be set.
+    #[test]
+    fn every_provider_declares_a_keepalive_path() {
+        for p in PROVIDERS {
+            assert!(
+                !p.health_path.is_empty(),
+                "{}: no health_path, its connections will go cold",
+                p.name
+            );
+            assert!(
+                p.health_path.starts_with('/'),
+                "{}: health_path {} is not a path",
+                p.name,
+                p.health_path
+            );
+        }
+    }
+
+    /// Providers we deliberately removed. Re-adding one is a real decision (its tip list and
+    /// endpoints have to be re-verified), not something to do by pasting a key into `.env`.
+    #[test]
+    fn dropped_providers_stay_dropped() {
+        for gone in ["lucum", "lunarlander"] {
+            assert!(
+                !PROVIDERS.iter().any(|p| p.name == gone),
+                "{gone} was dropped on 2026-08-26"
+            );
         }
     }
 

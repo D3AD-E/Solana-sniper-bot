@@ -117,7 +117,7 @@ fn main() {
         .expect("at least one provider for tip settings");
     let tip_account = provider.tip_account_bytes().expect("tip accounts")[0];
 
-    let mut tmpl = template::build(&static_accounts, cfg.cu_limit);
+    let mut tmpl = template::build(&static_accounts, cfg.cu_limit, false);
     let o = tmpl.offsets;
     tmpl.patch_key(o.mint, &mint.to_bytes());
     tmpl.patch_key(o.bonding_curve, &bonding_curve.to_bytes());

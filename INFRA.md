@@ -24,15 +24,22 @@ near one.
 
 | Latitude region | provider coverage | notes |
 | --- | --- | --- |
-| **Frankfurt (FRA)** | jito, 0slot (`de2`), astralane (`fr`), node1, nextblock, nozomi (`fra2`), flashblock, lucum, lunar lander | densest EU validator population; `NODE_REGION=fra` already |
-| **Amsterdam (AMS)** | jito, 0slot, astralane, node1, nextblock, nozomi, bloxroute, flashblock, lucum, lunar lander | as good as Frankfurt, sometimes better peering |
-| **New York (NYC)** | jito, 0slot, astralane, node1, nextblock, nozomi (`ewr`), bloxroute, flashblock, lucum, lunar lander | best US coverage |
-| Ashburn (IAD) | helius sender, nozomi (`ash`), lunar lander | large validator presence, thinner provider list |
-| Tokyo (TYO) | jito, 0slot (`jp`), astralane (`jp`), node1 (`tk`), nextblock, nozomi, bloxroute, flashblock, lunar lander | worth it only if targeting APAC leaders |
+| **Frankfurt (FRA)** | jito, 0slot (`de2`), astralane (`fr`), node1, nextblock, nozomi (`fra2`), flashblock, blockrazor | densest EU validator population; `NODE_REGION=fra` already |
+| **Amsterdam (AMS)** | jito, 0slot, astralane, node1, nextblock, nozomi, bloxroute, flashblock, blockrazor | as good as Frankfurt, sometimes better peering |
+| **New York (NYC)** | jito, 0slot, astralane, node1, nextblock, nozomi (`ewr`), bloxroute, flashblock, blockrazor | best US coverage |
+| Ashburn (IAD) | helius sender, nozomi (`ash`) | large validator presence, thinner provider list |
+| Tokyo (TYO) | jito, 0slot (`jp`), astralane (`jp`), node1 (`tk`), nextblock, nozomi, bloxroute, flashblock, blockrazor | worth it only if targeting APAC leaders |
 | Chicago, Dallas, LA, Sydney, São Paulo | patchy | avoid for this workload |
 
 Frankfurt or Amsterdam if you keep `NODE_REGION=fra`. Do not pick a region because the
 machine is cheaper there; a 20ms disadvantage cannot be recovered by any amount of tuning.
+
+**Set the box's resolver to one that supports EDNS Client Subnet** — Google `8.8.8.8` or
+OpenDNS `208.67.222.222` / `208.67.220.220`. bloXroute runs each region on several bare-metal
+providers and picks the DC from the client subnet the resolver passes through; Cloudflare
+`1.1.1.1` strips it, so the region hostname can resolve to a distant POP no matter which
+Latitude region the box is in. Same reason to avoid a VPN or a corporate resolver on the
+sniper box.
 
 Verify before committing, from a trial box:
 
@@ -105,7 +112,7 @@ it is on the hot path. A local RPC only helps if you were running a validator an
   single most valuable sysctl here.
 - **`net.ipv4.tcp_slow_start_after_idle=0`.** Provider connections idle between launches. By
   default the kernel discards the congestion window after one RTO of idleness and slow-starts
-  the next send — precisely the send you care about. The 50s keep-alive pings do not prevent
+  the next send — precisely the send you care about. The 6s keep-alive pings do not prevent
   this on their own.
 
 The boot half has to go on the kernel command line:

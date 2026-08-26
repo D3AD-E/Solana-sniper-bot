@@ -39,8 +39,11 @@ use crate::pumpfun::{
     TOKEN_2022_PROGRAM, TOKEN_PROGRAM,
 };
 
-/// Discriminator of pump.fun `buy`.
+/// Discriminator of pump.fun `buy` (arg0 = exact tokens, arg1 = max_sol_cost).
 const DISC_BUY: [u8; 8] = [102, 6, 61, 18, 1, 218, 235, 234];
+/// Discriminator of pump.fun `buy_exact_sol_in` (arg0 = sol_in, arg1 = min_tokens_out). Same
+/// 18-account layout as `buy`; the leader uses this on ~75% of buys.
+const DISC_BUY_EXACT_SOL_IN: [u8; 8] = [56, 252, 116, 8, 158, 223, 205, 95];
 
 /// spl-token account size without extensions, and its rent-exempt minimum.
 pub const TOKEN_ACCOUNT_SPACE: u64 = 165;
@@ -128,7 +131,7 @@ fn rw(k: Pubkey) -> AccountMeta {
 /// buyback fee recipient. Sending only the 16 IDL accounts fails with
 /// `BuybackFeeRecipientMissing` (0x17ae) and, once the buyback recipient is added,
 /// `InvalidBondingCurveV2` (0x17ba).
-pub fn build(static_accounts: &StaticAccounts, cu_limit: u32) -> Template {
+pub fn build(static_accounts: &StaticAccounts, cu_limit: u32, exact_sol_in: bool) -> Template {
     let StaticAccounts {
         user,
         user_volume_accumulator,
@@ -209,9 +212,10 @@ pub fn build(static_accounts: &StaticAccounts, cu_limit: u32) -> Template {
 
     // 6. pump.fun buy
     let mut buy_data = Vec::with_capacity(25);
-    buy_data.extend_from_slice(&DISC_BUY);
-    buy_data.extend_from_slice(&D_AMOUNT.to_le_bytes());
-    buy_data.extend_from_slice(&D_MAX_SOL.to_le_bytes());
+    // same accounts either way; only the discriminator + the meaning of the two u64s differ.
+    buy_data.extend_from_slice(if exact_sol_in { &DISC_BUY_EXACT_SOL_IN } else { &DISC_BUY });
+    buy_data.extend_from_slice(&D_AMOUNT.to_le_bytes()); // buy: amount | exact_sol_in: sol_in
+    buy_data.extend_from_slice(&D_MAX_SOL.to_le_bytes()); // buy: max_sol_cost | exact_sol_in: min_tokens
     buy_data.push(0); // track_volume: OptionBool::None
     instructions.push(Instruction {
         program_id: PUMP_PROGRAM,
@@ -493,7 +497,7 @@ mod tests {
 
     #[test]
     fn template_offsets_are_found_and_patchable() {
-        let mut t = build(&accounts(), 90_000);
+        let mut t = build(&accounts(), 90_000, false);
         assert_eq!(t.tx[0], 1);
 
         let mint = [0x5A; 32];
@@ -524,7 +528,7 @@ mod tests {
     /// advanceNonce, tip, cu limit, cu price, createAccountWithSeed, initializeAccount3, buy.
     #[test]
     fn template_matches_the_reference_instruction_layout() {
-        let t = build(&accounts(), 90_000);
+        let t = build(&accounts(), 90_000, false);
         let msg: VersionedMessage = bincode::deserialize(t.message()).expect("valid v0 message");
         let VersionedMessage::V0(m) = msg else {
             panic!("expected v0");

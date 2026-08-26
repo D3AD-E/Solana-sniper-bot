@@ -101,25 +101,48 @@ Every provider is the same thing: a warm keep-alive connection, a tip account an
 unit price. Jito is not special — it uses the same prebuilt template and byte patching as the
 rest.
 
+**Keep-alive is not optional and the interval is not arbitrary.** Each endpoint is held open
+by a periodic GET to the provider's `health_path`; a provider with an empty `health_path` is
+never probed, so its connection goes cold and every launch pays a TCP handshake on the hot
+path. The interval (`KEEPALIVE_SECS` in `sender.rs`) is set by the *tightest* provider window,
+measured rather than assumed: **helius-sender hangs up after 10 s**, flashblock after 30 s,
+nozomi after 65 s. It is 6 s. A non-200 reply is fine — jito and nextblock 404 every path, and
+a 404 on an open connection does the job. Verify with:
+
+```bash
+python scripts/ping_providers.py                   # every endpoint reachable
+python scripts/ping_providers.py --reuse-after 8   # connections survive the probe interval
+```
+
 | Provider | Auth | Min tip | Notes |
 | --- | --- | --- | --- |
-| jito | none | 1,000 | `/api/v1/transactions`, HTTPS, all regions |
-| helius sender | none | 1,000,000 | `/fast`, regional HTTP endpoints |
+| jito | none | 1,000 | `/api/v1/transactions`, HTTPS, all regions. No health endpoint - `/` 404s, which still keeps the socket warm |
+| helius sender | none | 1,000,000 | `/fast`, `GET /ping`. **Closes idle connections at 10s** - tightest window here |
 | 0slot | `?api-key=` | 1,000,000 | ny/de/ams/jp/la |
 | astralane | `?api-key=` | 10,000 | `/iris` |
 | node1 | `api-key` header | — | ny/ams/fra only, no Tokyo or LA |
 | nextblock | `Authorization` header | — | `/api/v2/submit`, wrapped body |
-| nozomi (temporal) | `?c=` | 1,000,000 | 9 regions |
-| bloxroute | `Authorization` header | 1,000,000 | wrapped body |
+| nozomi (temporal) | `?c=` | 1,000,000 | 9 direct http regions, `GET /ping` keep-alive (idle >65s is closed) |
+| bloxroute | `Authorization` header | 1,000,000 | wrapped body, `GET /health` keep-alive, 5 regions + `global` edge, needs an ECS resolver |
+| flashblock | `Authorization` header | 100,000 | `/api/v2/submit-batch`, `GET /` keep-alive, closes idle at 30s, 7 nodes |
 | circular FAST | `x-api-key` header | 1,000,000 | `fast.circular.fi` |
-| blockrazor | `apikey` header | — | tip account taken from the reference transaction |
+| blockrazor | `?auth=` + `apikey` header | 100,000 | **binary** body, plain HTTP on :443, 11 endpoints, `/health` keep-alive |
 
 jito and helius sender need no API key, so they are the two enabled by default in
 `sniper.example.json`. Listing the same host twice with different `cu_price` values sends
 both variants. `tip_accounts` is a list and rotates per launch.
 
-Body format is `json_rpc` (default) or `wrapped` for nextblock/bloxroute style
-`{"transaction":{"content":"..."}}`.
+Body format is `json_rpc` (default), `wrapped` for nextblock style
+`{"transaction":{"content":"..."}}`, `wrapped_blox` for bloxroute (the same wrapper plus
+`"submitProtection":"SP_LOW"` — their default, `SP_MEDIUM`, *holds* a transaction until four
+consecutive slots are clear of a leader they score as high-risk, which is fatal at slip 2),
+`plain_tx`, `batch`, or `binary`.
+
+`binary` is blockrazor's `/v2/sendBinaryTransaction`: the signed transaction goes on the wire
+as raw bytes under `application/octet-stream`, with no base64 and no JSON envelope. That is
+~26% fewer bytes than the JSON form and removes the encode from the hot path. Verified by
+posting one identically-serialised transaction both ways and getting the same downstream
+error from the provider.
 
 ## Configuration
 

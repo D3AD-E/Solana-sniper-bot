@@ -90,6 +90,9 @@ pub struct Shared {
     /// sync / test / ghost gating
     pub gate: Arc<PositionGate>,
     pub ghost_mode: bool,
+    /// use pump `buy_exact_sol_in` (fix SOL, floor tokens) instead of `buy` (fix tokens, cap
+    /// SOL) - the leader's instruction, and it removes the exact-token depth-estimate revert.
+    pub buy_exact_sol_in: bool,
     /// token accounts for every seed, derived at startup
     pub seed_table: SeedTable,
     /// v1.1 confirmation-trigger params, or None when the whitelist path is in use.
@@ -149,9 +152,17 @@ impl Sniper {
             user_volume_accumulator: pumpfun::user_volume_accumulator(&buyer),
         };
 
+        // the leader uses buy_exact_sol_in on ~75% of buys; default it on. Same accounts as
+        // buy, so the template only swaps the discriminator + the meaning of the two args.
+        let buy_exact_sol_in = std::env::var("SNIPER_BUY_EXACT_SOL_IN")
+            .map(|v| v.trim() != "0")
+            .unwrap_or(true);
+        info!("sniper: buy instruction = {}",
+            if buy_exact_sol_in { "buy_exact_sol_in" } else { "buy" });
+
         // built before the senders start: each one needs the offsets of the three fields it
         // owns, so it can stamp them onto the shared body on its own thread
-        let template = template::build(&static_accounts, cfg.cu_limit);
+        let template = template::build(&static_accounts, cfg.cu_limit, buy_exact_sol_in);
         info!("sniper: template ready\n{}", template.describe());
         let tip_offsets = TipOffsets {
             tip_account: template.offsets.tip_account,
@@ -290,6 +301,7 @@ impl Sniper {
             buyer,
             gate,
             ghost_mode: cfg.ghost_mode,
+            buy_exact_sol_in,
             seed_table,
             confirm,
             tip: tip_params,
@@ -478,12 +490,20 @@ impl HotSniper {
             return None;
         }
 
-        let plan = self.shared.curve.plan_buy(
-            info.dev_buy_lamports,
-            self.shared.buy_lamports,
-            self.shared.haircut_bps,
-            self.shared.slippage_bps,
-        );
+        let plan = if self.shared.buy_exact_sol_in {
+            self.shared.curve.plan_exact_sol_in(
+                info.dev_buy_lamports,
+                self.shared.buy_lamports,
+                self.shared.slippage_bps,
+            )
+        } else {
+            self.shared.curve.plan_buy(
+                info.dev_buy_lamports,
+                self.shared.buy_lamports,
+                self.shared.haircut_bps,
+                self.shared.slippage_bps,
+            )
+        };
         if plan.amount == 0 {
             return None;
         }
@@ -549,14 +569,23 @@ impl HotSniper {
         match result {
             Ok(fire) => {
                 self.pending.remove(&buy.mint);
-                // price against the FULL curve depth ahead of us (dev + confirmers), not just
-                // the dev buy, or the exact-token request exceeds max_sol_cost on chain.
-                let plan = self.shared.curve.plan_buy(
-                    fire.prior_flow_lamports,
-                    fire.budget_lamports,
-                    self.shared.haircut_bps,
-                    self.shared.slippage_bps,
-                );
+                // price against the FULL curve depth ahead of us (dev + confirmers). With
+                // buy_exact_sol_in this only sets the min-tokens floor; with buy it sets the
+                // exact token amount (whose depth error is what used to blow max_sol_cost).
+                let plan = if self.shared.buy_exact_sol_in {
+                    self.shared.curve.plan_exact_sol_in(
+                        fire.prior_flow_lamports,
+                        fire.budget_lamports,
+                        self.shared.slippage_bps,
+                    )
+                } else {
+                    self.shared.curve.plan_buy(
+                        fire.prior_flow_lamports,
+                        fire.budget_lamports,
+                        self.shared.haircut_bps,
+                        self.shared.slippage_bps,
+                    )
+                };
                 if plan.amount == 0 {
                     return None;
                 }

@@ -314,12 +314,17 @@ pub struct CurveParams {
     pub creator_fee_basis_points: u64,
 }
 
-/// What to put in the buy instruction.
+/// What to put in the buy instruction's two u64 fields.
+///
+/// The two fields sit at the same byte offsets for both pump buy variants, so the same patch
+/// mechanism serves both - only their MEANING differs by instruction:
+///   * `buy`               -> arg0 = exact token amount, arg1 = max_sol_cost (spend cap)
+///   * `buy_exact_sol_in`  -> arg0 = sol_in (fixed spend), arg1 = min_tokens_out (floor)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuyPlan {
-    /// exact token amount to request
+    /// `buy`: exact token amount. `buy_exact_sol_in`: the sol to spend (= budget).
     pub amount: u64,
-    /// hard cap on lamports the program may take, fees included
+    /// `buy`: max_sol_cost cap. `buy_exact_sol_in`: min_tokens_out floor.
     pub max_sol_cost: u64,
 }
 
@@ -389,6 +394,33 @@ impl CurveParams {
             max_sol_cost,
         }
     }
+
+    /// Sizes a `buy_exact_sol_in`, the instruction the leader uses on ~75% of buys.
+    ///
+    /// Fixes the SOL spent (`sol_in` = the full budget) and sets a `min_tokens_out` floor. The
+    /// spend can never overshoot, and unlike `buy` there is NO exact-token computation whose
+    /// depth error blows the cap - the depth estimate only affects the floor. If the curve moved
+    /// up (fewer tokens) below the floor it reverts (desired: we were overtaken); if it moved
+    /// down (more tokens) it fills. `prior_flow_lamports` is the net SOL in the curve ahead of
+    /// us; `slippage_bps` is how far below the expected token amount we still accept
+    /// (E4Ez's median ~640 bps).
+    #[inline]
+    pub fn plan_exact_sol_in(
+        &self,
+        prior_flow_lamports: u64,
+        budget_lamports: u64,
+        slippage_bps: u64,
+    ) -> BuyPlan {
+        let curve_sol = (budget_lamports as u128 * 10_000
+            / (10_000 + self.total_fee_bps()) as u128) as u64;
+        let expected = self.tokens_behind_dev_buy(prior_flow_lamports, curve_sol);
+        let min_tokens =
+            (expected as u128 * (10_000 - slippage_bps.min(10_000)) as u128 / 10_000) as u64;
+        BuyPlan {
+            amount: budget_lamports, // sol_in: the whole budget, fixed
+            max_sol_cost: min_tokens, // min_tokens_out floor
+        }
+    }
 }
 
 #[cfg(test)]
@@ -452,6 +484,26 @@ mod tests {
             "dev-only pricing should over-request at the real depth: cost {bug_cost} cap {}",
             bug.max_sol_cost
         );
+    }
+
+    #[test]
+    fn exact_sol_in_fixes_spend_and_floors_tokens() {
+        let p = params();
+        let prior = 6_000_000_000u64; // 6 SOL already in the curve ahead of us
+        let budget = 2_000_000_000u64;
+        let plan = p.plan_exact_sol_in(prior, budget, 640); // 6.4% slippage (his median)
+        // sol_in is exactly the budget - the spend can never overshoot
+        assert_eq!(plan.amount, budget);
+        // min_tokens is the ~6.4% floor below the tokens expected at that depth
+        let curve_sol = budget * 10_000 / (10_000 + p.total_fee_bps());
+        let expected = p.tokens_behind_dev_buy(prior, curve_sol);
+        assert!(plan.max_sol_cost < expected && plan.max_sol_cost > expected * 90 / 100);
+        // at the expected depth we clear the floor and fill
+        assert!(expected >= plan.max_sol_cost);
+        // a big up-move (3 SOL more flow ahead) yields fewer tokens than the floor -> reverts,
+        // which is the point: we don't fill late when we've been overtaken.
+        let deeper = p.tokens_behind_dev_buy(prior + 3_000_000_000, curve_sol);
+        assert!(deeper < plan.max_sol_cost, "a big up-move should fall below the floor");
     }
 
     #[test]
