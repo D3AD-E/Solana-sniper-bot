@@ -52,6 +52,9 @@ pub struct PositionMetrics {
     pub closed: AtomicU64,
     /// buys that never appeared on chain
     pub never_landed: AtomicU64,
+    /// landed positions whose gate was force-released after the hold ceiling (seller stuck;
+    /// the bag is left to the Node reconcileOrphans backstop)
+    pub stuck_released: AtomicU64,
     /// launches skipped because a position was already open
     pub skipped_busy: AtomicU64,
     /// launches skipped because test mode has already completed its round trip
@@ -220,7 +223,17 @@ fn live_cycle(
 ) {
     let poll = Duration::from_millis(modes.poll_ms);
     let deadline = Instant::now() + Duration::from_millis(modes.buy_timeout_ms);
+    // hard ceiling on how long a landed-but-not-closed position may hold the gate. The exit
+    // ladder runs to ~24 slots (~10 s); 120 s is generous headroom before we assume the seller
+    // is stuck and release. `SNIPER_HOLD_CEILING_MS` overrides.
+    let hold_ceiling = Duration::from_millis(
+        std::env::var("SNIPER_HOLD_CEILING_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(120_000),
+    );
     let mut landed = false;
+    let mut landed_at: Option<Instant> = None;
 
     loop {
         // Three outcomes, not two: Ok(Some) = account exists, Ok(None) = truly gone, Err =
@@ -249,11 +262,24 @@ fn live_cycle(
         if exists {
             if !landed {
                 landed = true;
+                landed_at = Some(Instant::now());
                 // off this thread: reading the landing slot has to wait for `confirmed`, and
                 // this thread is the one holding the position gate. A gate held for an extra
                 // second or two is a launch not seen, which is exactly the cost the number
                 // being measured is supposed to expose.
                 spawn_landing_record(rpc_url, *position, metrics.clone());
+            } else if landed_at.map_or(false, |t| t.elapsed() > hold_ceiling) {
+                // the bag never closed: seller down, crashed, or the final close leg never
+                // landed. In sync mode this gate is the whole throttle, so a stuck gate
+                // silently stops the sniper buying with no signal. Release and warn; the Node
+                // reconcileOrphans backstop still covers the bag.
+                metrics.stuck_released.fetch_add(1, Ordering::Relaxed);
+                warn!(
+                    "position {} still open after {}s, releasing gate (bag left to reconciliation)",
+                    position.mint,
+                    hold_ceiling.as_secs()
+                );
+                return;
             }
         } else if landed {
             info!("position {} closed", position.mint);

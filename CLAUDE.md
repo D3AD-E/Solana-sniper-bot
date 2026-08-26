@@ -495,6 +495,49 @@ creator offsets, constant-product sellValue, valueMultiple, and every `decideLeg
 (normal leg / stop-dump / moon-trim / force-out / clamp / final detection). Ladder math is
 extracted to `src/pumpFun/ladder.ts` (pure, testable).
 
+## Money-path audit round 2 (2026-08-26)
+
+Second audit; all verified against code first. Genuine ones fixed + tested.
+
+* **P0 confirming-buy double-count (confirm mode was unsafe):** the early-detect path
+  (`deshred.rs` EarlySegment) re-emits every accumulated tx on each new shred, and `on_buy`
+  had no dedup → one confirming buy counted N times → trigger fired off a SINGLE buy (exactly
+  the rank-1/3 population the backtest says loses). Fix: `parse_buy` carries `sig8` (first 8
+  sig bytes); `HotSniper.seen_buys` dedups, cleared on slot advance. NOT obsolete — this is
+  the live confirm path; it applies to our strategy.
+* **Ghost PnL used the wrong cost** (`buy_lamports`, the unused 1 SOL config, not
+  `plan.max_sol_cost`) → ghost-soak per-trade PnL was wrong exactly when you rely on it. Fixed.
+* **Dev freshness never expired** → fire rate decayed over uptime, map grew unbounded. Added a
+  UTC-day rollover reset in `Session` (matches "first launch of the UTC day").
+* **Sell cost basis 5% high:** `entryCostLamports` used `max_sol_cost` = budget×(1+slippage),
+  so every value multiple read 5% low and the 0.8× stop fired at ~0.84× real. Fixed: divide
+  the slippage back out in `pump.ts` (`SNIPER_SLIPPAGE_BPS`).
+* **`.env` seller knobs were dead:** the block used `SNIPER_EXIT_*` names; the Node seller
+  reads `SELL_*`. Editing them did nothing. Replaced with live `SELL_*`, defaulted to the
+  overnight-A/B winner (stop8: check-legs `1:0,2:0,3:0,5:0,7:0` + force-out `SELL_LAST_SLOT=8`),
+  full ladder documented alongside. Added `SNIPER_CONFIRM_MODE=1` (was absent → proxy silently
+  ran the empty-whitelist v1.0 path).
+* **Gate had no post-landing timeout:** a stuck seller held the sync-mode gate forever, silently
+  halting buys. Added `SNIPER_HOLD_CEILING_MS` (120 s) release + `stuck_released` metric; the
+  bag is still covered by `reconcileOrphans`.
+* **Dynamic tip was provider-blind:** now `max(dyn_tip, provider_min)` so a low Jito-floor
+  number can't under-tip non-Jito providers into rejection.
+* **Reconcile register-then-abandon:** guarded (skip when `pumpGlobal` unset; drop tracking on a
+  force-out that fails to start so the next sweep retries).
+
+Round-2 follow-ups then fixed:
+* `sol_lamports` cap-vs-spend: added `SNIPER_CONF_PAD_BPS` (default 0) to discount the padded
+  cap toward real spend so the live trigger can be matched to the backtest after a ghost soak.
+* Two fee conventions (100 bps chain in plan_buy vs 125 bps tape in on_buy) documented at the
+  call site — same lamports, one matches chain, one matches the calibration tape.
+* Ladder legs skipped under a slow-RPC selling-lock are now re-queued (250 ms) instead of
+  dropped, so the ladder can't silently collapse toward the worst force-out.
+
+Still genuinely un-fixable in code (ops): provision ≥4 nonce accounts to cover the 300 ms
+nonce-refresh window — requires creating + funding nonce accounts with the wallet. A fill
+dropped while the seller is down still exits at force-out prices via reconciliation (not the
+ladder); acceptable and bounded at ≤60 s.
+
 ## Standing caveats
 
 The +0.5/trade figures come from a self-selected population of good operators. Copying E4Ez's

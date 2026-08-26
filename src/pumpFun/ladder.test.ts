@@ -127,6 +127,16 @@ describe('decideLegSize — the money decision', () => {
     // sells 300k, leaves 500 <= dust(1000) -> final
     expect(isFinal).toBe(true);
   });
+  it('a zero-fraction leg sells nothing (pure stop-check for stop8), even on a moon', () => {
+    const normal = decideLegSize(original, original, 0, 1.1, opts);
+    expect(normal.sellTokens).toBe(0n);
+    const mooned = decideLegSize(original, original, 0, 2.5, opts);
+    expect(mooned.sellTokens).toBe(0n); // must NOT trim 5% on a check-only leg
+    const crashed = decideLegSize(original, original, 0, 0.7, opts);
+    expect(crashed.sellTokens).toBe(original); // but a stop still dumps all
+    expect(crashed.isFinal).toBe(true);
+  });
+
   it('a null multiple (unreadable curve) falls through to the scheduled fraction', () => {
     const { sellTokens, isFinal } = decideLegSize(original, original, 0.2, null, opts);
     expect(sellTokens).toBe(200_000n);

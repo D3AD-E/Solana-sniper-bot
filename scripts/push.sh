@@ -18,9 +18,15 @@ SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 rsync -az --delete --info=stats1 \
   --exclude .git --exclude node_modules --exclude target --exclude dist \
   --exclude 'analysis/data/replay*' --exclude 'analysis/data/*.jsonl' \
-  --exclude '*.lock' \
+  --exclude '*.lock' --exclude 'shred-sniper/sniper.json' \
   "$SRC/" "$HOST:$DEST/"
 ssh "$HOST" "chmod 600 '$DEST/.env' 2>/dev/null || true"
+# sniper.json is generated from .env and carries API keys - never clobber the box's copy with a
+# stale dev one, and regenerate it from the just-synced .env so json + env agree. (The proxy
+# also applies .env overrides at load, so scalar knobs are correct even before this runs.)
+ssh "$HOST" "cd '$DEST/shred-sniper' && CARGO_TARGET_DIR=/var/tmp/sniper-target \
+  cargo run -q -p sniper --bin gen-config -- --env ../.env --out sniper.json 2>/dev/null || \
+  echo 'note: gen-config skipped (run bootstrap once first)'"
 echo "synced -> $HOST:$DEST"
 
 if [ "$MODE" = "--build" ] || [ "$MODE" = "--restart" ]; then

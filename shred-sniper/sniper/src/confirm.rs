@@ -77,6 +77,12 @@ pub struct Params {
     /// Reject when the virtual quote reserve is already at/above this: the curve is
     /// completing (a bundle swept it) or accounting is corrupt. Includes the 30 SOL offset.
     pub vq_cap_lamports: u64,
+    /// A confirming buy's `sol_lamports` is its `max_sol_cost` CAP, which bots pad 10-30% over
+    /// their real spend. The backtest counted actual tape spend, so the live trigger runs
+    /// looser. This discounts the cap toward estimated spend (bps). 0 = off (count the raw
+    /// cap); set ~1500 to tighten toward the backtest AFTER a ghost soak shows the real pad.
+    /// (SNIPER_CONF_PAD_BPS)
+    pub conf_pad_bps: u64,
 }
 
 impl Params {
@@ -90,6 +96,7 @@ impl Params {
             size_hi_lamports: sol_env("SNIPER_SIZE_HI_SOL", 3.5),
             follow_lamports: sol_env("SNIPER_FOLLOW_SIZE_SOL", 2.0),
             vq_cap_lamports: sol_env("SNIPER_VQ_CAP_SOL", 115.0),
+            conf_pad_bps: env_u64("SNIPER_CONF_PAD_BPS", 0),
         }
     }
 
@@ -262,10 +269,9 @@ pub enum Pass {
     Dead,
 }
 
-/// Watches one launch's create block. `dev_buy_lamports` is what the create's own buy pledged
-/// (moves the curve first; the caller prices against it).
+/// Watches one launch's create block. `vq_lamports` accumulates the net curve SOL ahead of us
+/// (dev buy + every confirming buy); the caller prices against `prior_flow = vq - VIRT_SOL_0`.
 pub struct LaunchWatch {
-    dev_buy_lamports: u64,
     vq_lamports: u64,
     n_conf: u32,
     conf_lamports: u64,
@@ -279,7 +285,6 @@ impl LaunchWatch {
         // gross max_sol_cost, so back the 1.25% fee out to match the confirming-buy accounting.
         let dev_net = (dev_buy_lamports as u128 * 10_000 / 10_125) as u64;
         LaunchWatch {
-            dev_buy_lamports: dev_net,
             vq_lamports: VIRT_SOL_0.saturating_add(dev_net),
             n_conf: 0,
             conf_lamports: 0,
@@ -329,8 +334,14 @@ impl LaunchWatch {
         if action == Some(WatchAction::Avoid) {
             self.elite_ahead = true;
         }
-        // net of the 1.25% pool fee, matching what the curve actually receives
-        let net = (sol_lamports as u128 * 10_000 / 10_125) as u64;
+        // discount the padded cap toward estimated real spend (conf_pad_bps), then take the
+        // 1.25% pool fee off to get net curve inflow. NOTE two fee conventions coexist by
+        // design: here we hardcode 10_125 (125 bps, matching the replay tape the strategy was
+        // calibrated on); plan_buy backs out the live on-chain Global fee (fee + creator, ~100
+        // bps). Same lamports, two nets - one matches the tape, one matches the chain.
+        let spend = (sol_lamports as u128 * (10_000 - p.conf_pad_bps.min(10_000)) as u128
+            / 10_000) as u64;
+        let net = (spend as u128 * 10_000 / 10_125) as u64;
         self.n_conf += 1;
         self.conf_lamports = self.conf_lamports.saturating_add(net);
         self.vq_lamports = self.vq_lamports.saturating_add(net);
@@ -361,15 +372,38 @@ impl LaunchWatch {
 
 /// Session-local, owned by the single detect thread: every dev the proxy itself sees is
 /// marked, so freshness holds between file reloads. A dev in the historical set is never fresh.
-#[derive(Default)]
+///
+/// The strategy is "the dev's first launch of the UTC day", so the live-seen set is reset on
+/// the UTC-day rollover. Without that a long-running proxy burns devs permanently, its fire
+/// rate decays monotonically over uptime, and the map grows without bound.
 pub struct Session {
     seen_devs: FastMap<[u8; 32], ()>,
+    day: u64,
 }
+impl Default for Session {
+    fn default() -> Self {
+        Session { seen_devs: FastMap::default(), day: utc_day() }
+    }
+}
+
+/// Days since the unix epoch, in UTC.
+fn utc_day() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() / 86_400)
+        .unwrap_or(0)
+}
+
 impl Session {
     #[inline]
     pub fn dev_is_fresh(&mut self, dev: &Pubkey) -> bool {
+        let today = utc_day();
+        if today != self.day {
+            self.seen_devs.clear();
+            self.day = today;
+        }
         if self.seen_devs.insert(dev.to_bytes(), ()).is_some() {
-            return false; // seen live this session
+            return false; // seen live this UTC day
         }
         match DEVS.load_full() {
             Some(set) => !set.contains(dev),
@@ -406,6 +440,7 @@ mod tests {
             size_hi_lamports: 7 * SOL / 2,
             follow_lamports: 2 * SOL,
             vq_cap_lamports: 115 * SOL,
+            conf_pad_bps: 0,
         }
     }
 

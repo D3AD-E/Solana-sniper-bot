@@ -44,10 +44,25 @@ type OpenPosition = Position & {
   entryCostLamports: bigint;   // SOL spent on the buy (cost basis)
   legTimers: NodeJS.Timeout[]; // scheduled ladder legs, cleared on full exit
   done: boolean;               // position fully closed
+  finalRetries: number;        // capped hammering of a final leg that won't land
 };
 
 const positions = new Map<string, OpenPosition>();
+// mints we gave up selling (migrated / program rejects the sell). Reconciliation must skip
+// these or it re-adds and re-hammers them every sweep. Cleared only by a restart + manual sell.
+const stuck = new Set<string>();
 let pumpGlobal: PumpGlobal | undefined;
+// A blockhash is valid ~60-90 s, so fetching one per sell leg just adds a serial RPC to the
+// critical path. Refresh one in the background and hand it to every leg; a ~2 s-old hash is
+// fine and shaves a round trip off each sell so the leg lands nearer its target slot.
+let cachedBlockhash: string | undefined;
+async function refreshBlockhash() {
+  try {
+    cachedBlockhash = (await solanaConnection.getLatestBlockhash('confirmed')).blockhash;
+  } catch {
+    /* keep the previous; sellPosition falls back to a fresh fetch if this is undefined */
+  }
+}
 let softExit = false;
 let initialWalletBalance = 0;
 
@@ -92,6 +107,10 @@ const MOON_X = Number(process.env.SELL_MOON_X ?? 2.0);
 const MOON_FRAC = Number(process.env.SELL_MOON_FRAC ?? 0.05);
 const DUST = 1000n; // ignore sub-dust remainders when deciding a position is closed
 const RECONCILE_MS = Number(process.env.RECONCILE_MS ?? 60_000);
+// max_sol_cost = budget × (1 + slippage_bps). The actual spend ≈ budget (the haircut sizes
+// the token amount), so the fill's maxSolCost overstates the cost basis by the slippage. Back
+// it out or every value multiple reads low and the 0.8× stop fires early (~0.84× real).
+const SLIPPAGE_BPS = Number(process.env.SNIPER_SLIPPAGE_BPS ?? 500);
 
 /** current value multiple of the remaining position vs its cost basis; null if unreadable */
 async function currentMultiple(p: OpenPosition): Promise<number | null> {
@@ -120,6 +139,12 @@ export default async function snipe(isMinimalRun: boolean = false): Promise<void
   sendMessage(`Seller started${isMinimalRun ? ' (minimal)' : ''}`);
 
   subscribeToFills(PROXY_PORT);
+
+  // keep a warm blockhash for the sell path
+  await refreshBlockhash();
+  setInterval(() => {
+    refreshBlockhash().catch(() => {});
+  }, 2000);
 
   // backstop: force-out any bag we are not tracking, on boot and on a timer. This is what
   // makes "we always sell" true even when a fill was dropped or a buy landed late.
@@ -164,9 +189,11 @@ function subscribeToFills(port: string) {
       selling: false,
       original: 0n,
       remaining: 0n,
-      entryCostLamports: BigInt(fill.getMaxSolCost() || 0), // cost basis for the ladder's multiple
+      // cost basis = the priced budget, not max_sol_cost (which is budget × (1+slippage))
+      entryCostLamports: (BigInt(fill.getMaxSolCost() || 0) * 10_000n) / BigInt(10_000 + SLIPPAGE_BPS),
       legTimers: [],
       done: false,
+      finalRetries: 0,
     };
     positions.set(key, position);
     watchForConfirmation(key, position);
@@ -235,17 +262,25 @@ function scheduleLadder(key: string) {
  *  legs whose timers fire together can never both send a sell (which would double-spend). */
 async function runLeg(key: string, slot: number, frac: number | null): Promise<void> {
   const p = positions.get(key);
-  if (!p || p.done || p.selling || !pumpGlobal) return;
+  if (!p || p.done) return;
+  if (p.selling || !pumpGlobal) {
+    // another leg/retry holds the lock (or global not ready). Do NOT drop this leg - under a
+    // slow RPC stretch that would collapse the ladder toward the worst force-out@last. Re-queue
+    // shortly; the lock is always released in the finally below, so this is bounded.
+    setTimeout(() => runLeg(key, slot, frac).catch(() => {}), 250);
+    return;
+  }
   p.selling = true; // lock, synchronously, before the first await
   try {
-    // re-read the on-chain balance so retries and partial fills stay correct
+    // the balance read (correctness across retries) and the curve read (the price multiple)
+    // are independent - do them in parallel so a leg does one RTT, not two, and lands nearer
+    // its target slot. A failed read never blocks the scheduled sell.
     let remaining = p.remaining;
-    try {
-      const info = await solanaConnection.getAccountInfo(p.tokenAccount, 'processed');
-      if (info) remaining = amountFromAccountData(info.data as Buffer);
-    } catch {
-      /* fall through with the tracked remaining */
-    }
+    const [balInfo, m] = await Promise.all([
+      solanaConnection.getAccountInfo(p.tokenAccount, 'processed').catch(() => null),
+      currentMultiple(p),
+    ]);
+    if (balInfo) remaining = amountFromAccountData(balInfo.data as Buffer);
     if (remaining <= DUST) {
       p.remaining = 0n;
       p.done = true;
@@ -253,7 +288,6 @@ async function runLeg(key: string, slot: number, frac: number | null): Promise<v
     }
     p.remaining = remaining;
 
-    const m = await currentMultiple(p);
     const { sellTokens, isFinal } = decideLegSize(p.original, remaining, frac, m, {
       stopX: STOP_X,
       moonX: MOON_X,
@@ -294,6 +328,7 @@ async function sendSell(
       tipLamports: SELL_TIP_LAMPORTS,
       minSolOutput: 0n,
       close: isFinal,
+      blockhash: cachedBlockhash, // warm hash; sellPosition fetches one only if undefined
       sender: sendTransactionHeliusSender,
     });
     p.remaining = p.remaining > tokens ? p.remaining - tokens : 0n;
@@ -305,8 +340,18 @@ async function sendSell(
   } catch (e) {
     logger.warn(`${key}: sell slot+${slot} failed: ${(e as Error).message}`);
     // final leg must eventually close: re-enter runLeg (re-reads balance, never double-sells).
+    // Capped, so a migrated/unsellable mint does not spin forever (reconcile would re-add it
+    // every 60 s otherwise). After the cap, alert and leave it for manual review.
     if (isFinal && !softExit) {
-      setTimeout(() => runLeg(key, LADDER_LAST_SLOT, null).catch(() => {}), 1200);
+      p.finalRetries += 1;
+      if (p.finalRetries <= 8) {
+        setTimeout(() => runLeg(key, LADDER_LAST_SLOT, null).catch(() => {}), 1200);
+      } else {
+        logger.error(`${key}: final sell failed ${p.finalRetries}x, giving up - MANUAL REVIEW`);
+        sendMessage(`STUCK ${key}: cannot sell after ${p.finalRetries} tries - manual review`);
+        stuck.add(key); // reconcile skips this so it does not re-add and re-hammer forever
+        cleanup(key);
+      }
     }
     // partial leg: leave it; the next scheduled leg re-reads and covers the remainder.
   }
@@ -357,6 +402,7 @@ function cleanup(key: string) {
  * accounts and the creator, which is read from the bonding-curve account.
  */
 async function reconcileOrphans(): Promise<void> {
+  if (!pumpGlobal) return; // runLeg needs it; registering without it would strand the bag
   for (const program of [TOKEN_PROGRAM, TOKEN_2022_PROGRAM]) {
     try {
       const resp = await solanaConnection.getParsedTokenAccountsByOwner(wallet.publicKey, {
@@ -369,7 +415,7 @@ async function reconcileOrphans(): Promise<void> {
         if (amountRaw <= DUST) continue;
         const mint = new PublicKey(info.mint);
         const key = mint.toBase58();
-        if (positions.has(key)) continue; // already tracked/selling
+        if (positions.has(key) || stuck.has(key)) continue; // tracked, selling, or given up
 
         const bondingCurve = PublicKey.findProgramAddressSync(
           [SEED_BONDING_CURVE, mint.toBuffer()],
@@ -407,13 +453,18 @@ async function reconcileOrphans(): Promise<void> {
           entryCostLamports: 0n, // unknown -> force-out ignores the price multiple
           legTimers: [],
           done: false,
+          finalRetries: 0,
         };
         positions.set(key, position);
         logger.warn(`RECONCILE orphan ${key} balance ${amountRaw} - forcing out`);
         sendMessage(`Reconciling orphan ${key}`);
-        runLeg(key, LADDER_LAST_SLOT, null).catch((e) =>
-          logger.warn(`reconcile ${key} force-out failed: ${(e as Error).message}`),
-        );
+        runLeg(key, LADDER_LAST_SLOT, null).catch((e) => {
+          // if the force-out did not start, drop the tracking so the next sweep retries
+          // rather than skipping a still-held bag as "already tracked".
+          logger.warn(`reconcile ${key} force-out failed: ${(e as Error).message}`);
+          const p = positions.get(key);
+          if (p && !p.done && !p.selling) positions.delete(key);
+        });
       }
     } catch (e) {
       logger.warn(`reconcile sweep (${program.toBase58().slice(0, 4)}) failed: ${(e as Error).message}`);

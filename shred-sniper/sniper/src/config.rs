@@ -208,7 +208,64 @@ impl SniperConfig {
 
     pub fn load(path: &Path) -> Result<Self, String> {
         let raw = fs::read_to_string(path).map_err(|e| format!("read {path:?}: {e}"))?;
-        serde_json::from_str(&raw).map_err(|e| format!("parse {path:?}: {e}"))
+        let mut cfg: SniperConfig =
+            serde_json::from_str(&raw).map_err(|e| format!("parse {path:?}: {e}"))?;
+        cfg.apply_env_overrides();
+        Ok(cfg)
+    }
+
+    /// The scalar strategy knobs are ALSO read from the environment, and the environment WINS.
+    /// sniper.json carries provider endpoints + API keys (generated once); these numbers change
+    /// with the strategy, so making `.env` authoritative gives one source of truth and stops a
+    /// stale json (e.g. clobbered by an rsync deploy) from silently running old slippage/CU.
+    /// The env names match gen-config's, so a regenerated json and a live override agree.
+    fn apply_env_overrides(&mut self) {
+        fn num(key: &str) -> Option<u64> {
+            std::env::var(key).ok().and_then(|v| v.trim().parse().ok())
+        }
+        fn flag(key: &str) -> Option<bool> {
+            std::env::var(key).ok().map(|v| v.trim() == "1")
+        }
+        if let Some(v) = num("SNIPER_BUY_LAMPORTS") {
+            self.buy_lamports = v;
+        }
+        if let Some(v) = num("SNIPER_MAX_DEV_BUY_LAMPORTS") {
+            self.max_dev_buy_lamports = v;
+        }
+        if let Some(v) = num("SNIPER_HAIRCUT_BPS") {
+            self.haircut_bps = v;
+        }
+        if let Some(v) = num("SNIPER_SLIPPAGE_BPS") {
+            self.slippage_bps = v;
+        }
+        if let Some(v) = num("SNIPER_CU_LIMIT") {
+            self.cu_limit = v as u32;
+        }
+        if let Some(v) = num("SNIPER_HOLD_MS") {
+            self.hold_ms = v;
+        }
+        if let Some(v) = num("SNIPER_POSITION_POLL_MS") {
+            self.position_poll_ms = v;
+        }
+        if let Some(v) = num("SNIPER_BUY_TIMEOUT_MS") {
+            self.buy_timeout_ms = v;
+        }
+        if let Some(v) = num("SNIPER_NONCE_REFRESH_MS") {
+            self.nonce_refresh_ms = v;
+        }
+        // SNIPER_SYNC_MODE defaults to on unless explicitly "0"
+        if let Ok(v) = std::env::var("SNIPER_SYNC_MODE") {
+            self.sync_mode = v.trim() != "0";
+        }
+        if let Some(v) = flag("SNIPER_TEST_MODE") {
+            self.test_mode = v;
+        }
+        if let Some(v) = flag("SNIPER_GHOST_MODE") {
+            self.ghost_mode = v;
+        }
+        if let Some(v) = flag("SNIPER_DRY_RUN") {
+            self.dry_run = v;
+        }
     }
 }
 

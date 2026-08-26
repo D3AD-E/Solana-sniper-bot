@@ -325,6 +325,7 @@ impl Sniper {
                 session: Session::default(),
                 pending: ahash::AHashMap::with_capacity(256),
                 cur_slot: 0,
+                seen_buys: AHashSet::with_capacity(1024),
             },
             threads,
         )
@@ -360,6 +361,10 @@ pub struct HotSniper {
     session: Session,
     pending: ahash::AHashMap<Pubkey, PendingLaunch>,
     cur_slot: u64,
+    /// confirming-buy signatures already counted this slot. The early-detect path re-emits
+    /// the same buy on every later shred of the segment, so without this dedup one buy is
+    /// counted many times and the trigger fires off a single buy. Cleared on slot advance.
+    seen_buys: AHashSet<[u8; 8]>,
 }
 
 /// A launch whose create block is being watched for the confirmation trigger.
@@ -522,9 +527,20 @@ impl HotSniper {
         };
         self.seal_old_slots(slot);
         // fire only on confirming buys IN the create block; buys in a later slot are too late.
+        // Check pending FIRST: segments complete out of order, so a buy can arrive before its
+        // create registers. If we deduped before that check, the buy would burn its dedup slot
+        // with no pending launch, and the later (in-order) re-emit would be dropped as a dup -
+        // silently undercounting n_conf. Dedup only once we have a launch to count it against.
         let (result, info) = {
-            let p = self.pending.get_mut(&buy.mint)?;
+            let Some(p) = self.pending.get_mut(&buy.mint) else {
+                return None;
+            };
             if p.slot != slot {
+                return None;
+            }
+            // the early-detect path re-emits the same buy on every later shred of the segment;
+            // count each confirming buy exactly once. seen_buys is a disjoint field from pending.
+            if !self.seen_buys.insert(buy.sig8) {
                 return None;
             }
             (p.watch.on_buy(&buy.buyer, buy.sol_lamports, &params), p.info)
@@ -571,7 +587,15 @@ impl HotSniper {
     fn seal_old_slots(&mut self, slot: u64) {
         if slot > self.cur_slot {
             if !self.pending.is_empty() {
-                self.pending.retain(|_, p| p.slot >= slot);
+                // one slot of grace: segments complete out of order, so a buy from slot N+1 can
+                // be reconstructed before slot N's create block is done. Dropping only launches
+                // two-plus slots old keeps the current create block alive through that reordering.
+                self.pending.retain(|_, p| p.slot + 1 >= slot);
+            }
+            // confirming-buy dedup only matters within a create slot; reset periodically so the
+            // set cannot grow without bound.
+            if self.seen_buys.len() > 4096 {
+                self.seen_buys.clear();
             }
             self.cur_slot = slot;
         }
@@ -668,7 +692,12 @@ impl HotSniper {
                 bonding_curve: info.bonding_curve,
                 token_account,
                 amount: plan.amount,
-                cost: self.shared.buy_lamports,
+                // the real spend ≈ the priced budget. max_sol_cost is that budget PADDED by
+                // slippage_bps (a cap, rarely spent), so ghost PnL must back the pad out or it
+                // books ~0.18 SOL/trade of fake loss - the whole edge - and the go-live gate reads
+                // ~zero. budget = max_sol_cost / (1 + slippage).
+                cost: (plan.max_sol_cost as u128 * 10_000
+                    / (10_000 + self.shared.slippage_bps as u128)) as u64,
                 ghost: true,
             });
             m.fired.fetch_add(1, Ordering::Relaxed);
@@ -707,7 +736,9 @@ impl HotSniper {
             p.try_send(Job {
                 base: base.clone(),
                 tip_account: p.tip_accounts[self.launch_counter % p.tip_accounts.len()],
-                tip_lamports: dyn_tip.unwrap_or(p.tip_lamports),
+                // never tip a provider below its own configured minimum - a low Jito-floor
+                // number can under-tip non-Jito providers (nextblock/0slot/node1) into rejection.
+                tip_lamports: dyn_tip.map(|t| t.max(p.tip_lamports)).unwrap_or(p.tip_lamports),
                 cu_price: p.cu_price,
             });
             queued += 1;

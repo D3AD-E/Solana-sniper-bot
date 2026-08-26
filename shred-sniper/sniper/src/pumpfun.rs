@@ -97,6 +97,10 @@ pub struct PumpBuyInfo {
     /// (fee included); for `buy_exact_sol_in` it is the exact sol argument. It is the amount
     /// pledged, which is what is visible pre-execution and what the trigger counts.
     pub sol_lamports: u64,
+    /// First 8 bytes of the transaction's first signature. The early-detect path re-emits the
+    /// same buy on every subsequent shred of a segment, so the confirm trigger dedups on this
+    /// - without it one confirming buy is counted many times and the trigger fires off one buy.
+    pub sig8: [u8; 8],
 }
 
 /// Returns the first pump.fun buy in `tx`, if any. Skips a buy whose signer is the mint's own
@@ -140,7 +144,11 @@ pub fn parse_buy(tx: &VersionedTransaction) -> Option<PumpBuyInfo> {
         let mint = *key_at(keys, ix, 2)?;
         // the fee payer is the buyer on a standalone buy transaction
         let buyer = *keys.first()?;
-        return Some(PumpBuyInfo { mint, buyer, sol_lamports: sol });
+        let mut sig8 = [0u8; 8];
+        if let Some(s) = tx.signatures.first() {
+            sig8.copy_from_slice(&s.as_ref()[..8]);
+        }
+        return Some(PumpBuyInfo { mint, buyer, sol_lamports: sol, sig8 });
     }
     None
 }

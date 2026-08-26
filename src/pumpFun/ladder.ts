@@ -63,6 +63,10 @@ export function decideLegSize(
   let sellTokens: bigint;
   if (dumpAll) {
     sellTokens = remaining;
+  } else if (frac === 0) {
+    // a zero-fraction leg is a pure stop-check (used to build stop8 out of the ladder): it
+    // sells nothing unless the stop above fired. It must NOT moon-trim either.
+    sellTokens = 0n;
   } else if (multiple !== null && multiple >= opts.moonX) {
     sellTokens = (original * BigInt(Math.round(opts.moonFrac * 10_000))) / 10_000n;
   } else {

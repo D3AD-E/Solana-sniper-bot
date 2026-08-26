@@ -183,6 +183,7 @@ fn hot(providers: usize, spinning: bool) -> (HotSniper, Vec<std::thread::JoinHan
             session: crate::confirm::Session::default(),
             pending: ahash::AHashMap::with_capacity(256),
             cur_slot: 0,
+            seen_buys: ahash::AHashSet::with_capacity(1024),
         },
         drains,
         stop,
