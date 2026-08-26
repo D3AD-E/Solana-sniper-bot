@@ -153,3 +153,6 @@ analysis
 .env.*.bak
 shred-sniper/sniper.json
 shred-sniper/whitelist.txt
+shred-sniper/auth.json
+sniper-keypair.json
+nonce-*.json

@@ -8,10 +8,13 @@ Type=simple
 User=@USER@
 WorkingDirectory=@REPO@/shred-sniper
 EnvironmentFile=-@REPO@/.env
+# --dest-ip-ports is mandatory in the proxy even with --sniper-config (main.rs rejects an
+# empty destination set at startup); a localhost sink satisfies it at no cost.
 ExecStart=@REPO@/jito-shredstream-proxy shredstream \
   --block-engine-url https://frankfurt.mainnet.block-engine.jito.wtf \
   --auth-keypair @REPO@/shred-sniper/auth.json \
   --desired-regions ${NODE_REGION} \
+  --dest-ip-ports 127.0.0.1:9900 \
   --sniper-config @REPO@/shred-sniper/sniper.json \
   --grpc-service-port 9999
 Restart=always
