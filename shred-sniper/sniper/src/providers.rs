@@ -28,13 +28,18 @@ pub struct ProviderSpec {
     /// environment variable holding a comma separated region list, e.g. `fra,ams,ny`.
     /// `all` selects every endpoint below.
     pub env_regions: &'static str,
+    /// what `env_regions` means when it is not set. `all` for anything proven; empty for a
+    /// transport that has never been verified against a live fire, so it stays off until
+    /// someone opts in explicitly.
+    pub default_regions: &'static str,
     pub auth: Auth,
     pub port: u16,
     pub tls: bool,
     /// `{KEY}` is replaced with the API key
     pub path: &'static str,
     pub health_path: &'static str,
-    /// one of json_rpc | wrapped | plain_tx | batch
+    /// one of json_rpc | wrapped | wrapped_blox | plain_tx | batch | binary |
+    /// len_prefixed_binary | udp_raw
     pub body: &'static str,
     /// documented minimum tip, lamports
     pub min_tip: u64,
@@ -69,7 +74,27 @@ pub const HELIUS_TIPS: &[&str] = &[
     "4TQLFNWK8AovT1gFvda5jfw2oJeRMKEmw7aH6MGBJ3or",
 ];
 
+/// All 21 accounts 0slot publishes, not the 5 we used to carry. None of the old five were
+/// wrong — they are all still in the published table — but rotating a launch across 5
+/// accounts instead of 21 concentrates the write lock, which is the same contention
+/// bloXroute explicitly asks callers to spread. `tip_accounts` rotates per launch.
 pub const ZEROSLOT_TIPS: &[&str] = &[
+    "6fQaVhYZA4w3MBSXjJ81Vf6W1EDYeUPXpgVQ6UQyU1Av",
+    "4HiwLEP2Bzqj3hM2ENxJuzhcPCdsafwiet3oGkMkuQY4",
+    "7toBU3inhmrARGngC7z6SjyP85HgGMmCTEwGNRAcYnEK",
+    "8mR3wB1nh4D6J9RUCugxUpc6ya8w38LPxZ3ZjcBhgzws",
+    "6SiVU5WEwqfFapRuYCndomztEwDjvS5xgtEof3PLEGm9",
+    "TpdxgNJBWZRL8UXF5mrEsyWxDWx9HQexA9P1eTWQ42p",
+    "D8f3WkQu6dCF33cZxuAsrKHrGsqGP2yvAHf8mX6RXnwf",
+    "GQPFicsy3P3NXxB5piJohoxACqTvWE9fKpLgdsMduoHE",
+    "Ey2JEr8hDkgN8qKJGrLf2yFjRhW7rab99HVxwi5rcvJE",
+    "4iUgjMT8q2hNZnLuhpqZ1QtiV8deFPy2ajvvjEpKKgsS",
+    "3Rz8uD83QsU8wKvZbgWAPvCNDU6Fy8TSZTMcPm3RB6zt",
+    "DiTmWENJsHQdawVUUKnUXkconcpW4Jv52TnMWhkncF6t",
+    "HRyRhQ86t3H4aAtgvHVpUJmw64BDrb61gRiKcdKUXs5c",
+    "J9BMEWFbCBEjtQ1fG5Lo9kouX1HfrKQxeUxetwXrifBw",
+    "8U1JPQh3mVQ4F5jwRdFTBzvNRQaYFQppHQYoH38DJGSQ",
+    "7y4whZmw388w1ggjToDLSBLv47drw5SUXcLk6jtmwixd",
     "Eb2KpSC8uMt9GmzyAEm5Eb1AAAgTjRaXWFjKyFXHZxF3",
     "FCjUJZ1qozm1e8romw216qyfQMaaWKxWsuySnumVCCNe",
     "ENxTEjSQ1YabmUpXAdCgevnHQ9MHdLv8tzFiuiYJqa13",
@@ -217,6 +242,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         name: "jito",
         env_key: "",
         env_regions: "JITO_REGIONS",
+        default_regions: "all",
         auth: Auth::None,
         port: 443,
         tls: true,
@@ -245,6 +271,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         name: "helius-sender",
         env_key: "",
         env_regions: "HELIUS_SENDER_REGIONS",
+        default_regions: "all",
         auth: Auth::None,
         port: 80,
         tls: false,
@@ -270,15 +297,34 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         name: "0slot",
         env_key: "SLOT_CONNECTION_KEY",
         env_regions: "SLOT_REGIONS",
+        default_regions: "all",
         auth: Auth::Query,
         port: 80,
         tls: false,
-        path: "/?api-key={KEY}",
-        health_path: "/?api-key={KEY}",
-        body: "json_rpc",
+        // `/txb` is 0slot's Binary-Tx path: the request body is the raw serialized
+        // transaction and nothing else ("this eliminates unnecessary both client-side and
+        // server-side encoding/decoding"). It needs no special headers at all — not even the
+        // content type — but sending octet-stream is harmless and keeps it on the same
+        // `BodyFormat::Binary` code path as blockrazor, astralane and falcon.
+        // The older `/` JSON-RPC route and the `/txn` base64-plaintext route both still work
+        // and are both strictly larger on the wire.
+        path: "/txb?api-key={KEY}",
+        // NOT `/?api-key=...`. 0slot rate-limits at 5 TPS on the standard plan and an
+        // authenticated probe every KEEPALIVE_SECS spends that budget on nothing. Their
+        // keep-alive doc is explicit that a request with the key omitted "does not count
+        // toward TPS calculations", and `/health` is the endpoint they name for it.
+        health_path: "/health",
+        body: "binary",
         min_tip: 1_000_000,
         signup: "https://0slot.trade/",
+        // Four of these resolve to one Cloudflare anycast pair (172.66.40.254 /
+        // 172.66.43.2): `ny`, `ams`, `jp` and `la` are proxied, exactly like nozomi's
+        // digit-less aliases. Where 0slot runs a direct host we use it — `de2` and `ny2` are
+        // bare metal (64.130.32.201 and 207.148.24.122) and both answer on plain :80. There
+        // is no published `ams2`/`jp2`/`la2`, so those three stay on the proxy until 0slot
+        // gives us direct names; they are the slowest entries in this table.
         hosts: &[
+            ("ny", "ny2.0slot.trade"),
             ("ny", "ny.0slot.trade"),
             ("fra", "de2.0slot.trade"),
             ("ams", "ams.0slot.trade"),
@@ -291,18 +337,54 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         name: "astralane",
         env_key: "ASTRA_KEY",
         env_regions: "ASTRA_REGIONS",
+        default_regions: "all",
         auth: Auth::Query,
         port: 80,
         tls: false,
-        path: "/iris?api-key={KEY}",
-        health_path: "/iris?api-key={KEY}",
-        body: "json_rpc",
+        // `/irisb` is astralane's binary route: `Content-Type: application/octet-stream`,
+        // the body is the raw serialized transaction, and the operation is chosen with a
+        // `method` query parameter rather than a JSON envelope. Their own reasoning for it is
+        // ours: it removes "Base64 Encoding/Decoding Overhead" and "Packet Splitting due to
+        // reduced data size". `/iris2` (base64 plaintext) sits between this and `/iris`.
+        //
+        // Deliberately NOT set: `mev-protect=true` and `swqos-only=true`. Both default false.
+        // mev-protect routes around validators, which costs a slot; swqos-only narrows to a
+        // single path. Either would trade landing speed for protection we do not want on a
+        // create-block snipe.
+        path: "/irisb?api-key={KEY}&method=sendTransaction",
+        // NOT `/iris?api-key={KEY}`. The probe is a GET, and a GET to `/iris` answers
+        // `400 Bad Request` **with `Connection: close`** — so every keep-alive tick tore down
+        // the very connection it exists to preserve, and astralane paid a fresh TCP handshake
+        // on every launch. `--reuse-after` catches it; a plain reachability probe does not,
+        // because closing is not an error.
+        //
+        // A GET to the binary route answers `405 Method Not Allowed` with
+        // `Connection: keep-alive` and an empty body, which is exactly what a probe wants: it
+        // exercises the same route we submit to, and the reply is a few dozen bytes. The
+        // status does not matter (jito and nextblock 404 by design) — the Connection header
+        // does.
+        health_path: "/irisb?api-key={KEY}&method=getHealth",
+        body: "binary",
         min_tip: 10_000,
         signup: "https://astralane.gitbook.io/docs (portal.astralane.io)",
+        // Five of these were missing. Frankfurt and Amsterdam each run a second datacenter
+        // (`fr2`, and `ams2` on Cherry Servers) and each is its own race entry, the way
+        // blockrazor's three Frankfurts are. Limburg and Lithuania are their own metros, not
+        // aliases. All ten resolve to distinct addresses and match the IPv4s astralane
+        // publishes.
+        //
+        // `edge.astralane.io` is deliberately absent even though their docs recommend
+        // broadcasting to it: it resolves to Cloudflare (104.20.38.198 / 172.66.145.104), so
+        // it is a proxy hop, not a submission host. bloxroute's `global` is kept because it
+        // is the opposite case — it answers on five of bloXroute's own addresses.
         hosts: &[
             ("ny", "ny.gateway.astralane.io"),
             ("fra", "fr.gateway.astralane.io"),
+            ("fra", "fr2.gateway.astralane.io"),
             ("ams", "ams.gateway.astralane.io"),
+            ("ams", "ams2.gateway.astralane.io"),
+            ("lim", "lim.gateway.astralane.io"),
+            ("lit", "lit.gateway.astralane.io"),
             ("tyo", "jp.gateway.astralane.io"),
             ("sgp", "sg.gateway.astralane.io"),
             ("la", "la.gateway.astralane.io"),
@@ -313,6 +395,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         name: "node1",
         env_key: "NODE_ONE_KEY",
         env_regions: "NODE1_REGIONS",
+        default_regions: "all",
         auth: Auth::Header("api-key"),
         port: 80,
         tls: false,
@@ -334,6 +417,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         name: "nextblock",
         env_key: "NEXTBLOCK_KEY",
         env_regions: "NEXTBLOCK_REGIONS",
+        default_regions: "all",
         auth: Auth::Header("Authorization"),
         port: 80,
         tls: false,
@@ -353,6 +437,9 @@ pub const PROVIDERS: &[ProviderSpec] = &[
             ("tyo", "tokyo.nextblock.io"),
             ("sgp", "sgp.nextblock.io"),
             ("lon", "london.nextblock.io"),
+            // nextblock publishes nine regions and we carried eight. Vilnius is a real host
+            // (88.216.197.109), not an alias of Frankfurt or Dublin.
+            ("vln", "vilnius.nextblock.io"),
         ],
         tips: NEXTBLOCK_TIPS,
     },
@@ -360,15 +447,30 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         name: "nozomi",
         env_key: "NOZOMI_KEY",
         env_regions: "NOZOMI_REGIONS",
+        default_regions: "all",
         auth: Auth::Query,
         port: 80,
         tls: false,
-        path: "/?c={KEY}",
+        // Nozomi publishes three submission routes and this is the one they name as fastest,
+        // in their own words: "Use Batch Send over a direct `http://` endpoint … Plain HTTP
+        // avoids per-transaction TLS encryption; batch avoids JSON and per-request overhead",
+        // and it is "the fastest option even for a single transaction".
+        //
+        //   POST /                      JSON-RPC, base64 + envelope   (what we used to send)
+        //   POST /api/sendTransaction2  base64 as text/plain
+        //   POST /api/sendBatch         [u16 BE len][tx bytes], octet-stream   <- this
+        //
+        // For our ~1,043 byte transaction that is 1,045 bytes on the wire against ~1,450, and
+        // no base64 pass in the hot path. Documented limits are 16 transactions, 66..=1232
+        // bytes each, 19,744 byte body; we send one. The reply is an empty 200 and carries no
+        // signature, which costs us nothing — we already know the signature and never read it
+        // back.
+        path: "/api/sendBatch?c={KEY}",
         // nozomi closes an idle connection after 65s and publishes a lightweight GET /ping
-        // for exactly this. Without it the sender's 50s probe skips nozomi and every launch
+        // for exactly this. Without it the sender's probe skips nozomi and every launch
         // pays a fresh TCP handshake.
         health_path: "/ping",
-        body: "json_rpc",
+        body: "len_prefixed_binary",
         min_tip: 1_000_000,
         signup: "https://use.temporal.xyz/ (dashboard issues the key)",
         hosts: &[
@@ -388,6 +490,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         name: "bloxroute",
         env_key: "BLOXROUTE_KEY",
         env_regions: "BLOXROUTE_REGIONS",
+        default_regions: "all",
         // the auth header is the raw base64 `accountID:secret` value, no `Bearer` prefix
         auth: Auth::Header("Authorization"),
         // plain HTTP, like every other keyed provider here: rustls owns its own record
@@ -401,7 +504,8 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         // GET /health returns `ok` on every region and needs no auth
         health_path: "/health",
         // not plain `wrapped`: bloXroute's submitProtection default holds the transaction
-        // for up to four slots. See BodyFormat::WrappedBlox.
+        // for up to four slots, and this format also carries `useStakedRPCs`, which is what
+        // makes bloxroute worth a race slot at all. See BodyFormat::WrappedBlox.
         body: "wrapped_blox",
         min_tip: 1_000_000,
         signup: "https://bloxroute.com/products/solana-trader-api/",
@@ -423,6 +527,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         name: "flashblock",
         env_key: "FLASHBLOCK_KEY",
         env_regions: "FLASHBLOCK_REGIONS",
+        default_regions: "all",
         auth: Auth::Header("Authorization"),
         port: 80,
         tls: false,
@@ -448,6 +553,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         name: "blockrazor",
         env_key: "BLOCKRAZOR_KEY",
         env_regions: "BLOCKRAZOR_REGIONS",
+        default_regions: "all",
         // the key goes in BOTH places on purpose: `/v2/sendBinaryTransaction` reads it from
         // the query string, while the `/health` keep-alive is a GET that only carries
         // headers and 403s without `apikey`.
@@ -483,6 +589,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         name: "falcon",
         env_key: "FALCON_KEY",
         env_regions: "FALCON_REGIONS",
+        default_regions: "all",
         // `?api-key=<uuid>` on every HTTP route. No header form exists.
         auth: Auth::Query,
         port: 80,
@@ -518,6 +625,52 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         ],
         tips: FALCON_TIPS,
     },
+    // Falcon's native UDP transport, the fastest thing any provider in this table publishes:
+    // one datagram of `16-byte raw UUID || transaction` straight to :9000. No HTTP, no
+    // envelope, no request head, no TCP — and **no reply, ever**.
+    //
+    // That last property is why this is its own provider entry and why it ships DISABLED.
+    //   * It cannot be probed. A keep-alive is meaningless on a connectionless socket, and
+    //     `every_provider_declares_a_keepalive_path` exempts UDP for that reason.
+    //   * It cannot be verified short of a funded live fire. A wrong key, a wrong prefix
+    //     length or a silently truncated datagram all look identical to success: the sender
+    //     writes the bytes, the kernel accepts them, and nothing ever comes back.
+    // Running it alongside the TCP `/binary` entry above costs one extra datagram per region
+    // and cannot lose a race the TCP path would have won — both carry the same durable
+    // nonce, so at most one lands.
+    //
+    // To turn it on: set `FALCON_UDP_REGIONS` (e.g. `all`, or a short list) in `.env`, fire
+    // once in SNIPER_TEST_MODE, and confirm on-chain that the buy landed from this path
+    // before trusting it. Leaving the variable unset omits the provider entirely.
+    ProviderSpec {
+        name: "falcon-udp",
+        env_key: "FALCON_KEY",
+        env_regions: "FALCON_UDP_REGIONS",
+        // unset means off — the opposite of every other provider here, on purpose
+        default_regions: "",
+        // the key is the datagram prefix, not a header or a query parameter
+        auth: Auth::None,
+        port: 9000,
+        tls: false,
+        path: "",
+        // a datagram socket has no connection to keep warm
+        health_path: "",
+        body: "udp_raw",
+        min_tip: 1_000_000,
+        signup: "https://docs.corvus-labs.io/falcon (same UUID as the HTTP route)",
+        hosts: &[
+            ("fra", "fra.falcon.wtf"),
+            ("ams", "ams.falcon.wtf"),
+            ("lon", "lon.falcon.wtf"),
+            ("ny", "nyc.falcon.wtf"),
+            ("tyo", "tyo.falcon.wtf"),
+            ("dublin", "dub.falcon.wtf"),
+            ("sgp", "sgp.falcon.wtf"),
+            ("slc", "slc.falcon.wtf"),
+            ("sqq", "sqq.falcon.wtf"),
+        ],
+        tips: FALCON_TIPS,
+    },
 ];
 
 #[cfg(test)]
@@ -547,7 +700,14 @@ mod tests {
             assert!(
                 matches!(
                     p.body,
-                    "json_rpc" | "wrapped" | "wrapped_blox" | "plain_tx" | "batch" | "binary"
+                    "json_rpc"
+                        | "wrapped"
+                        | "wrapped_blox"
+                        | "plain_tx"
+                        | "batch"
+                        | "binary"
+                        | "len_prefixed_binary"
+                        | "udp_raw"
                 ),
                 "{}: unknown body format {}",
                 p.name,
@@ -562,6 +722,12 @@ mod tests {
         for p in PROVIDERS {
             if p.env_key.is_empty() {
                 assert_eq!(p.auth, Auth::None, "{} needs no key", p.name);
+                continue;
+            }
+            // a datagram has nowhere to put a header or a query string: the key IS the first
+            // 16 bytes of the payload, which gen-config emits as `udp_prefix`
+            if p.body == "udp_raw" {
+                assert_eq!(p.auth, Auth::None, "{}: UDP auth is the prefix", p.name);
                 continue;
             }
             match p.auth {
@@ -674,6 +840,15 @@ mod tests {
     #[test]
     fn every_provider_declares_a_keepalive_path() {
         for p in PROVIDERS {
+            // a datagram transport has no connection to keep warm and would not be answered
+            if p.body == "udp_raw" {
+                assert!(
+                    p.health_path.is_empty(),
+                    "{}: a UDP endpoint cannot be probed",
+                    p.name
+                );
+                continue;
+            }
             assert!(
                 !p.health_path.is_empty(),
                 "{}: no health_path, its connections will go cold",
@@ -721,6 +896,124 @@ mod tests {
             assert!(
                 host.ends_with(".falcon.wtf"),
                 "{region}: {host} is not a falcon endpoint"
+            );
+        }
+    }
+
+    /// The failure this pins is the one that cost us a whole provider silently: a hostname
+    /// that looks regional but is a CDN edge. Four of 0slot's five published names
+    /// (`ny`, `ams`, `jp`, `la`) resolve to one Cloudflare anycast pair, which is a proxy hop
+    /// in front of the submission host — the same trap as nozomi's digit-less aliases and
+    /// bloxroute's retired `la`. Where 0slot runs a direct host we must use it.
+    #[test]
+    fn zeroslot_prefers_its_direct_hosts() {
+        let z = PROVIDERS
+            .iter()
+            .find(|p| p.name == "0slot")
+            .expect("0slot missing from the catalogue");
+
+        for direct in ["ny2.0slot.trade", "de2.0slot.trade"] {
+            assert!(
+                z.hosts.iter().any(|(_, h)| *h == direct),
+                "{direct} is a direct 0slot host and must be in the fan-out"
+            );
+        }
+        // `de` is the Cloudflare-fronted Frankfurt name; `de2` is the bare metal one
+        assert!(
+            !z.hosts.iter().any(|(_, h)| *h == "de.0slot.trade"),
+            "de.0slot.trade is proxied - de2 is the direct host"
+        );
+        // Binary-Tx: raw transaction bytes, no base64, no JSON envelope
+        assert_eq!(z.path, "/txb?api-key={KEY}");
+        assert_eq!(z.body, "binary");
+        // and the probe must NOT carry the key: 0slot rate-limits at 5 TPS and an
+        // authenticated keep-alive spends that budget, while `/health` explicitly does not
+        assert_eq!(z.health_path, "/health");
+        assert!(
+            !z.health_path.contains("{KEY}"),
+            "an authenticated probe counts against 0slot's 5 TPS limit"
+        );
+        assert_eq!(z.tips.len(), 21, "0slot publishes 21 tip accounts");
+    }
+
+    /// Nozomi document three submission routes and rank them themselves: "Use Batch Send over
+    /// a direct `http://` endpoint … the fastest option even for a single transaction". We
+    /// were on the slowest of the three (JSON-RPC + base64) for no reason.
+    #[test]
+    fn nozomi_uses_the_batch_route_they_call_fastest() {
+        let n = PROVIDERS.iter().find(|p| p.name == "nozomi").unwrap();
+        assert_eq!(n.path, "/api/sendBatch?c={KEY}");
+        assert_eq!(n.body, "len_prefixed_binary");
+        // plain HTTP on a direct host is the other half of their recommendation
+        assert_eq!((n.port, n.tls), (80, false));
+    }
+
+    /// Astralane's `/irisb` takes the raw transaction; `/iris` wraps base64 in JSON-RPC. The
+    /// `method` query parameter replaces the JSON envelope and must survive edits to the path.
+    /// `mev-protect` and `swqos-only` stay off: both trade landing speed for protection we do
+    /// not want on a create-block snipe.
+    #[test]
+    fn astralane_submits_binary_and_asks_for_no_protection() {
+        let a = PROVIDERS.iter().find(|p| p.name == "astralane").unwrap();
+        assert_eq!(a.body, "binary");
+        assert!(a.path.starts_with("/irisb?"), "{}", a.path);
+        assert!(a.path.contains("method=sendTransaction"), "{}", a.path);
+        assert!(!a.path.contains("mev-protect"), "{}", a.path);
+        assert!(!a.path.contains("swqos-only"), "{}", a.path);
+        // The probe is a GET, and a GET to `/iris` answers 400 with `Connection: close` —
+        // it destroyed the connection it was meant to keep warm. The binary route answers
+        // 405 with `Connection: keep-alive`. Verify with `ping_providers.py --reuse-after`;
+        // plain reachability cannot see this, because closing a connection is not an error.
+        assert_eq!(a.health_path, "/irisb?api-key={KEY}&method=getHealth");
+        assert!(
+            !a.health_path.starts_with("/iris?"),
+            "a GET to /iris replies Connection: close"
+        );
+        assert_eq!(a.hosts.len(), 10);
+        // Cloudflare again: their docs recommend broadcasting to `edge`, but it resolves to
+        // Cloudflare rather than to astralane, so it is a proxy hop and not a race entry.
+        assert!(
+            !a.hosts.iter().any(|(_, h)| h.starts_with("edge.")),
+            "edge.astralane.io is Cloudflare-fronted"
+        );
+        for (region, host) in a.hosts {
+            assert!(
+                host.ends_with(".gateway.astralane.io"),
+                "{region}: {host} is not an astralane gateway"
+            );
+        }
+    }
+
+    /// falcon-udp can never confirm a send — the provider answers nothing on `:9000` — so a
+    /// misconfiguration there is invisible. It must therefore ship off, and the HTTP falcon
+    /// entry it shadows must stay on.
+    #[test]
+    fn falcon_udp_is_opt_in_and_does_not_replace_the_http_route() {
+        let udp = PROVIDERS.iter().find(|p| p.name == "falcon-udp").unwrap();
+        assert_eq!(
+            udp.default_regions, "",
+            "an unverifiable transport must not default to enabled"
+        );
+        assert_eq!(udp.body, "udp_raw");
+        assert_eq!(udp.port, 9000);
+        assert!(udp.path.is_empty(), "a datagram carries no path");
+        assert!(!udp.tls);
+        // it reuses the HTTP entry's key, and that entry must still exist and still be on
+        let http = PROVIDERS.iter().find(|p| p.name == "falcon").unwrap();
+        assert_eq!(udp.env_key, http.env_key);
+        assert_eq!(http.default_regions, "all");
+        assert_eq!(http.body, "binary");
+    }
+
+    /// Everything except the unverifiable UDP transport ships enabled.
+    #[test]
+    fn only_unverified_transports_default_to_disabled() {
+        for p in PROVIDERS {
+            let expected = if p.body == "udp_raw" { "" } else { "all" };
+            assert_eq!(
+                p.default_regions, expected,
+                "{}: unexpected default_regions",
+                p.name
             );
         }
     }

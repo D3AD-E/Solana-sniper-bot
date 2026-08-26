@@ -248,6 +248,32 @@ pub fn start_forwarder_threads(
         .collect::<Vec<JoinHandle<()>>>()
 }
 
+/// Maps a fired launch to the Fill message the Node seller consumes.
+///
+/// The wire contract the seller depends on: `max_sol_cost` carries the
+/// instruction-INDEPENDENT cost basis in lamports (`FiredLaunch::cost_lamports`) and
+/// `amount` the expected token fill — NOT the raw buy-instruction args, whose meaning flips
+/// with `buy_exact_sol_in` (arg1 becomes a token floor there; the seller once priced its
+/// stop-loss off it and dumped every position at slot +1).
+fn fill_from_fired(slot: Slot, f: &sniper::FiredLaunch) -> PbFill {
+    PbFill {
+        slot,
+        mint: f.mint.to_bytes().to_vec(),
+        token_account: f.token_account.to_bytes().to_vec(),
+        seed: String::from_utf8_lossy(&f.seed).into_owned(),
+        token_program: f.token_program.to_bytes().to_vec(),
+        bonding_curve: f.bonding_curve.to_bytes().to_vec(),
+        associated_bonding_curve: f.associated_bonding_curve.to_bytes().to_vec(),
+        creator: f.creator.to_bytes().to_vec(),
+        amount: f.expected_tokens,
+        max_sol_cost: f.cost_lamports,
+        fired_at_micros: SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_micros() as u64)
+            .unwrap_or_default(),
+    }
+}
+
 /// Runs pump.fun detection on *reconstructed entries*.
 ///
 /// This is deliberately not a prefilter over raw shred payloads: a 32 byte pubkey can
@@ -284,22 +310,7 @@ fn scan_for_pump_creates(
             if let Some(f) = fired {
                 metrics.snipes_fired.fetch_add(1, Ordering::Relaxed);
                 if fill_sender.receiver_count() > 0 {
-                    let _ = fill_sender.send(PbFill {
-                        slot,
-                        mint: f.mint.to_bytes().to_vec(),
-                        token_account: f.token_account.to_bytes().to_vec(),
-                        seed: String::from_utf8_lossy(&f.seed).into_owned(),
-                        token_program: f.token_program.to_bytes().to_vec(),
-                        bonding_curve: f.bonding_curve.to_bytes().to_vec(),
-                        associated_bonding_curve: f.associated_bonding_curve.to_bytes().to_vec(),
-                        creator: f.creator.to_bytes().to_vec(),
-                        amount: f.amount,
-                        max_sol_cost: f.max_sol_cost,
-                        fired_at_micros: SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_micros() as u64)
-                            .unwrap_or_default(),
-                    });
+                    let _ = fill_sender.send(fill_from_fired(slot, &f));
                 }
             }
 
@@ -819,7 +830,38 @@ mod tests {
     };
     use solana_sdk::packet::{PacketFlags, PACKET_DATA_SIZE};
 
-    use crate::forwarder::{recv_from_channel_and_send_multiple_dest, ShredMetrics};
+    use crate::forwarder::{fill_from_fired, recv_from_channel_and_send_multiple_dest, ShredMetrics};
+
+    /// Pins the seller's wire contract: the Fill's `max_sol_cost` field is the
+    /// instruction-independent cost basis in lamports and `amount` the expected token
+    /// fill — never the raw buy-instruction args. Under `buy_exact_sol_in` those args are
+    /// (sol_in, min_tokens_out); forwarding them verbatim gave the Node seller a token
+    /// count as its cost basis, its value multiple read ~0, and the 0.8x stop dumped
+    /// every position at slot +1.
+    #[test]
+    fn fill_carries_cost_basis_and_expected_tokens_not_the_wire_args() {
+        use solana_sdk::pubkey::Pubkey;
+        let fired = sniper::FiredLaunch {
+            mint: Pubkey::new_from_array([1; 32]),
+            token_account: Pubkey::new_from_array([2; 32]),
+            seed: *b"001234",
+            // exact_sol_in-shaped wire args: arg0 = sol_in, arg1 = token floor
+            amount: 2_000_000_000,
+            max_sol_cost: 60_000_000_000_000,
+            cost_lamports: 2_000_000_000,
+            expected_tokens: 64_000_000_000_000,
+            bonding_curve: Pubkey::new_from_array([3; 32]),
+            associated_bonding_curve: Pubkey::new_from_array([4; 32]),
+            creator: Pubkey::new_from_array([5; 32]),
+            token_program: Pubkey::new_from_array([6; 32]),
+        };
+        let fill = fill_from_fired(7, &fired);
+        assert_eq!(fill.slot, 7);
+        assert_eq!(fill.max_sol_cost, fired.cost_lamports, "lamports, not the token floor");
+        assert_eq!(fill.amount, fired.expected_tokens, "tokens, not sol_in");
+        assert_eq!(fill.mint, fired.mint.to_bytes().to_vec());
+        assert_eq!(fill.seed, "001234");
+    }
 
     fn listen_and_collect(listen_socket: UdpSocket, received_packets: Arc<Mutex<Vec<Vec<u8>>>>) {
         let mut buf = [0u8; PACKET_DATA_SIZE];

@@ -173,8 +173,11 @@ Not in `watch_wallets`, `creators`, or `creator_edge`.
 
 Why he matters: E4Ez-level net with **no latency race and ~30× lower fees**. Signals (10-block
 inflow, unique buyers, dev-sold, rug_coefficient) all computable from our stream at an
-18-second budget; `dev_history` plugs straight in. Candidate for a v1.2 side-strategy study;
-nothing adopted yet.
+18-second budget; `dev_history` plugs straight in. **The whale book is out of reach at our
+15–20 SOL bankroll — ignore it.** The actionable piece is the curve book alone: 2-SOL entries,
+max 5 concurrent (~10–12 SOL working capital), +83/day at 65% win over the 4 tape days.
+Candidate for a v1.2 side-strategy study; nothing adopted yet. Full plan sketch at the end of
+`analysis/W57ST.md`.
 
 ## Settled results (p99-trimmed, real fees charged)
 
@@ -592,7 +595,81 @@ Catalogue is `shred-sniper/sniper/src/providers.rs` (data only); `gen-config` tu
 `.env` into `sniper.json`. A provider with no key in `.env` is silently omitted — check the
 "not enabled" list gen-config prints.
 
-**nozomi (temporal)** is keyed and live: `NOZOMI_KEY` in `.env`, `NOZOMI_REGIONS=all` → all
+### Two keys are DEAD (found 2026-08-26) — 0slot now disabled, astralane still failing
+
+`SLOT_CONNECTION_KEY` and `ASTRA_KEY` do not authenticate. Both providers were in the fan-out
+contributing exactly nothing, and **nothing anywhere reported it** — that is the failure the
+response-status work below exists to catch.
+
+* **0slot** answers every submit `{"error":{"code":403,"message":"api-key does not exist"}}`,
+  byte-identical to what a made-up key returns. Its `/health` still returns `OK`, so
+  `ping_providers.py` called all six endpoints healthy. **Now disabled** via
+  `SLOT_REGIONS=none`, which drops the provider while keeping the key in `.env`. All the
+  endpoint work is already done and waiting — `/txb` binary submission, keyless `/health`
+  keep-alive, `ny2`+`de2` direct hosts, 21 tip accounts — so re-enabling is one word once a
+  working key exists.
+* **astralane** was dead on two successive keys and is **now fixed** with a third
+  (2026-08-26). A working key is unambiguous, which is what makes 401 diagnostic here:
+
+  ```
+  POST /iris?api-key=<good>   -> {"jsonrpc":"2.0","id":1,"result":"Ok"}          [200]
+  POST /irisb  …&method=sendTransaction, garbage bytes
+                             -> {"error":"failed to parse binary transaction"}  [400]
+  POST /iris?api-key=nope    ->                                                 [401]
+  ```
+
+  The 400 is the one that matters: it proves the `/irisb` binary route parsed our request and
+  got as far as the transaction. Before concluding a key is dead, sweep the auth styles —
+  query `api-key`/`apiKey`/`api_key`/`key`/`token`/`auth` and headers
+  `api-key`/`apiKey`/`api_key`/`x-api-key`/`Authorization`/`X-Astralane-Key` all returning
+  401 means the credential, not the wiring.
+
+Everything else authenticates: node1, nextblock, nozomi, bloxroute, flashblock, blockrazor,
+falcon (jito and helius-sender take no key).
+
+`<PROVIDER>_REGIONS=none` (or `off`) is the switch for this situation. An **empty** value does
+not work — `get_or` treats empty as unset and falls back to `all`, so `SLOT_REGIONS=` would
+silently mean "every endpoint".
+
+### The response path: `sent` never meant "accepted"
+
+`metrics.sent` counts bytes handed to a socket. Every rejection after that — a rotated key, a
+rate limit, a tip under the floor, a body format a provider stopped taking — used to arrive as
+an ordinary HTTP response on a healthy connection and be discarded unread by `drain_ready`.
+The sniper could reject its entire fan-out and report a clean run, which is how the two dead
+keys above survived.
+
+`note_status` now reads status lines off the drain and counts non-2xx submits into
+`metrics.rejected`, warning on the first and then every 32nd consecutive failure. Two details
+that are not optional:
+
+* **Keep-alive replies must not count.** jito 404s every path and nextblock's `/health` 401s
+  for our key, both by design. The probe reply is a round trip away, so it is normally read by
+  the *next* drain — usually a launch drain — and a plain counter mis-attributes it to a
+  submit. `Endpoint::awaiting` is a FIFO of what each outstanding reply belongs to; HTTP/1.1
+  keep-alive guarantees replies come back in request order.
+* **Two providers can't be read this way.** flashblock returns HTTP 200 for its own errors
+  (`{"code":403,"message":"PermissionDenied","success":false}`) so its rejections stay
+  invisible; node1 returns `605` on a good key with a bad transaction, so its counter moves for
+  transaction faults too.
+
+**nozomi (temporal)** is keyed and live. It now submits on **`/api/sendBatch`**, the route
+their own docs rank first: "Use Batch Send over a direct `http://` endpoint … Plain HTTP
+avoids per-transaction TLS encryption; batch avoids JSON and per-request overhead", and it is
+"the fastest option even for a single transaction". The three routes, slowest first:
+
+| route | body | size for our ~1,043 B tx |
+|---|---|---|
+| `POST /` (JSON-RPC) | base64 + envelope | ~1,450 B ← what we used to send |
+| `POST /api/sendTransaction2` | base64, `text/plain` | ~1,390 B |
+| **`POST /api/sendBatch`** | `[u16 BE len][tx]`, octet-stream | **1,045 B** |
+
+`BodyFormat::LenPrefixedBinary`. Limits are 16 transactions, 66..=1232 bytes each, 19,744 byte
+body; we send one. The reply is an empty 200 carrying no signature, which costs nothing — we
+already know the signature. Their QUIC client is explicitly *not* faster here: it exists for
+"workloads that cannot hold a single connection open", and we hold one.
+
+`NOZOMI_KEY` in `.env`, `NOZOMI_REGIONS=all` → all
 9 direct regions (`ewr1 fra2 ams1 lon1 lax1 tyo1 sgp1 pit1 ash1`, plain http on :80; the
 digit-less `ewr./fra./…` aliases are Cloudflare, https-only and slower — do not use them).
 Auth is the `?c=<key>` query parameter; a bad key returns HTTP 401 `Unauthorized`, a good one
@@ -628,8 +705,23 @@ fine for a swap, fatal for a create-block snipe that dies at slip 2. Sending no 
 taking the delaying default, which is what we were doing. `"low"` is rejected with
 `Failed to parse request`; the enum spelling `SP_LOW` is the one `/api/v2/submit` parses.
 This needed its own `BodyFormat::WrappedBlox` because nextblock shares the `wrapped` body and
-must not get the field. Still not set: `useStakedRPCs: true` (weighted-stake QoS; needs
-`frontRunningProtection=false`, which the body already sends).
+must not get the field.
+
+**`useStakedRPCs: true` is now set too, and it is the field that earns bloxroute its race
+slot.** Their docs describe `SP_LOW` as "no MEV protection; direct submission to Jito" — so
+with SP_LOW alone bloxroute was a slower path to a block engine we already hit ourselves,
+plus a hop. `useStakedRPCs` switches it to weighted-stake QoS submission straight to the
+leader. It has two documented preconditions and the body already met both: a tip ≥ 0.001 SOL
+and `frontRunningProtection=false`. Verified live rather than assumed — the field parses,
+which is not obvious given bloXroute rejects unknown fields outright:
+
+```
+{... "useStakedRPCs":true ...}  -> 400 "failed to get signature from transaction string: ..."
+{... no such field ...}         -> 400 "failed to get signature from transaction string: ..."
+{"totallyNotAField":true}       -> 400 "Failed to parse request"          <- the control
+```
+
+The first two get as far as decoding the transaction; only the control fails at the envelope.
 
 **blockrazor** is keyed and live on **binary submission**: `POST /v2/sendBinaryTransaction`
 with the signed transaction as raw bytes under `application/octet-stream` — no base64, no JSON
@@ -653,9 +745,74 @@ right — raw bytes, no length prefix.
 the `{"transactions":[...]}` body, 7 nodes (`ny slc ams fra singapore london tokyo`), min tip
 0.0001 SOL. Keep-alive is `GET /`.
 
+**0slot** submits on **`/txb`** (Binary-Tx: raw transaction bytes, no base64, no JSON, no
+special headers), not the old `/` JSON-RPC route. Two further traps here:
+
+* **Its keep-alive must NOT carry the key.** `health_path` was `/?api-key={KEY}`, and 0slot
+  rate-limits at **5 TPS** on the standard plan, so an authenticated probe every few seconds
+  spent submission budget on nothing. Their docs name `/health` for this and say a keyless
+  request "does not count toward TPS calculations".
+* **Four of its five published hostnames are Cloudflare.** `ny`, `ams`, `jp` and `la` all
+  resolve to one anycast pair (172.66.40.254 / 172.66.43.2) — a proxy hop in front of the
+  submission host, the same trap as nozomi's digit-less aliases. Measured probe times make the
+  cost obvious: `de2` (direct) 21 ms, `ams` (proxied) 29 ms, `ny` (proxied) 206 ms vs `ny2`
+  (direct) 106 ms, `la` 338 ms, `jp` **543 ms** — against 237 ms for a direct Tokyo host at
+  another provider. Where a direct host exists we now use it (`de2`, `ny2`, both bare metal on
+  plain :80). There is no published `ams2`/`jp2`/`la2`; **ask 0slot for the direct names** —
+  as they stand, `jp` and `la` will not win a race. Tip list also went 5 → all 21 published
+  accounts (the old five were valid, just concentrated).
+
+**astralane** submits on **`/irisb`** (`application/octet-stream`, raw transaction body,
+operation chosen by a `method=` query parameter instead of a JSON envelope) rather than
+`/iris`. Their own reasoning matches ours: it removes "Base64 Encoding/Decoding Overhead" and
+"Packet Splitting due to reduced data size". Deliberately left off: `mev-protect=true` and
+`swqos-only=true`, both default false — the first routes around validators (costs a slot), the
+second narrows to one path. Regions went 6 → 10: Frankfurt and Amsterdam each run a second
+datacenter (`fr2`, `ams2` on Cherry Servers) and Limburg and Lithuania are their own metros.
+`edge.astralane.io` is deliberately absent despite their docs recommending it — it resolves to
+Cloudflare, so it is a proxy hop, not a submission host. (bloxroute's `global` is kept because
+it is the opposite case: it answers on five of bloXroute's own addresses.)
+
+**Its keep-alive probe was destroying the connection.** `health_path` was `/iris?api-key=…`,
+and the probe is a GET — a GET to `/iris` answers `400 Bad Request` with **`Connection:
+close`**, so every tick tore down the connection it existed to preserve and astralane paid a
+fresh TCP handshake on every launch. It is now `/irisb?api-key={KEY}&method=getHealth`, which
+answers `405 Method Not Allowed` with `Connection: keep-alive` and an empty body. The status
+is irrelevant (jito and nextblock 404 by design); the `Connection` header is the whole point.
+
+This is only visible with `--reuse-after` — a plain reachability run reported all ten
+endpoints healthy the entire time, because closing a connection is not an error. **After any
+`health_path` change, run `ping_providers.py --reuse-after 6`, not just the default probe.**
+
+**nextblock** carries 9 regions, not 8 — `vilnius.nextblock.io` (88.216.197.109) was missing.
+
+**falcon-udp** is a second falcon entry on their native UDP `:9000`: one datagram of
+`16-byte raw UUID || transaction`, no HTTP, no envelope. It **ships disabled**
+(`default_regions: ""`, set `FALCON_UDP_REGIONS` to enable) because the transport never
+answers, so a wrong key or a truncated datagram is indistinguishable from a successful send —
+it cannot be verified except by a funded live fire under `SNIPER_TEST_MODE=1`. It runs
+*alongside* the TCP `/binary` entry rather than replacing it; both carry the same durable
+nonce, so at most one lands. The connected `UdpSocket` takes an ordinary write, so its regions
+still batch through io_uring like any plain-TCP provider.
+
 **lucum and lunar lander (hellomoon) were deleted from the catalogue** on 2026-08-26. A test
 pins them out; re-adding one means restoring its `ProviderSpec` and re-verifying its tip list,
 not pasting a key into `.env`.
+
+### DNS and reconnects are off the hot path (2026-08-26)
+
+`Endpoint::connect` used to call `to_socket_addrs` — a blocking getaddrinfo — and then
+`connect_timeout(5s)`, and it was called from the launch loop, serially, for every endpoint,
+*before* a single byte was written. One blackholed region delayed every other region of the
+same provider; blockrazor has eleven endpoints on one thread, and the serial retry after the
+batch could pay it twice. A create-block snipe is long dead by then.
+
+Now: every hostname resolves once at startup into a cached `SocketAddr`; a launch **skips** a
+cold endpoint (`metrics.skipped_cold`) instead of reconnecting inline; the keep-alive tick is
+where dead connections get rebuilt, off the critical path; and `CONNECT_TIMEOUT` is 2 s and
+applies only there. Note for deployment: resolving once makes bloXroute's EDNS-client-subnet
+POP choice sticky for the process lifetime, which is what we want — but a box pointed at
+Cloudflare `1.1.1.1` pins the *wrong* POP until restart. See `INFRA.md`.
 
 **falcon (Corvus Labs)** is keyed and live: UUID in `?api-key=`, 9 regions
 (`fra ams lon nyc tyo dub sgp slc sqq` — the last is Siauliai, LT, its own metro), min tip
@@ -692,7 +849,13 @@ connection open and probes again), not assumed:
 | everything else | longer |
 
 `KEEPALIVE_SECS` in `sender.rs` was **50 s**, so helius-sender's warm connections were always
-dead. It is now **6 s** (plus the ~2 s spin window = ~8 s real gap). The probe was also
+dead. It is now **4 s**, and the deadline is **absolute**. It used to be armed only after the
+spin window expired, which silently added `sender_spin_micros` (2 s in `.env`) to every gap
+and made the real interval ~8 s — clearing helius's measured 10 s drop by very little and
+blowing straight through the 5 s they actually document ("use connection warming when your
+application has gaps longer than 5 seconds"). Worse, the safe probe interval depended on an
+unrelated CPU-tuning knob. `next_probe` is now independent of the spin window. The probe was
+also
 rewritten to write all endpoints then drain replies non-blocking, via the existing
 `drain_ready`: the old version did a blocking read per endpoint, which at 11 endpoints could
 park a sender thread for over a second — tolerable at a 50 s interval, not at 6 s, and a
@@ -706,9 +869,22 @@ is all the probe needs. `every_provider_declares_a_keepalive_path` pins that non
 non-zero on any failure or any provider missing a `health_path`:
 
 ```
-python scripts/ping_providers.py                   # reachability, 72/72 expected
+python scripts/ping_providers.py                   # reachability, 81/81 with 0slot disabled
 python scripts/ping_providers.py --reuse-after 8   # connections survive the probe interval
 python scripts/ping_providers.py --reuse-after 10  # helius-sender should drop — proves the window
+```
+
+**A green ping run does NOT mean a provider works.** It probes `health_path`, which for most
+providers needs no key at all — 0slot's `/health` returns `OK` without one. Both dead keys
+below sat at "healthy" indefinitely. To check that a provider will actually accept a submit,
+POST a deliberately malformed transaction with the real key and read the *body*: a complaint
+about the transaction means auth passed, an auth error means it did not.
+
+```
+0slot      real key -> {"error":{"code":403,"message":"api-key does not exist"}}   # dead
+0slot      bogus    -> identical
+node1      real key -> "Decode Transaction Error: no signature"  (605)             # live
+node1      bogus    -> "Invalid Api-Key" (401)
 ```
 
 Re-run after any `.env` edit (WSL, not Windows):
@@ -736,6 +912,35 @@ now instruction-dependent: exact_sol_in → min-tokens floor below expected; buy
 headroom. Both revert on a ~2-buy up-move (slip-0/1 fills, later reverts). Test:
 `pumpfun::exact_sol_in_fixes_spend_and_floors_tokens`. **MUST be validated in SNIPER_TEST_MODE=1
 (one real buy) before live** - a wrong discriminator/arg = a failed buy.
+
+## Money-path audit round 3 (2026-08-26): exact_sol_in cost-basis P0
+
+The `buy_exact_sol_in` switch silently redefined `plan.amount`/`plan.max_sol_cost` (arg1
+became a TOKEN floor, ~1e13), and three consumers kept reading the old lamport meaning:
+
+* **Seller cost basis** (`src/pump.ts`): `entryCostLamports` came from `Fill.max_sol_cost`
+  → token count as cost → value multiple read ~0 → the 0.8× stop dumped every position at
+  slot +1. The certified ladder was silently degraded to dump@1.
+* **Ghost PnL** (`lib.rs`): cost = `max_sol_cost/(1+slip)` and `OpenPosition.amount` =
+  lamports priced as tokens — re-introduced the round-2 ghost-cost bug. Ghost soak numbers
+  from before this fix are garbage under exact mode.
+* **Dynamic tip sizing** (`lib.rs`): size term fed `plan.max_sol_cost` → token floor →
+  tip pinned at its max clamp every launch.
+
+Fix: `BuyPlan` now carries instruction-INDEPENDENT `budget_lamports` + `expected_tokens`
+(set by both planners); `FiredLaunch` carries `cost_lamports` + `expected_tokens`;
+`OpenPosition.{cost,amount}`, tip sizing, and the proxy's `fill_from_fired()` all read those.
+On the Fill wire, `max_sol_cost` = cost basis in lamports, `amount` = expected tokens — for
+both instructions (proto comments updated); pump.ts uses the field directly, slippage
+back-out deleted. Regression tests at every hop: `pumpfun::both_planners_carry_the_
+instruction_independent_cost_basis`, `lib::fired_launch_cost_basis_is_lamports_under_both_
+buy_instructions` (fires a ghost HotSniper through both instructions),
+`forwarder::fill_carries_cost_basis_and_expected_tokens_not_the_wire_args`, and the
+"cost basis units (exact_sol_in regression)" block in `src/pumpFun/ladder.test.ts`.
+
+Also from this audit, not yet fixed: a hard-down provider region reconnects inline on the
+send path (`sender.rs` — blocking DNS + 5 s connect timeout per launch, delaying that
+provider's healthy regions); wants a per-endpoint reconnect backoff.
 
 ## Standing caveats
 

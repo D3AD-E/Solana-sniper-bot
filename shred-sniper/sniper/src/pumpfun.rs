@@ -326,6 +326,14 @@ pub struct BuyPlan {
     pub amount: u64,
     /// `buy`: max_sol_cost cap. `buy_exact_sol_in`: min_tokens_out floor.
     pub max_sol_cost: u64,
+    /// Instruction-INDEPENDENT cost basis: the budget the caller asked to spend, in
+    /// lamports. Anything that accounts money (ghost PnL, the seller's stop-loss basis,
+    /// tip sizing) must read this, never `max_sol_cost` — which is a TOKEN amount under
+    /// `buy_exact_sol_in` and a slippage-padded cap under `buy`.
+    pub budget_lamports: u64,
+    /// Instruction-INDEPENDENT expected token fill at the priced depth. Under `buy` this
+    /// equals `amount`; under `buy_exact_sol_in` it is the pre-floor estimate.
+    pub expected_tokens: u64,
 }
 
 impl CurveParams {
@@ -392,6 +400,8 @@ impl CurveParams {
         BuyPlan {
             amount,
             max_sol_cost,
+            budget_lamports,
+            expected_tokens: amount,
         }
     }
 
@@ -419,6 +429,8 @@ impl CurveParams {
         BuyPlan {
             amount: budget_lamports, // sol_in: the whole budget, fixed
             max_sol_cost: min_tokens, // min_tokens_out floor
+            budget_lamports,
+            expected_tokens: expected,
         }
     }
 }
@@ -504,6 +516,35 @@ mod tests {
         // which is the point: we don't fill late when we've been overtaken.
         let deeper = p.tokens_behind_dev_buy(prior + 3_000_000_000, curve_sol);
         assert!(deeper < plan.max_sol_cost, "a big up-move should fall below the floor");
+    }
+
+    /// Regression for the exact_sol_in cost-basis bug: under `buy_exact_sol_in` the wire
+    /// field `max_sol_cost` carries a TOKEN floor (~1e13), not lamports. Ghost PnL, the
+    /// seller's stop-loss basis and tip sizing all priced off it and booked garbage (the
+    /// seller's value multiple read ~0, so the 0.8x stop dumped every position at slot +1).
+    /// Both planners must therefore expose the budget and the expected fill explicitly,
+    /// independent of which instruction the wire fields are shaped for.
+    #[test]
+    fn both_planners_carry_the_instruction_independent_cost_basis() {
+        let p = params();
+        let budget = 2_000_000_000u64;
+        let prior = 6_000_000_000u64;
+
+        let exact = p.plan_exact_sol_in(prior, budget, 640);
+        assert_eq!(exact.budget_lamports, budget);
+        assert_eq!(exact.amount, budget, "wire arg0 is sol_in");
+        // the wire cap field is tokens here — orders of magnitude off lamports. Anyone
+        // reading it as a cost basis is wrong; budget_lamports is the only cost basis.
+        assert!(exact.max_sol_cost > 100 * budget, "min_tokens dwarfs any sane lamport cost");
+        assert_ne!(exact.budget_lamports, exact.max_sol_cost);
+        // expected fill sits above the slippage floor
+        assert!(exact.expected_tokens > exact.max_sol_cost);
+
+        let classic = p.plan_buy(prior, budget, 30, 100);
+        assert_eq!(classic.budget_lamports, budget);
+        assert_eq!(classic.expected_tokens, classic.amount);
+        // classic cap is budget + slippage pad, never the budget itself
+        assert!(classic.max_sol_cost > budget);
     }
 
     #[test]

@@ -100,7 +100,12 @@ message Fill {
   bytes bonding_curve = 6;
   bytes associated_bonding_curve = 7;
   bytes creator = 8;
+  // expected token fill at the priced depth (instruction-independent; NOT the raw buy
+  // arg0, which is sol_in under buy_exact_sol_in)
   uint64 amount = 9;
+  // cost basis in LAMPORTS: the priced budget (instruction-independent; NOT the raw buy
+  // arg1, which is a min-tokens floor under buy_exact_sol_in). The seller's stop-loss
+  // multiple is computed against this.
   uint64 max_sol_cost = 10;
   uint64 fired_at_micros = 11;
 }

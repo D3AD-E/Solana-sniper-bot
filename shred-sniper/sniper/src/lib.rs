@@ -410,8 +410,16 @@ pub struct FiredLaunch {
     pub mint: Pubkey,
     pub token_account: Pubkey,
     pub seed: [u8; SEED_LEN],
+    /// raw instruction arg0: exact tokens under `buy`, sol_in under `buy_exact_sol_in`
     pub amount: u64,
+    /// raw instruction arg1: sol cap under `buy`, min-tokens floor under `buy_exact_sol_in`
     pub max_sol_cost: u64,
+    /// Instruction-INDEPENDENT cost basis, lamports (the priced budget). The seller's
+    /// stop-loss and all PnL account against this — never against `max_sol_cost`, whose
+    /// meaning flips with the instruction.
+    pub cost_lamports: u64,
+    /// Instruction-INDEPENDENT expected token fill at the priced depth.
+    pub expected_tokens: u64,
     // carried so the seller can be handed a fill without the original create in hand -- the
     // confirmation trigger fires from a buy, where the forwarder no longer has the create.
     pub bonding_curve: Pubkey,
@@ -720,13 +728,14 @@ impl HotSniper {
                 create_slot: slot,
                 bonding_curve: info.bonding_curve,
                 token_account,
-                amount: plan.amount,
-                // the real spend ≈ the priced budget. max_sol_cost is that budget PADDED by
-                // slippage_bps (a cap, rarely spent), so ghost PnL must back the pad out or it
-                // books ~0.18 SOL/trade of fake loss - the whole edge - and the go-live gate reads
-                // ~zero. budget = max_sol_cost / (1 + slippage).
-                cost: (plan.max_sol_cost as u128 * 10_000
-                    / (10_000 + self.shared.slippage_bps as u128)) as u64,
+                // instruction-independent: tokens expected at the priced depth. Under
+                // buy_exact_sol_in `plan.amount` is LAMPORTS, so pricing the ghost exit
+                // with it would sell a nonsense token amount.
+                amount: plan.expected_tokens,
+                // instruction-independent: the priced budget in lamports. Under buy this
+                // is the pre-slippage-pad spend (what the old max_sol_cost/(1+slip)
+                // arithmetic reconstructed); under buy_exact_sol_in it is sol_in exactly.
+                cost: plan.budget_lamports,
                 ghost: true,
             });
             m.fired.fetch_add(1, Ordering::Relaxed);
@@ -736,6 +745,8 @@ impl HotSniper {
                 seed,
                 amount: plan.amount,
                 max_sol_cost: plan.max_sol_cost,
+                cost_lamports: plan.budget_lamports,
+                expected_tokens: plan.expected_tokens,
                 bonding_curve: info.bonding_curve,
                 associated_bonding_curve: info.associated_bonding_curve,
                 creator: info.creator,
@@ -758,7 +769,9 @@ impl HotSniper {
             .shared
             .tip
             .as_ref()
-            .map(|tp| tip::dynamic_tip(tp, tip::current(), plan.max_sol_cost, competition));
+            // sized off the BUDGET, not max_sol_cost: under buy_exact_sol_in the latter is
+            // a token amount and would blow the size term through the tip cap every launch.
+            .map(|tp| tip::dynamic_tip(tp, tip::current(), plan.budget_lamports, competition));
 
         let mut queued = 0u64;
         for p in self.shared.providers.iter() {
@@ -784,8 +797,10 @@ impl HotSniper {
             create_slot: slot,
             bonding_curve: info.bonding_curve,
             token_account,
-            amount: plan.amount,
-            cost: plan.max_sol_cost,
+            // instruction-independent fields — see the ghost branch above for why the raw
+            // wire args (plan.amount / plan.max_sol_cost) must not be used here.
+            amount: plan.expected_tokens,
+            cost: plan.budget_lamports,
             ghost: false,
         });
 
@@ -795,6 +810,8 @@ impl HotSniper {
             seed,
             amount: plan.amount,
             max_sol_cost: plan.max_sol_cost,
+            cost_lamports: plan.budget_lamports,
+            expected_tokens: plan.expected_tokens,
             bonding_curve: info.bonding_curve,
             associated_bonding_curve: info.associated_bonding_curve,
             creator: info.creator,
@@ -847,6 +864,110 @@ fn read_keypair(path: &str) -> Result<SigningKey, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chain::GlobalConfig;
+
+    fn test_curve() -> CurveParams {
+        CurveParams {
+            initial_virtual_sol_reserves: 30_000_000_000,
+            initial_virtual_token_reserves: 1_073_000_000_000_000,
+            initial_real_token_reserves: 793_100_000_000_000,
+            fee_basis_points: 95,
+            creator_fee_basis_points: 5,
+        }
+    }
+
+    /// A ghost-mode HotSniper with the whitelist disabled, so `on_create` fires without a
+    /// network, a provider, or confirm mode.
+    fn ghost_sniper(buy_exact_sol_in: bool, buy_lamports: u64) -> HotSniper {
+        let buyer = Pubkey::new_from_array([7u8; 32]);
+        let global = GlobalConfig {
+            fee_recipient: Pubkey::new_from_array([1u8; 32]),
+            buyback_fee_recipients: vec![Pubkey::new_from_array([2u8; 32])],
+            curve: test_curve(),
+            fee_basis_points: 95,
+            creator_fee_basis_points: 5,
+        };
+        let nonces = Arc::new(chain::NoncePool::new(vec![Pubkey::new_from_array([3u8; 32])]));
+        nonces.load_from_values(vec![[4u8; 32]]).unwrap();
+        let static_accounts = template::StaticAccounts {
+            fee_recipient: global.fee_recipient,
+            buyback_fee_recipient: global.buyback_fee_recipients[0],
+            user: buyer,
+            user_volume_accumulator: pumpfun::user_volume_accumulator(&buyer),
+        };
+        let template = template::build(&static_accounts, 96_000, buy_exact_sol_in);
+        // exit=true: the tracker thread returns immediately; the gate itself still works
+        let exit = Arc::new(AtomicBool::new(true));
+        let (gate, _handle) = position::start(
+            "http://127.0.0.1:1".to_string(),
+            ModeConfig { ghost_mode: true, ..ModeConfig::default() },
+            test_curve(),
+            exit,
+        );
+        let shared = Arc::new(Shared {
+            whitelist: Whitelist::new(true),
+            nonces,
+            fee_recipients: FeeRecipientCache::new(&global),
+            curve: test_curve(),
+            metrics: Arc::new(SniperMetrics::default()),
+            providers: Vec::new(),
+            buy_lamports,
+            max_dev_buy_lamports: 0,
+            haircut_bps: 30,
+            slippage_bps: 500,
+            buyer,
+            gate,
+            ghost_mode: true,
+            buy_exact_sol_in,
+            seed_table: SeedTable::build(&buyer, 0, 4).unwrap(),
+            confirm: None,
+            tip: None,
+        });
+        let sniper = Sniper { shared, template, threads: Vec::new() };
+        sniper.into_hot().0
+    }
+
+    fn launch(n: u8) -> PumpCreateInfo {
+        PumpCreateInfo {
+            mint: Pubkey::new_from_array([n; 32]),
+            bonding_curve: Pubkey::new_from_array([n + 1; 32]),
+            associated_bonding_curve: Pubkey::new_from_array([n + 2; 32]),
+            creator: Pubkey::new_from_array([n + 3; 32]),
+            user: Pubkey::new_from_array([n + 4; 32]),
+            token_program: pumpfun::TOKEN_2022_PROGRAM,
+            dev_buy_lamports: 500_000_000,
+            is_v2: true,
+        }
+    }
+
+    /// Regression for the exact_sol_in P0: a fired launch must carry an
+    /// instruction-independent cost basis in lamports and an expected token fill,
+    /// whichever buy instruction shaped the wire args. Everything downstream (ghost PnL,
+    /// the Node seller's stop-loss, tip sizing) accounts against these two fields.
+    #[test]
+    fn fired_launch_cost_basis_is_lamports_under_both_buy_instructions() {
+        let budget = 2_000_000_000u64;
+
+        let mut exact = ghost_sniper(true, budget);
+        let f = exact.on_create(&launch(10), 1).expect("ghost fire");
+        assert_eq!(f.cost_lamports, budget, "exact mode: cost basis is sol_in");
+        assert_eq!(f.amount, budget, "exact mode: wire arg0 is sol_in");
+        assert!(
+            f.max_sol_cost > 100 * budget,
+            "exact mode: wire arg1 is a token floor, not lamports"
+        );
+        assert!(f.expected_tokens > f.max_sol_cost, "expected fill sits above the floor");
+
+        let mut classic = ghost_sniper(false, budget);
+        let f = classic.on_create(&launch(20), 1).expect("ghost fire");
+        assert_eq!(f.cost_lamports, budget, "classic mode: cost basis is the pre-pad budget");
+        assert_eq!(
+            f.max_sol_cost,
+            budget * 10_500 / 10_000,
+            "classic mode: wire arg1 is the slippage-padded cap"
+        );
+        assert_eq!(f.expected_tokens, f.amount, "classic mode: fill is the exact request");
+    }
 
     #[test]
     fn keypair_file_round_trips() {

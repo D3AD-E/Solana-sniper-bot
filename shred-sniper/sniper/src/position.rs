@@ -39,9 +39,11 @@ pub struct OpenPosition {
     pub create_slot: u64,
     pub bonding_curve: Pubkey,
     pub token_account: Pubkey,
-    /// tokens requested
+    /// expected token fill (instruction-independent — under `buy_exact_sol_in` the raw
+    /// instruction arg0 is lamports, which must never land here)
     pub amount: u64,
-    /// lamports the buy was allowed to spend, fees included
+    /// cost basis in lamports: the priced budget, fees included, pre-slippage-pad
+    /// (instruction-independent — never the raw `max_sol_cost` wire arg)
     pub cost: u64,
     pub ghost: bool,
 }

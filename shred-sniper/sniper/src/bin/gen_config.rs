@@ -10,7 +10,8 @@
 //!   adding a provider later is one line in `.env` and a re-run;
 //! * `<PROVIDER>_REGIONS` picks which regional endpoints to fire at — `all` (the default)
 //!   uses every endpoint the provider publishes. Firing at every region is free, because
-//!   all of them share one durable nonce and only the first to land can succeed;
+//!   all of them share one durable nonce and only the first to land can succeed.
+//!   `none` (or `off`) disables the provider while leaving its key in place;
 //! * anything already set in the environment (`SNIPER_BUY_LAMPORTS`, tips, CU price) wins
 //!   over the defaults.
 
@@ -65,8 +66,19 @@ fn main() {
             k
         };
 
-        // regions: explicit list, else every endpoint this provider has
-        let wanted = get_or(spec.env_regions, "all");
+        // regions: explicit list, else this provider's default. That default is "all" for
+        // everything proven, and empty for a transport that must be opted into (falcon-udp),
+        // which then falls out here rather than shipping enabled.
+        //
+        // `none`/`off` switches a provider off while KEEPING its key in `.env` — the case
+        // that comes up is a credential that has stopped authenticating, where deleting the
+        // key loses the value and an empty value is indistinguishable from an unset one
+        // (`get_or` falls back to the default, so `SLOT_REGIONS=` would silently mean `all`).
+        let wanted = get_or(spec.env_regions, spec.default_regions);
+        if wanted.is_empty() || wanted.eq_ignore_ascii_case("none") || wanted.eq_ignore_ascii_case("off") {
+            skipped.push((spec.name, spec.env_regions, spec.signup));
+            continue;
+        }
         let hosts: Vec<String> = spec
             .hosts
             .iter()
@@ -117,6 +129,12 @@ fn main() {
             p.insert("headers".into(), json!(headers));
         }
         p.insert("health_path".into(), json!(health_path));
+        // falcon's UDP transport prefixes every datagram with the API key as 16 raw bytes,
+        // which is its UUID with the dashes taken out. Emitting it as hex keeps the config
+        // file plain JSON and the parse happens once, at sender startup.
+        if spec.body == "udp_raw" {
+            p.insert("udp_prefix".into(), json!(key.replace('-', "")));
+        }
         p.insert("tip_lamports".into(), json!(tip));
         p.insert("cu_price".into(), json!(cu_price));
         p.insert("tip_accounts".into(), json!(spec.tips));

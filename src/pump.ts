@@ -112,11 +112,12 @@ const RECONCILE_MS = Number(process.env.RECONCILE_MS ?? 60_000);
 // the leg `lead` earlier. Default = one slot; set it to the MEASURED fire->land latency after
 // the first live sells (and a competitive tip shrinks the latency you need to lead).
 const SELL_LEAD_MS = Number(process.env.SELL_LEAD_MS ?? SLOT_MS);
-// NOTE: this is the BUY slippage, NOT a sell slippage. The sell itself never fails on price -
-// sellPosition uses minSolOutput=0, so it always executes at whatever the curve gives (matching
-// the sim, which always prices the exit). We only need this to back the buy's max_sol_cost
-// (= budget × (1+slippage)) down to the real spend, so the stop-loss value multiple is right.
-const BUY_SLIPPAGE_BPS = Number(process.env.SNIPER_SLIPPAGE_BPS ?? 500);
+// The buy's cost basis arrives ready to use: the proxy's Fill.max_sol_cost field carries the
+// priced budget in LAMPORTS for BOTH buy instructions (see fill_from_fired in the proxy and
+// FiredLaunch::cost_lamports). No slippage arithmetic here - the old back-out of
+// SNIPER_SLIPPAGE_BPS was only correct for the classic `buy`, and under buy_exact_sol_in the
+// raw wire arg was a token floor, which made the stop-loss multiple read ~0 and dump every
+// position at slot +1.
 
 /** current value multiple of the remaining position vs its cost basis; null if unreadable */
 async function currentMultiple(p: OpenPosition): Promise<number | null> {
@@ -195,8 +196,8 @@ function subscribeToFills(port: string) {
       selling: false,
       original: 0n,
       remaining: 0n,
-      // cost basis = the priced budget, not max_sol_cost (which is budget × (1+slippage))
-      entryCostLamports: (BigInt(fill.getMaxSolCost() || 0) * 10_000n) / BigInt(10_000 + BUY_SLIPPAGE_BPS),
+      // the proxy sends the priced budget in lamports here, instruction-independent
+      entryCostLamports: BigInt(fill.getMaxSolCost() || 0),
       legTimers: [],
       done: false,
       finalRetries: 0,

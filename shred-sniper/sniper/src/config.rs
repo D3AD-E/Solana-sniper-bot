@@ -31,9 +31,41 @@ pub enum BodyFormat {
     /// `{"transactions":["<base64>"]}` — flashblock's submit-batch.
     Batch,
     /// Raw transaction bytes as the request body, `application/octet-stream`, auth in the
-    /// query string — blockrazor's `/v2/sendBinaryTransaction`. Skips base64 entirely, so
-    /// the request is ~26% smaller than the JSON form and the hot path does no encoding.
+    /// query string — blockrazor's `/v2/sendBinaryTransaction`, 0slot's `/txb`, astralane's
+    /// `/irisb`, falcon's `/binary`. Skips base64 entirely, so the request is ~26% smaller
+    /// than the JSON form and the hot path does no encoding.
     Binary,
+    /// Like `Binary` but each transaction is framed `[u16 big-endian length][tx bytes]`, and
+    /// several may be concatenated. This is nozomi's `/api/sendBatch`, which their own docs
+    /// call "the lowest-overhead submission path (compact binary, no JSON)" and "the fastest
+    /// option even for a single transaction" — we send exactly one, so the body is
+    /// `2 + len` bytes against ~1,450 for the JSON-RPC form we used before.
+    ///
+    /// Their documented limits: at most 16 transactions, each 66..=1232 bytes, body <= 19,744.
+    /// One transaction is comfortably inside all three.
+    LenPrefixedBinary,
+    /// Not HTTP at all: one UDP datagram of `16-byte raw API-key UUID || transaction`, which
+    /// is falcon's native `:9000` transport. There is no envelope, no framing and **no reply
+    /// of any kind**, so nothing downstream can confirm a send — see `udp_prefix`.
+    UdpRaw,
+}
+
+impl BodyFormat {
+    /// True when the endpoint speaks a datagram protocol rather than HTTP. Such an endpoint
+    /// gets a connected `UdpSocket` instead of a `TcpStream`, skips the request head and the
+    /// keep-alive probe entirely, and can never be read from.
+    pub fn is_udp(self) -> bool {
+        matches!(self, BodyFormat::UdpRaw)
+    }
+
+    /// True when the transaction bytes go on the wire untouched (with or without a length
+    /// prefix), so the hot path must skip base64.
+    pub fn is_raw_bytes(self) -> bool {
+        matches!(
+            self,
+            BodyFormat::Binary | BodyFormat::LenPrefixedBinary | BodyFormat::UdpRaw
+        )
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -73,6 +105,10 @@ pub struct ProviderConfig {
     /// keep-alive probe path (GET, carrying this provider's headers). Empty disables probing.
     #[serde(default)]
     pub health_path: String,
+    /// For `BodyFormat::UdpRaw`: the API key as raw bytes, hex encoded, prepended to every
+    /// datagram. `gen-config` strips the dashes out of falcon's UUID for this.
+    #[serde(default)]
+    pub udp_prefix: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -95,6 +131,33 @@ impl ProviderConfig {
             .map(|h| match h.find('/') {
                 Some(i) => (h[..i].to_string(), h[i..].to_string()),
                 None => (h, self.path.clone()),
+            })
+            .collect()
+    }
+
+    /// The datagram prefix as raw bytes. Empty when this provider is not UDP.
+    ///
+    /// A malformed prefix is an error rather than a silent empty one: a UDP endpoint never
+    /// answers, so a datagram the provider cannot authenticate is discarded in total silence
+    /// and would look exactly like a working send.
+    pub fn udp_prefix_bytes(&self) -> Result<Vec<u8>, String> {
+        if self.udp_prefix.is_empty() {
+            return Ok(Vec::new());
+        }
+        let hex = self.udp_prefix.as_bytes();
+        if hex.len() % 2 != 0 {
+            return Err(format!(
+                "provider {}: udp_prefix has an odd number of hex digits",
+                self.name
+            ));
+        }
+        (0..hex.len() / 2)
+            .map(|i| {
+                u8::from_str_radix(
+                    std::str::from_utf8(&hex[i * 2..i * 2 + 2]).map_err(|e| e.to_string())?,
+                    16,
+                )
+                .map_err(|e| format!("provider {}: bad udp_prefix: {e}", self.name))
             })
             .collect()
     }

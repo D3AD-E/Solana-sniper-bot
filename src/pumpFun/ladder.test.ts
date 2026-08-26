@@ -95,6 +95,42 @@ describe('valueMultiple', () => {
   });
 });
 
+/**
+ * Regression for the exact_sol_in cost-basis P0.
+ *
+ * The proxy's Fill.max_sol_cost field MUST carry the priced budget in lamports for both buy
+ * instructions (pinned on the Rust side by forwarder::fill_carries_cost_basis_and_
+ * expected_tokens_not_the_wire_args). These tests pin the seller-side consequence with
+ * realistic magnitudes: a lamport cost basis prices sanely, while the raw exact_sol_in wire
+ * arg (a token floor, ~1e13) collapses the multiple to ~0 and trips the 0.8x stop on a
+ * healthy position - which is exactly the bug (every position dumped at slot +1).
+ */
+describe('cost basis units (exact_sol_in regression)', () => {
+  // realistic post-entry curve: ~2 SOL of prior flow + our 2 SOL buy
+  const vSol = 34_000_000_000n;
+  const vToken = (30_000_000_000n * 1_073_000_000_000_000n) / vSol;
+  const budgetLamports = 2_000_000_000n; // what the proxy now sends
+  const tokenFloor = 60_000_000_000_000n; // what the raw exact_sol_in wire arg looks like
+  const held = 63_000_000_000_000n; // ~2 SOL worth of tokens at this depth
+
+  it('a lamport cost basis prices a healthy position near 1x (no stop)', () => {
+    const m = valueMultiple(vSol, vToken, held, held, budgetLamports)!;
+    expect(m).toBeGreaterThan(0.8); // must NOT trip the stop
+    expect(m).toBeLessThan(1.2);
+    const { sellTokens, isFinal } = decideLegSize(held, held, 0.3, m, opts);
+    expect(isFinal).toBe(false); // scheduled leg, not a dump
+    expect(sellTokens).toBe((held * 3n) / 10n);
+  });
+
+  it('a token-unit cost basis reads ~0x and would dump everything at leg 1 - the bug', () => {
+    const m = valueMultiple(vSol, vToken, held, held, tokenFloor)!;
+    expect(m).toBeLessThan(0.001); // ~10,000x off
+    const { sellTokens, isFinal } = decideLegSize(held, held, 0.3, m, opts);
+    expect(isFinal).toBe(true); // stop fires, whole bag gone at slot +1
+    expect(sellTokens).toBe(held);
+  });
+});
+
 describe('decideLegSize — the money decision', () => {
   const original = 1_000_000n;
   it('sells the scheduled fraction of ORIGINAL on a normal leg', () => {
