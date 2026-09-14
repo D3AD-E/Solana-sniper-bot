@@ -1,5 +1,5 @@
 // package: shredstream
-// file: shredstream.proto
+// file: shredstream/shredstream.proto
 
 /* tslint:disable */
 /* eslint-disable */
@@ -205,6 +205,8 @@ export class Fill extends jspb.Message {
     setMaxSolCost(value: number): Fill;
     getFiredAtMicros(): number;
     setFiredAtMicros(value: number): Fill;
+    getIsCashback(): boolean;
+    setIsCashback(value: boolean): Fill;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): Fill.AsObject;
@@ -229,5 +231,6 @@ export namespace Fill {
         amount: number,
         maxSolCost: number,
         firedAtMicros: number,
+        isCashback: boolean,
     }
 }

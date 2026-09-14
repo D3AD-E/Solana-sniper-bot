@@ -72,6 +72,17 @@ pub struct SniperMetrics {
     pub confirm_elite_ahead: AtomicU64,
     /// confirm mode: launches skipped because the curve was at/over the completion cap
     pub confirm_curve_capped: AtomicU64,
+    /// live fires refused because no seller was subscribed to the fill stream — a fire
+    /// with nobody listening buys a bag that gets no ladder (SNIPER_REQUIRE_SELLER)
+    pub skipped_no_seller: AtomicU64,
+    /// confirm mode: mayhem-mode launches skipped (SNIPER_SKIP_MAYHEM)
+    pub confirm_mayhem_skipped: AtomicU64,
+    /// confirm mode: launches skipped, creator rug_coefficient >= SNIPER_MAX_RUG
+    pub confirm_rug_skipped: AtomicU64,
+    /// v2: skipped, dev_buy below SNIPER_MIN_DEV_BUY_SOL
+    pub confirm_min_dev_buy_skipped: AtomicU64,
+    /// v2: skipped, uri host not a known botlauncher (SNIPER_REQUIRE_BOTLAUNCHER)
+    pub confirm_not_botlauncher_skipped: AtomicU64,
 }
 
 /// Shared, background-updated state. Safe to read from the hot path.
@@ -90,6 +101,28 @@ pub struct Shared {
     /// sync / test / ghost gating
     pub gate: Arc<PositionGate>,
     pub ghost_mode: bool,
+    /// set by the host each batch from the fill stream's subscriber count. When false and
+    /// `require_seller` holds, live fires are refused: a buy nobody hears about gets no
+    /// ladder — it sits naked until reconciliation (cost −0.79 SOL live, 2026-08-26).
+    pub seller_listening: AtomicBool,
+    /// SNIPER_REQUIRE_SELLER (default on). Ghost mode ignores it.
+    pub require_seller: bool,
+    /// SNIPER_SKIP_MAYHEM (default on): refuse mayhem-mode launches.
+    pub skip_mayhem: bool,
+    /// SNIPER_MAX_RUG (default 0.5): skip known creators at/above this rug_coefficient. 1.0 = off.
+    pub max_rug: f64,
+    /// SNIPER_MIN_DEV_BUY_SOL (default 0): require the dev buy to be at least this (lamports).
+    pub min_dev_buy_lamports: u64,
+    /// SNIPER_REQUIRE_BOTLAUNCHER (default off): only fire on known launch-bot metadata hosts.
+    pub require_botlauncher: bool,
+    /// SNIPER_SKIP_BOTLAUNCHER (default on): skip launch-bot metadata hosts — they LOSE for us
+    /// (real round trips: NOT-botlauncher lifts dev_buy-band win 50%->56%, +0.39->+0.57/trade).
+    pub skip_botlauncher: bool,
+    /// SNIPER_FIRE_ON_CREATE (default off): fire immediately on the create tx (rank 0, like the
+    /// leader) instead of registering pending and waiting for a confirming buy. Uses the create's
+    /// dev buy as the only prior flow. The v2 selection gates (mayhem/rug/min-dev-buy/botlauncher)
+    /// still apply. When off, the launch is registered pending and fires via on_buy (n_conf).
+    pub fire_on_create: bool,
     /// use pump `buy_exact_sol_in` (fix SOL, floor tokens) instead of `buy` (fix tokens, cap
     /// SOL) - the leader's instruction, and it removes the exact-token depth-estimate revert.
     pub buy_exact_sol_in: bool,
@@ -257,12 +290,17 @@ impl Sniper {
                 .unwrap_or_else(|_| "dev_history.txt".into());
             let watch_path = std::env::var("SNIPER_WATCH_WALLETS")
                 .unwrap_or_else(|_| "watch_wallets.tsv".into());
+            let rug_path = std::env::var("SNIPER_RUG_CREATORS")
+                .unwrap_or_else(|_| "rug_creators.tsv".into());
             match (
                 confirm::load_devs_from_file(&dev_path),
                 confirm::load_watch_from_file(&watch_path),
             ) {
                 (Ok((nd, _)), Ok((nw, _))) => {
-                    info!("sniper: confirm mode ON, {nd} known devs, {nw} watch wallets");
+                    // rug table is optional: absent = gate off (fire on everyone), a missing
+                    // file must not stop the sniper arming
+                    let nr = confirm::load_rug_from_file(&rug_path).map(|(n, _)| n).unwrap_or(0);
+                    info!("sniper: confirm mode ON, {nd} known devs, {nw} watch wallets, {nr} high-rug creators");
                 }
                 (d, w) => {
                     return Err(format!(
@@ -271,7 +309,7 @@ impl Sniper {
                     ));
                 }
             }
-            confirm::spawn_reloader(dev_path, watch_path, std::time::Duration::from_secs(60));
+            confirm::spawn_reloader(dev_path, watch_path, rug_path, std::time::Duration::from_secs(60));
             confirm::CONFIRM_MODE.store(true, std::sync::atomic::Ordering::Relaxed);
             Some(confirm::Params::from_env())
         } else {
@@ -312,6 +350,24 @@ impl Sniper {
             buyer,
             gate,
             ghost_mode: cfg.ghost_mode,
+            // pessimistic start: the host flips it true once a fill subscriber exists
+            seller_listening: AtomicBool::new(false),
+            require_seller: std::env::var("SNIPER_REQUIRE_SELLER")
+                .map(|v| v.trim() != "0")
+                .unwrap_or(true),
+            skip_mayhem: std::env::var("SNIPER_SKIP_MAYHEM")
+                .map(|v| v.trim() != "0")
+                .unwrap_or(true),
+            max_rug: std::env::var("SNIPER_MAX_RUG")
+                .ok().and_then(|v| v.trim().parse().ok()).unwrap_or(0.5),
+            min_dev_buy_lamports: (std::env::var("SNIPER_MIN_DEV_BUY_SOL")
+                .ok().and_then(|v| v.trim().parse::<f64>().ok()).unwrap_or(0.0) * 1e9) as u64,
+            require_botlauncher: std::env::var("SNIPER_REQUIRE_BOTLAUNCHER")
+                .map(|v| v.trim() == "1").unwrap_or(false),
+            skip_botlauncher: std::env::var("SNIPER_SKIP_BOTLAUNCHER")
+                .map(|v| v.trim() != "0").unwrap_or(true),
+            fire_on_create: std::env::var("SNIPER_FIRE_ON_CREATE")
+                .map(|v| v.trim() == "1").unwrap_or(false),
             buy_exact_sol_in,
             seed_table,
             confirm,
@@ -437,11 +493,20 @@ pub struct FiredLaunch {
     pub associated_bonding_curve: Pubkey,
     pub creator: Pubkey,
     pub token_program: Pubkey,
+    /// cashback launch: its sell requires the user_volume_accumulator remaining account
+    pub is_cashback: bool,
 }
 
 impl HotSniper {
     pub fn metrics(&self) -> &SniperMetrics {
         &self.shared.metrics
+    }
+
+    /// Host callback: whether anything is subscribed to the fill stream right now. Cheap
+    /// atomic store — call as often as convenient (the forwarder does it once per batch).
+    #[inline]
+    pub fn set_seller_listening(&self, yes: bool) {
+        self.shared.seller_listening.store(yes, Ordering::Relaxed);
     }
 
     /// Copies the patched template into a shareable body, reusing a ring slot when every
@@ -485,8 +550,7 @@ impl HotSniper {
         // v1.1 confirmation trigger: do not fire on the create. Register a fresh deployer's
         // launch and wait for the create block to confirm demand (see on_buy).
         if let Some(params) = self.shared.confirm.clone() {
-            self.confirm_register(info, slot, &params);
-            return None;
+            return self.confirm_register(info, slot, &params);
         }
 
         if !self.shared.whitelist.contains(&info.user) {
@@ -533,20 +597,90 @@ impl HotSniper {
     /// v1.1 confirm mode: register a fresh deployer's launch so its create block can be
     /// watched. Dedups the create and drops pending launches from sealed (earlier) slots.
     #[inline]
-    fn confirm_register(&mut self, info: &PumpCreateInfo, slot: u64, _params: &confirm::Params) {
+    fn confirm_register(
+        &mut self,
+        info: &PumpCreateInfo,
+        slot: u64,
+        _params: &confirm::Params,
+    ) -> Option<FiredLaunch> {
         // never bind `&self.shared.metrics` across a `&mut self` call below.
         self.seal_old_slots(slot);
         if !self.seen.insert(info.mint) {
             self.shared.metrics.duplicates.fetch_add(1, Ordering::Relaxed);
-            return;
+            return None;
         }
         if self.seen.len() > 50_000 {
             self.seen.clear();
         }
         if !self.session.dev_is_fresh(&info.creator) {
             self.shared.metrics.confirm_not_fresh.fetch_add(1, Ordering::Relaxed);
-            return;
+            return None;
         }
+        // mayhem-mode launches run mechanics we have not reverse-engineered (and their sell
+        // requirements are unverified) — skip them unless explicitly allowed
+        if info.is_mayhem && self.shared.skip_mayhem {
+            self.shared.metrics.confirm_mayhem_skipped.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        // dev-dump gate: firing early (low n_conf) exposes us to dev dumps. rug_coefficient
+        // predicts the dump rate (live tape: 0.2-0.5 = 12%, 0.5-0.8 = 32%, 0.8-1 = 68%).
+        // Skip known creators at/above SNIPER_MAX_RUG; unknown creators return 0.0 and pass.
+        if self.shared.max_rug < 1.0 && confirm::creator_rug(&info.creator) >= self.shared.max_rug {
+            self.shared.metrics.confirm_rug_skipped.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        // v2 selection (2026-08-27, validated on REAL round trips across 4 tape days): the dev
+        // buy is a BAND, not a floor. Tokens with dev_buy in [MIN, MAX] SOL, entered in the
+        // create block, win ~50% at +0.31..+0.39/trade (real fills) vs ~40%/+0.15 unfiltered —
+        // holds every day. Big dev buys (>MAX) pump harder but dump harder: they need the
+        // leader's exact exit to be profitable, so we skip them. Tiny dev buys (<MIN) are noise.
+        // `max_dev_buy_lamports == 0` disables the ceiling.
+        if info.dev_buy_lamports < self.shared.min_dev_buy_lamports {
+            self.shared.metrics.confirm_min_dev_buy_skipped.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        if self.shared.max_dev_buy_lamports > 0
+            && info.dev_buy_lamports >= self.shared.max_dev_buy_lamports
+        {
+            self.shared.metrics.skipped_dev_buy.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        if self.shared.require_botlauncher && !info.is_botlauncher {
+            self.shared.metrics.confirm_not_botlauncher_skipped.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        // REAL round-trip result (2026-08-27): botlauncher tokens (uxento/j7tracker/…) LOSE for
+        // us — dev_buy 0.5-2 alone wins 50%/+0.39, adding NOT-botlauncher lifts it to 56%/+0.57.
+        // The leader BUYS them (62% of his) and wins on his exit; we lack that exit, so we skip.
+        if self.shared.skip_botlauncher && info.is_botlauncher {
+            self.shared.metrics.confirm_not_botlauncher_skipped.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+
+        // v2 fire-on-create: land at rank 0 like the leader. The only prior flow visible on the
+        // create tx is the dev's own buy, so price against that (net). No pending watch, no wait
+        // for a confirming buy — the selection is already decided by the gates above.
+        if self.shared.fire_on_create {
+            let plan = if self.shared.buy_exact_sol_in {
+                self.shared.curve.plan_exact_sol_in(
+                    info.dev_buy_lamports,
+                    self.shared.buy_lamports,
+                    self.shared.slippage_bps,
+                )
+            } else {
+                self.shared.curve.plan_buy(
+                    info.dev_buy_lamports,
+                    self.shared.buy_lamports,
+                    self.shared.haircut_bps,
+                    self.shared.slippage_bps,
+                )
+            };
+            if plan.amount == 0 {
+                return None;
+            }
+            return self.fire_launch(info, slot, plan, 0);
+        }
+
         if self.pending.len() > 4096 {
             self.pending.retain(|_, p| p.slot >= slot);
         }
@@ -555,6 +689,7 @@ impl HotSniper {
             info.mint,
             PendingLaunch { info: *info, slot, watch: LaunchWatch::new(info.dev_buy_lamports) },
         );
+        None
     }
 
     /// v1.1 confirm mode: a pump buy was decoded. Advance the matching create block's watcher
@@ -582,7 +717,7 @@ impl HotSniper {
             if !self.seen_buys.insert(buy.sig8) {
                 return None;
             }
-            (p.watch.on_buy(&buy.buyer, buy.sol_lamports, &params), p.info)
+            (p.watch.on_buy(&buy.buyer, buy.sol_lamports, buy.token_amount, buy.exact_sol, &params), p.info)
         };
         // note: never bind `&self.shared.metrics` across the `&mut self` fire below.
         match result {
@@ -663,6 +798,16 @@ impl HotSniper {
 
         // one token at a time, or stopped after a test round trip
         if !self.shared.gate.may_fire() {
+            return None;
+        }
+
+        // a live buy with no seller subscribed gets no ladder: refuse to fire until the
+        // fill stream has a listener (ghost mode buys nothing, so it is exempt)
+        if !self.shared.ghost_mode
+            && self.shared.require_seller
+            && !self.shared.seller_listening.load(Ordering::Relaxed)
+        {
+            m.skipped_no_seller.fetch_add(1, Ordering::Relaxed);
             return None;
         }
 
@@ -748,6 +893,7 @@ impl HotSniper {
                 // arithmetic reconstructed); under buy_exact_sol_in it is sol_in exactly.
                 cost: plan.budget_lamports,
                 nonce_account: Pubkey::new_from_array(nonce_account),
+                prior_flow_at_fire: plan.prior_flow_lamports,
                 ghost: true,
             });
             m.fired.fetch_add(1, Ordering::Relaxed);
@@ -763,6 +909,7 @@ impl HotSniper {
                 associated_bonding_curve: info.associated_bonding_curve,
                 creator: info.creator,
                 token_program: info.token_program,
+                is_cashback: info.is_cashback,
             });
         }
 
@@ -814,6 +961,7 @@ impl HotSniper {
             amount: plan.expected_tokens,
             cost: plan.budget_lamports,
             nonce_account: Pubkey::new_from_array(nonce_account),
+            prior_flow_at_fire: plan.prior_flow_lamports,
             ghost: false,
         });
 
@@ -829,6 +977,7 @@ impl HotSniper {
             associated_bonding_curve: info.associated_bonding_curve,
             creator: info.creator,
             token_program: info.token_program,
+            is_cashback: info.is_cashback,
         })
     }
 }
@@ -932,6 +1081,14 @@ mod tests {
             buyer,
             gate,
             ghost_mode: true,
+            seller_listening: AtomicBool::new(true),
+            require_seller: false,
+            skip_mayhem: true,
+            max_rug: 1.0,
+            min_dev_buy_lamports: 0,
+            require_botlauncher: false,
+            skip_botlauncher: false,
+            fire_on_create: false,
             buy_exact_sol_in,
             seed_table: SeedTable::build(&buyer, 0, 4).unwrap(),
             confirm: None,
@@ -951,6 +1108,9 @@ mod tests {
             token_program: pumpfun::TOKEN_2022_PROGRAM,
             dev_buy_lamports: 500_000_000,
             is_v2: true,
+            is_mayhem: false,
+            is_cashback: false,
+            is_botlauncher: false,
         }
     }
 

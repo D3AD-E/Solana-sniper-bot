@@ -82,6 +82,56 @@ export function decideLegSize(
   return { sellTokens, isFinal };
 }
 
+/**
+ * E4Ez's measured price-conditional exit (reverse-engineered from 4135 real sell legs across
+ * his 1008 tokens, 2026-08-27). Unlike the fixed-fraction ladder, the sell size at every leg
+ * depends ONLY on the current value multiple — this is what separates his 80% win from the
+ * field's 34% on the SAME tokens (the edge is the exit, proven by co-entrant analysis):
+ *
+ *   <= 0.8x (losing):  sell 55% of REMAINING  — cuts the loser hard but keeps 45% for a bounce
+ *                                               (a full dump here is what kills recoveries)
+ *   0.8-1.0x:          30% of original
+ *   1.0-1.5x:          17.5% of original
+ *   1.5-2.0x (winner): 4% of original         — barely trims, lets it run
+ *   >= 2.0x  (moon):   1.8% of original        — rides the fat tail to +40 and beyond
+ *
+ * The first scheduled leg (+1) always sells `firstFrac` (30%) unconditionally to lock in.
+ * Tiers are overridable via env for tuning, but default to his measured values.
+ */
+export function decideLegSizeCurve(
+  original: bigint,
+  remaining: bigint,
+  multiple: number | null,
+  isFirstLeg: boolean,
+  isForceOut: boolean,
+  opts: { firstFrac: number; stopFrac: number; dust: bigint },
+): { sellTokens: bigint; isFinal: boolean } {
+  if (isForceOut) return { sellTokens: remaining, isFinal: true };
+  let sellTokens: bigint;
+  if (isFirstLeg) {
+    sellTokens = (original * BigInt(Math.round(opts.firstFrac * 10_000))) / 10_000n;
+  } else if (multiple === null) {
+    // price unreadable: fall back to a modest scheduled trim rather than dumping blind
+    sellTokens = (original * 1750n) / 10_000n;
+  } else if (multiple <= 0.8) {
+    // partial stop: 55% of REMAINING (not original, not all) — winds a loser down over legs
+    sellTokens = (remaining * BigInt(Math.round(opts.stopFrac * 10_000))) / 10_000n;
+  } else if (multiple <= 1.0) {
+    sellTokens = (original * 3000n) / 10_000n;
+  } else if (multiple <= 1.5) {
+    sellTokens = (original * 1750n) / 10_000n;
+  } else if (multiple <= 2.0) {
+    sellTokens = (original * 400n) / 10_000n;
+  } else {
+    sellTokens = (original * 180n) / 10_000n;
+  }
+  if (sellTokens > remaining) sellTokens = remaining;
+  if (sellTokens < 0n) sellTokens = 0n;
+  const isFinal = remaining - sellTokens <= opts.dust;
+  if (isFinal) sellTokens = remaining; // never leave dust — Token-2022 close needs empty
+  return { sellTokens, isFinal };
+}
+
 /** Value multiple of the remaining position vs its cost basis; null when inputs are unusable. */
 export function valueMultiple(
   vSol: bigint,

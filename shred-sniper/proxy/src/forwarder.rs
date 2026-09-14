@@ -136,6 +136,12 @@ pub fn start_forwarder_threads(
                                 true,
                             );
 
+                            // seller interlock: the sniper refuses to fire while nothing is
+                            // subscribed to the fill stream (a fire nobody hears about gets
+                            // no ladder). Updated per batch; one atomic store.
+                            if let Some(h) = hot_sniper.as_ref() {
+                                h.set_seller_listening(fill_sender.receiver_count() > 0);
+                            }
                             deshredded_entries.drain(..).for_each(
                                 |(slot, entries, entries_bytes)| {
                                     scan_for_pump_creates(
@@ -271,6 +277,7 @@ fn fill_from_fired(slot: Slot, f: &sniper::FiredLaunch) -> PbFill {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_micros() as u64)
             .unwrap_or_default(),
+        is_cashback: f.is_cashback,
     }
 }
 
@@ -854,11 +861,13 @@ mod tests {
             associated_bonding_curve: Pubkey::new_from_array([4; 32]),
             creator: Pubkey::new_from_array([5; 32]),
             token_program: Pubkey::new_from_array([6; 32]),
+            is_cashback: true,
         };
         let fill = fill_from_fired(7, &fired);
         assert_eq!(fill.slot, 7);
         assert_eq!(fill.max_sol_cost, fired.cost_lamports, "lamports, not the token floor");
         assert_eq!(fill.amount, fired.expected_tokens, "tokens, not sol_in");
+        assert!(fill.is_cashback, "cashback flag must reach the seller: it picks the sell layout");
         assert_eq!(fill.mint, fired.mint.to_bytes().to_vec());
         assert_eq!(fill.seed, "001234");
     }

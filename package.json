@@ -9,7 +9,7 @@
     "start:minimal": "ts-node index.ts snipe-minimal",
     "analyze": "ts-node index.ts analyze",
     "prod": "npm run build &&  node  --use-largepages=on      --max-old-space-size=32768      --max-semi-space-size=128      dist/index.js snipe",
-    "build": "tsc && cp rust-native/ dist/ -r && cp src/proto/ dist/src/proto/ -r && cp src/generated/ dist/src/generated -r",
+    "build": "tsc && rm -rf dist/rust-native dist/src/proto dist/src/generated && cp -r rust-native dist/rust-native && cp -r src/proto dist/src/proto && cp -r src/generated dist/src/generated",
     "build:napi": "cd rust-native && npx napi build --release"
   },
   "author": "",

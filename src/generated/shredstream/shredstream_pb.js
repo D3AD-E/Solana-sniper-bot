@@ -1,4 +1,4 @@
-// source: shredstream.proto
+// source: shredstream/shredstream.proto
 /**
  * @fileoverview
  * @enhanceable
@@ -1455,7 +1455,8 @@ proto.shredstream.Fill.toObject = function(includeInstance, msg) {
     creator: msg.getCreator_asB64(),
     amount: jspb.Message.getFieldWithDefault(msg, 9, 0),
     maxSolCost: jspb.Message.getFieldWithDefault(msg, 10, 0),
-    firedAtMicros: jspb.Message.getFieldWithDefault(msg, 11, 0)
+    firedAtMicros: jspb.Message.getFieldWithDefault(msg, 11, 0),
+    isCashback: jspb.Message.getBooleanFieldWithDefault(msg, 12, false)
   };
 
   if (includeInstance) {
@@ -1535,6 +1536,10 @@ proto.shredstream.Fill.deserializeBinaryFromReader = function(msg, reader) {
     case 11:
       var value = /** @type {number} */ (reader.readUint64());
       msg.setFiredAtMicros(value);
+      break;
+    case 12:
+      var value = /** @type {boolean} */ (reader.readBool());
+      msg.setIsCashback(value);
       break;
     default:
       reader.skipField();
@@ -1639,6 +1644,13 @@ proto.shredstream.Fill.serializeBinaryToWriter = function(message, writer) {
   if (f !== 0) {
     writer.writeUint64(
       11,
+      f
+    );
+  }
+  f = message.getIsCashback();
+  if (f) {
+    writer.writeBool(
+      12,
       f
     );
   }
@@ -1984,6 +1996,24 @@ proto.shredstream.Fill.prototype.getFiredAtMicros = function() {
  */
 proto.shredstream.Fill.prototype.setFiredAtMicros = function(value) {
   return jspb.Message.setProto3IntField(this, 11, value);
+};
+
+
+/**
+ * optional bool is_cashback = 12;
+ * @return {boolean}
+ */
+proto.shredstream.Fill.prototype.getIsCashback = function() {
+  return /** @type {boolean} */ (jspb.Message.getBooleanFieldWithDefault(this, 12, false));
+};
+
+
+/**
+ * @param {boolean} value
+ * @return {!proto.shredstream.Fill} returns this
+ */
+proto.shredstream.Fill.prototype.setIsCashback = function(value) {
+  return jspb.Message.setProto3BooleanField(this, 12, value);
 };
 
 

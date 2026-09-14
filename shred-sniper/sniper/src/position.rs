@@ -55,6 +55,9 @@ pub struct OpenPosition {
     /// durable nonce backing this launch's buy. Advancing it hard-invalidates a buy that
     /// has not landed yet — the nonce-kill path uses it.
     pub nonce_account: Pubkey,
+    /// net SOL on the curve ahead of us at FIRE time (dev + confirmers). Compared against the
+    /// curve state at landing to measure our real intra-block rank / latency slip.
+    pub prior_flow_at_fire: u64,
     pub ghost: bool,
 }
 
@@ -243,6 +246,41 @@ fn track(
         };
 
         metrics.closed.fetch_add(1, Ordering::Relaxed);
+
+        // bankroll floor: after a landed round trip settles, disarm when the wallet has
+        // dropped below SNIPER_MIN_BANKROLL_SOL (default 4). Checked only between positions
+        // (the sync gate is busy while one is open), so it can never interrupt a buy.
+        if landed && !position.ghost {
+            let floor_lamports = (std::env::var("SNIPER_MIN_BANKROLL_SOL")
+                .ok()
+                .and_then(|v| v.trim().parse::<f64>().ok())
+                .unwrap_or(4.0)
+                * 1e9) as u64;
+            if floor_lamports > 0 {
+                if let Some(kp) = kill_keypair.as_ref() {
+                    if let Ok(balance) = client.get_balance(&kp.pubkey()) {
+                        if balance < floor_lamports {
+                            // the close is seen at `processed` but the final sell's SOL may
+                            // not be in the `confirmed` balance yet — a mid-settlement read
+                            // false-disarmed at 3.718 with 5.037 real (2026-08-27). Re-check
+                            // after settlement before pulling the trigger.
+                            std::thread::sleep(Duration::from_secs(4));
+                            let settled =
+                                client.get_balance(&kp.pubkey()).unwrap_or(balance);
+                            if settled < floor_lamports {
+                                gate.armed.store(false, Ordering::Release);
+                                warn!(
+                                    "bankroll floor: balance {:.3} SOL below {:.1} — buyer disarmed",
+                                    settled as f64 / 1e9,
+                                    floor_lamports as f64 / 1e9
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if modes.test_mode {
             // REAL round trips only: a buy that never landed (lost race, slippage revert)
             // costs only fees and must not consume a test slot — it burned two live test
@@ -555,16 +593,27 @@ fn record_landing(client: &RpcClient, position: &OpenPosition, metrics: &Positio
         1 => metrics.landed_plus_one.fetch_add(1, Ordering::Relaxed),
         _ => metrics.landed_later.fetch_add(1, Ordering::Relaxed),
     };
+    // Intra-block RANK proxy: SOL that was on the curve just before OUR buy executed. This is
+    // the number that decides the whole strategy — slip-0 (rank 0-3, ~0-6 SOL ahead) wins,
+    // rank 6-8 loses. `prior_flow_at_fire` was our estimate at trigger; the gap is our real
+    // latency slip. Read the curve state as of the landed tx.
+    let prior_at_land = client
+        .get_account_with_commitment(&position.bonding_curve, CommitmentConfig::confirmed())
+        .ok()
+        .and_then(|r| r.value)
+        .and_then(|a| read_reserves(&a.data))
+        .map(|(_, vsol)| (vsol.saturating_sub(30_000_000_000)) as f64 / 1e9);
     info!(
-        "{} create slot {} -> landed slot {} (+{delta}) sig {signature} \
-         | same {} / +1 {} / later {} / unreadable {}",
+        "{} LANDED create {} -> slot {} (+{delta}) | flow_ahead_at_fire {:.2} SOL, curve_now {:.2} SOL | sig {signature} \
+         | same {} / +1 {} / later {}",
         position.mint,
         position.create_slot,
         landed_slot,
+        position.prior_flow_at_fire as f64 / 1e9,
+        prior_at_land.unwrap_or(-1.0),
         metrics.landed_same_slot.load(Ordering::Relaxed),
         metrics.landed_plus_one.load(Ordering::Relaxed),
         metrics.landed_later.load(Ordering::Relaxed),
-        metrics.landing_slot_unknown.load(Ordering::Relaxed),
     );
 }
 

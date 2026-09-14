@@ -17,7 +17,7 @@ import {
   ASSOCIATED_TOKEN_PROGRAM,
   SEED_BONDING_CURVE,
 } from './pumpFun/constants';
-import { parseLegs, readReserves, valueMultiple, decideLegSize, readCreatorBytes } from './pumpFun/ladder';
+import { parseLegs, readReserves, valueMultiple, decideLegSize, decideLegSizeCurve, readCreatorBytes } from './pumpFun/ladder';
 
 /**
  * Node process: sells, telemetry, telegram. It never touches the buy path.
@@ -51,6 +51,9 @@ const positions = new Map<string, OpenPosition>();
 // mints we gave up selling (migrated / program rejects the sell). Reconciliation must skip
 // these or it re-adds and re-hammers them every sweep. Cleared only by a restart + manual sell.
 const stuck = new Set<string>();
+// per-orphan force-out attempts, used to alternate the sell layout when the launch type is
+// unknown (cashback vs not)
+const orphanAttempts = new Map<string, number>();
 let pumpGlobal: PumpGlobal | undefined;
 // A blockhash is valid ~60-90 s, so fetching one per sell leg just adds a serial RPC to the
 // critical path. Refresh one in the background and hand it to every leg; a ~2 s-old hash is
@@ -102,6 +105,16 @@ const LADDER_LEGS: Array<[number, number]> =
     [1, 0.30], [6, 0.20], [9, 0.20], [13, 0.15], [18, 0.15],
   ];
 const LADDER_LAST_SLOT = Number(process.env.SELL_LAST_SLOT ?? 24);
+// E4Ez's measured price-conditional exit (reverse-engineered 2026-08-27). When on, sell size
+// at each leg is set by the value multiple (see decideLegSizeCurve), not a fixed schedule:
+// partial 55% stop instead of a full dump, featherlight winner trims, rides the tail to +40.
+// This is the exit that produced his 80% win vs 34% for co-entrants on the SAME tokens.
+const SELL_E4EZ = (process.env.SELL_E4EZ ?? '0') === '1';
+const CURVE_SLOTS: number[] =
+  (process.env.SELL_CURVE_SLOTS ?? '1,6,9,13,18,24,30,40').split(',').map(Number);
+const CURVE_LAST = CURVE_SLOTS[CURVE_SLOTS.length - 1];
+const SELL_FIRST_FRAC = Number(process.env.SELL_FIRST_FRAC ?? 0.30);
+const SELL_STOP_FRAC = Number(process.env.SELL_STOP_FRAC ?? 0.55);
 const STOP_X = Number(process.env.SELL_STOP_X ?? 0.8);
 const MOON_X = Number(process.env.SELL_MOON_X ?? 2.0);
 const MOON_FRAC = Number(process.env.SELL_MOON_FRAC ?? 0.05);
@@ -162,7 +175,8 @@ export default async function snipe(isMinimalRun: boolean = false): Promise<void
 }
 
 function subscribeToFills(port: string) {
-  const client = new ShredstreamProxyClient(`localhost:${port}`, credentials.createInsecure());
+  // 127.0.0.1 explicitly: 'localhost' can resolve to ::1 while the proxy binds 0.0.0.0
+  const client = new ShredstreamProxyClient(`127.0.0.1:${port}`, credentials.createInsecure());
   const stream = client.subscribeFills(new SubscribeFillsRequest());
 
   let reconnected = false;
@@ -170,6 +184,15 @@ function subscribeToFills(port: string) {
     if (reconnected) return; // 'error' and 'end' can both fire; reconnect once
     reconnected = true;
     logger.warn(`fills stream ${why}, resubscribing`);
+    // close the failed client or every retry leaks a channel: a long proxy outage used to
+    // accumulate 1000+ dead channels and left the seller deaf for minutes after the proxy
+    // returned (mint FLhj4Pu…, −0.79 SOL, 2026-08-26)
+    try {
+      stream.cancel();
+    } catch {}
+    try {
+      client.close();
+    } catch {}
     setTimeout(() => subscribeToFills(port), 1000);
   };
   stream.on('error', (err) => reconnect(`error: ${err.message}`));
@@ -191,6 +214,7 @@ function subscribeToFills(port: string) {
       bondingCurve: new PublicKey(fill.getBondingCurve_asU8()),
       associatedBondingCurve: new PublicKey(fill.getAssociatedBondingCurve_asU8()),
       creator: new PublicKey(fill.getCreator_asU8()),
+      cashback: fill.getIsCashback(),
       slot: fill.getSlot(),
       detectedAt: Date.now(),
       selling: false,
@@ -205,6 +229,21 @@ function subscribeToFills(port: string) {
     positions.set(key, position);
     watchForConfirmation(key, position);
   });
+}
+
+/** Reads the authoritative creator from the bonding-curve account (byte 49) and overrides the
+ *  position's creator when it differs, so the sell derives the correct creator_vault PDA. */
+async function verifyCreator(key: string): Promise<void> {
+  const p = positions.get(key);
+  if (!p) return;
+  const info = await solanaConnection.getAccountInfo(p.bondingCurve, 'confirmed');
+  const bytes = info ? readCreatorBytes(info.data as Buffer) : null;
+  if (!bytes) return;
+  const onChain = new PublicKey(bytes);
+  if (!onChain.equals(p.creator)) {
+    logger.warn(`${key}: creator override ${p.creator.toBase58()} -> ${onChain.toBase58()} (curve account)`);
+    p.creator = onChain;
+  }
 }
 
 /**
@@ -223,12 +262,20 @@ function watchForConfirmation(key: string, position: OpenPosition) {
       logger.info(
         `buy confirmed ${key} amount ${amount} after ${position.confirmedAt - position.detectedAt}ms`,
       );
-      if (USE_LADDER) {
-        scheduleLadder(key);
-      } else {
-        // escape hatch: single dump at the old fixed hold
-        position.timer = setTimeout(() => runLeg(key, LADDER_LAST_SLOT, null), HOLD_AFTER_CONFIRM_MS);
-      }
+      // Authoritative creator BEFORE any sell: the parsed create creator can be wrong
+      // (post-create set_creator, layout drift), and a wrong creator_vault reverts EVERY
+      // sell with ConstraintSeeds (trapped bags HVSRc1zz…/C7Fc4KzG…, 2026-08-27). The
+      // bonding curve stores it at byte 49; reconcile already trusts this. Selling is not
+      // latency-critical (400ms+ hold), so awaiting one read here removes the race.
+      verifyCreator(key)
+        .catch(() => {})
+        .finally(() => {
+          if (USE_LADDER) {
+            scheduleLadder(key);
+          } else {
+            position.timer = setTimeout(() => runLeg(key, LADDER_LAST_SLOT, null), HOLD_AFTER_CONFIRM_MS);
+          }
+        });
     },
     'processed' as Commitment,
   );
@@ -249,10 +296,14 @@ function watchForConfirmation(key: string, position: OpenPosition) {
 function scheduleLadder(key: string) {
   const p = positions.get(key);
   if (!p) return;
-  const legs: Array<[number, number | null]> = [
-    ...LADDER_LEGS.filter(([slot]) => slot < LADDER_LAST_SLOT),
-    [LADDER_LAST_SLOT, null], // force-out: sell whatever remains
-  ];
+  // E4Ez curve: schedule his check slots; runLeg reads the multiple and sizes per his curve.
+  // frac is unused in curve mode (encoded as 0), except the final slot (null = force remainder).
+  const legs: Array<[number, number | null]> = SELL_E4EZ
+    ? CURVE_SLOTS.map((slot) => [slot, slot === CURVE_LAST ? null : 0] as [number, number | null])
+    : [
+        ...LADDER_LEGS.filter(([slot]) => slot < LADDER_LAST_SLOT),
+        [LADDER_LAST_SLOT, null], // force-out: sell whatever remains
+      ];
   p.legTimers = legs.map(([slot, frac]) =>
     setTimeout(() => {
       runLeg(key, slot, frac).catch((e) =>
@@ -296,12 +347,18 @@ async function runLeg(key: string, slot: number, frac: number | null): Promise<v
     }
     p.remaining = remaining;
 
-    const { sellTokens, isFinal } = decideLegSize(p.original, remaining, frac, m, {
-      stopX: STOP_X,
-      moonX: MOON_X,
-      moonFrac: MOON_FRAC,
-      dust: DUST,
-    });
+    const { sellTokens, isFinal } = SELL_E4EZ
+      ? decideLegSizeCurve(p.original, remaining, m, slot === CURVE_SLOTS[0], frac === null, {
+          firstFrac: SELL_FIRST_FRAC,
+          stopFrac: SELL_STOP_FRAC,
+          dust: DUST,
+        })
+      : decideLegSize(p.original, remaining, frac, m, {
+          stopX: STOP_X,
+          moonX: MOON_X,
+          moonFrac: MOON_FRAC,
+          dust: DUST,
+        });
     if (sellTokens <= 0n) return;
 
     await sendSell(key, p, sellTokens, isFinal, slot);
@@ -452,6 +509,9 @@ async function reconcileOrphans(): Promise<void> {
           bondingCurve,
           associatedBondingCurve,
           creator,
+          // launch type unknown for an orphan: alternate the sell layout per sweep so a
+          // cashback bag converges within two attempts (15s apart)
+          cashback: (orphanAttempts.get(key) ?? 0) % 2 === 1,
           slot: 0,
           detectedAt: Date.now(),
           confirmedAt: Date.now(),
@@ -463,6 +523,7 @@ async function reconcileOrphans(): Promise<void> {
           done: false,
           finalRetries: 0,
         };
+        orphanAttempts.set(key, (orphanAttempts.get(key) ?? 0) + 1);
         positions.set(key, position);
         logger.warn(`RECONCILE orphan ${key} balance ${amountRaw} - forcing out`);
         sendMessage(`Reconciling orphan ${key}`);

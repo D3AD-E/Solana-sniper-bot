@@ -192,3 +192,33 @@ describe('decideLegSize — the money decision', () => {
     expect(crashed.isFinal).toBe(true);
   });
 });
+
+import { decideLegSizeCurve } from './ladder';
+describe('decideLegSizeCurve — E4Ez measured price-conditional exit', () => {
+  const O = 1_000_000n;
+  const opts = { firstFrac: 0.30, stopFrac: 0.55, dust: 1000n };
+  it('first leg sells 30% unconditionally (lock-in)', () => {
+    const r = decideLegSizeCurve(O, O, 5.0, true, false, opts); // even mooning, first leg = 30%
+    expect(r.sellTokens).toBe(300_000n);
+  });
+  it('losing (<=0.8x): partial 55% of REMAINING, not a full dump, not final', () => {
+    const r = decideLegSizeCurve(O, 700_000n, 0.7, false, false, opts);
+    expect(r.sellTokens).toBe((700_000n * 5500n) / 10_000n); // 55% of remaining
+    expect(r.isFinal).toBe(false); // keeps 45% for a bounce
+  });
+  it('1-1.5x trims 17.5%, 1.5-2x trims 4%, >=2x trims 1.8% (rides winners)', () => {
+    expect(decideLegSizeCurve(O, O, 1.2, false, false, opts).sellTokens).toBe(175_000n);
+    expect(decideLegSizeCurve(O, O, 1.7, false, false, opts).sellTokens).toBe(40_000n);
+    expect(decideLegSizeCurve(O, O, 3.0, false, false, opts).sellTokens).toBe(18_000n);
+  });
+  it('force-out sells the full remainder and is final', () => {
+    const r = decideLegSizeCurve(O, 250_000n, 2.5, false, true, opts);
+    expect(r.sellTokens).toBe(250_000n);
+    expect(r.isFinal).toBe(true);
+  });
+  it('never leaves dust (Token-2022 close needs empty)', () => {
+    const r = decideLegSizeCurve(O, 900n, 1.2, false, false, opts);
+    expect(r.isFinal).toBe(true);
+    expect(r.sellTokens).toBe(900n);
+  });
+});

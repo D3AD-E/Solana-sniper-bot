@@ -1918,9 +1918,13 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        // disc | name/symbol/uri | creator | is_mayhem_mode | is_cashback_enabled
+        // disc | name/symbol/uri (real borsh strings — the creator is located by walking
+        // them forward) | creator | is_mayhem_mode | is_cashback_enabled
         let mut data = sniper::pumpfun::DISC_CREATE_V2.to_vec();
-        data.extend_from_slice(&[0xEEu8; 48]);
+        for s in ["synthetic", "SYN", "https://example.invalid/meta.json"] {
+            data.extend_from_slice(&(s.len() as u32).to_le_bytes());
+            data.extend_from_slice(s.as_bytes());
+        }
         data.extend_from_slice(&creator.to_bytes());
         data.extend_from_slice(&[0u8, 0u8]);
 

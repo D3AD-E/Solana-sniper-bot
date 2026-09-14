@@ -73,6 +73,9 @@ fn info(n: usize) -> PumpCreateInfo {
         token_program: TOKEN_2022_PROGRAM,
         dev_buy_lamports: 500_000_000,
         is_v2: true,
+            is_mayhem: false,
+            is_cashback: false,
+            is_botlauncher: false,
     }
 }
 
@@ -137,6 +140,14 @@ fn hot(providers: usize, spinning: bool) -> (HotSniper, Vec<std::thread::JoinHan
         whitelist,
         nonces,
         fee_recipients: FeeRecipientCache::new(&global),
+        seller_listening: std::sync::atomic::AtomicBool::new(true),
+        require_seller: false,
+        skip_mayhem: true,
+        max_rug: 1.0,
+        min_dev_buy_lamports: 0,
+        require_botlauncher: false,
+        skip_botlauncher: false,
+        fire_on_create: false,
         curve: curve(),
         metrics: Arc::new(SniperMetrics::default()),
         providers: handles,

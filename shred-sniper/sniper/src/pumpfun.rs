@@ -79,6 +79,17 @@ pub struct PumpCreateInfo {
     /// `max_sol_cost` of the dev buy in the same transaction (0 when there is none)
     pub dev_buy_lamports: u64,
     pub is_v2: bool,
+    /// `is_mayhem_mode` create argument (tail byte 0). Mechanics undocumented — the sniper
+    /// can skip these launches entirely (SNIPER_SKIP_MAYHEM).
+    pub is_mayhem: bool,
+    /// `is_cashback_enabled` create argument. A cashback launch's SELL requires the
+    /// user_volume_accumulator remaining account, which non-cashback launches reject —
+    /// the seller picks its sell layout from this flag (both variants trapped bags live,
+    /// 2026-08-26).
+    pub is_cashback: bool,
+    /// metadata uri host is a known launch-bot platform (uxento/j7tracker/rapidlaunch/…).
+    /// Zero-latency signal from the create tx; a strong selection filter (see BOTLAUNCHER_HOSTS).
+    pub is_botlauncher: bool,
 }
 
 #[inline(always)]
@@ -94,9 +105,19 @@ pub struct PumpBuyInfo {
     /// fee payer of the buy transaction
     pub buyer: Pubkey,
     /// SOL committed to the buy, in lamports. For `buy`/`buy_v2` this is `max_sol_cost`
-    /// (fee included); for `buy_exact_sol_in` it is the exact sol argument. It is the amount
-    /// pledged, which is what is visible pre-execution and what the trigger counts.
+    /// (fee included); for `buy_exact_sol_in` it is the exact sol argument.
+    ///
+    /// NOTE: classic-buy caps are PADDED 1.1–1.7× over real spend (measured live
+    /// 2026-08-27, e.g. cap 2.125 vs spent 1.270). The confirm trigger therefore computes
+    /// the EXECUTED spend from `token_amount` + the tracked curve state instead of trusting
+    /// this cap — counting caps made `MIN_CONF_SOL=4` fire at ~2.5 SOL of real flow.
     pub sol_lamports: u64,
+    /// Instruction arg0 for `buy`/`buy_v2`: the EXACT token amount the buy takes. The real
+    /// spend is derivable from it and the curve state, which is what the trigger counts.
+    /// (For `buy_exact_sol_in` this is the min-tokens floor — unused, spend is exact.)
+    pub token_amount: u64,
+    /// true = `buy_exact_sol_in`, whose `sol_lamports` IS the executed spend
+    pub exact_sol: bool,
     /// First 8 bytes of the transaction's first signature. The early-detect path re-emits the
     /// same buy on every subsequent shred of a segment, so the confirm trigger dedups on this
     /// - without it one confirming buy is counted many times and the trigger fires off one buy.
@@ -129,15 +150,14 @@ pub fn parse_buy(tx: &VersionedTransaction) -> Option<PumpBuyInfo> {
             continue;
         }
         let Some(d) = disc(&ix.data) else { continue };
-        let sol = match *d {
+        let arg = |r: core::ops::Range<usize>| -> Option<u64> {
+            Some(u64::from_le_bytes(ix.data.get(r)?.try_into().ok()?))
+        };
+        let (sol, token_amount, exact_sol) = match *d {
             // (amount_tokens: u64, max_sol_cost: u64)
-            DISC_BUY | DISC_BUY_V2 => {
-                u64::from_le_bytes(ix.data.get(16..24)?.try_into().ok()?)
-            }
+            DISC_BUY | DISC_BUY_V2 => (arg(16..24)?, arg(8..16)?, false),
             // (sol_in: u64, min_tokens_out: u64)
-            DISC_BUY_EXACT_SOL_IN => {
-                u64::from_le_bytes(ix.data.get(8..16)?.try_into().ok()?)
-            }
+            DISC_BUY_EXACT_SOL_IN => (arg(8..16)?, arg(16..24)?, true),
             _ => continue,
         };
         // pump buy accounts: 0 global, 1 fee_recipient, 2 mint, 3 bonding_curve, ...
@@ -148,7 +168,7 @@ pub fn parse_buy(tx: &VersionedTransaction) -> Option<PumpBuyInfo> {
         if let Some(s) = tx.signatures.first() {
             sig8.copy_from_slice(&s.as_ref()[..8]);
         }
-        return Some(PumpBuyInfo { mint, buyer, sol_lamports: sol, sig8 });
+        return Some(PumpBuyInfo { mint, buyer, sol_lamports: sol, token_amount, exact_sol, sig8 });
     }
     None
 }
@@ -230,6 +250,9 @@ fn read_create_v2(keys: &[Pubkey], ix: &CompiledInstruction) -> Option<PumpCreat
         token_program: *key_at(keys, ix, 7).unwrap_or(&TOKEN_2022_PROGRAM),
         dev_buy_lamports: 0,
         is_v2: true,
+        is_mayhem: mayhem_flag(&ix.data),
+        is_cashback: cashback_flag(&ix.data),
+        is_botlauncher: uri_is_botlauncher(&ix.data),
     })
 }
 
@@ -247,6 +270,9 @@ fn read_create(keys: &[Pubkey], ix: &CompiledInstruction) -> Option<PumpCreateIn
         token_program: *key_at(keys, ix, 9).unwrap_or(&TOKEN_PROGRAM),
         dev_buy_lamports: 0,
         is_v2: false,
+        is_mayhem: false, // classic create has neither flag
+        is_cashback: false,
+        is_botlauncher: uri_is_botlauncher(&ix.data),
     })
 }
 
@@ -267,6 +293,62 @@ fn creator_after_strings(data: &[u8]) -> Option<Pubkey> {
     }
     let bytes: [u8; 32] = data.get(off..off + 32)?.try_into().ok()?;
     Some(Pubkey::new_from_array(bytes))
+}
+
+/// Known launch-bot metadata hosts. E4Ez's picks skew heavily to these (uxento/j7tracker/
+/// rapidlaunch = ~48%), and gating on them lifted the simulated fire-on-create + curve-exit
+/// win rate to 77.5% on the fresh tape. A token launched through serious bot infrastructure
+/// signals a non-throwaway launch. Matched as substrings of the create's `uri` argument.
+const BOTLAUNCHER_HOSTS: &[&[u8]] = &[
+    b"uxento", b"j7tracker", b"rapidlaunch", b"vortex", b"bloom",
+];
+
+/// Reads the third create string (the metadata `uri`) and returns whether its host is a known
+/// launch-bot platform. Zero-latency (in the create tx), unlike dev funding which needs meta.
+#[inline]
+fn uri_is_botlauncher(data: &[u8]) -> bool {
+    let mut off = 8usize;
+    // skip name, symbol; land on uri
+    for _ in 0..2 {
+        let Some(b) = data.get(off..off + 4) else { return false };
+        let len = u32::from_le_bytes(b.try_into().unwrap()) as usize;
+        off = match off.checked_add(4 + len) {
+            Some(o) => o,
+            None => return false,
+        };
+    }
+    let Some(b) = data.get(off..off + 4) else { return false };
+    let len = u32::from_le_bytes(b.try_into().unwrap()) as usize;
+    let Some(uri) = data.get(off + 4..off + 4 + len) else { return false };
+    BOTLAUNCHER_HOSTS.iter().any(|h| uri.windows(h.len()).any(|w| w == *h))
+}
+
+/// Reads the `is_cashback_enabled` create_v2 argument. Trailing layout after the creator is
+/// two PLAIN bool bytes, `[is_mayhem: u8][is_cashback: u8]` — NOT a borsh Option. Verified
+/// against live creates 2026-08-26: the two tokens whose sells demanded the cashback
+/// accumulator both carry tail `0001`; the three that sold on the plain layout carry `0000`.
+/// A 1-byte tail (older creates) has no cashback argument at all.
+#[inline(always)]
+fn mayhem_flag(data: &[u8]) -> bool {
+    flag_tail(data).map_or(false, |t| !t.is_empty() && t[0] == 1)
+}
+
+#[inline(always)]
+fn cashback_flag(data: &[u8]) -> bool {
+    flag_tail(data).map_or(false, |t| t.len() >= 2 && t[1] == 1)
+}
+
+/// The flag bytes after the creator argument: `[is_mayhem][is_cashback]`, either possibly
+/// absent on older creates.
+#[inline(always)]
+fn flag_tail(data: &[u8]) -> Option<&[u8]> {
+    let mut off = 8usize;
+    for _ in 0..3 {
+        let b = data.get(off..off + 4)?;
+        let len = u32::from_le_bytes(b.try_into().ok()?) as usize;
+        off = off.checked_add(4 + len)?;
+    }
+    Some(&data[data.len().min(off + 32)..])
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +422,9 @@ pub struct BuyPlan {
     /// Instruction-INDEPENDENT expected token fill at the priced depth. Under `buy` this
     /// equals `amount`; under `buy_exact_sol_in` it is the pre-floor estimate.
     pub expected_tokens: u64,
+    /// net SOL on the curve ahead of us at fire time (what we priced against). Carried so the
+    /// position tracker can compare it to the curve at landing = our real intra-block rank.
+    pub prior_flow_lamports: u64,
 }
 
 impl CurveParams {
@@ -408,6 +493,7 @@ impl CurveParams {
             max_sol_cost,
             budget_lamports,
             expected_tokens: amount,
+            prior_flow_lamports: dev_buy_lamports,
         }
     }
 
@@ -437,6 +523,7 @@ impl CurveParams {
             max_sol_cost: min_tokens, // min_tokens_out floor
             budget_lamports,
             expected_tokens: expected,
+            prior_flow_lamports,
         }
     }
 }
@@ -613,6 +700,52 @@ mod tests {
                 0xb6, 0x5b, 0x30, 0x93
             ]
         );
+    }
+
+    /// Tails captured from live creates 2026-08-26, with their sell behaviour observed
+    /// on-chain: `0001` tokens (CXkQajJZ…, 2j6sw4Wy…) REQUIRE the cashback accumulator in
+    /// the sell; `0000` tokens (BxPwpob5…, AqFqabsX…, 6AxSYZni…) reject it. The second
+    /// byte is a PLAIN bool — an Option-shaped read (`tail[1]==tag && tail[2]==value`)
+    /// misreads `0001` as false and rebuilds the trapped-bag failure.
+    #[test]
+    fn uri_botlauncher_detects_known_hosts() {
+        let build = |uri: &str| {
+            let mut d = DISC_CREATE_V2.to_vec();
+            for s in ["Name", "SYM", uri] {
+                d.extend_from_slice(&(s.len() as u32).to_le_bytes());
+                d.extend_from_slice(s.as_bytes());
+            }
+            d.extend_from_slice(&Pubkey::new_unique().to_bytes());
+            d.extend_from_slice(&[0, 0]);
+            d
+        };
+        assert!(uri_is_botlauncher(&build("https://meta.uxento.io/data/abc")));
+        assert!(uri_is_botlauncher(&build("https://metadata.j7tracker.io/x")));
+        assert!(uri_is_botlauncher(&build("https://m.rapidlaunch.io/y")));
+        assert!(!uri_is_botlauncher(&build("https://ipfs.io/ipfs/bafkrei123")));
+        assert!(!uri_is_botlauncher(&build("https://pump.mypinata.cloud/z")));
+    }
+
+    #[test]
+    fn cashback_flag_reads_the_plain_bool_tail() {
+        let creator = Pubkey::new_unique();
+        let build = |tail: &[u8]| {
+            let mut d = Vec::new();
+            d.extend_from_slice(&DISC_CREATE_V2);
+            for s in ["N", "S", "https://u"] {
+                d.extend_from_slice(&(s.len() as u32).to_le_bytes());
+                d.extend_from_slice(s.as_bytes());
+            }
+            d.extend_from_slice(&creator.to_bytes());
+            d.extend_from_slice(tail);
+            d
+        };
+        assert!(cashback_flag(&build(&[0, 1])), "0001 = cashback (CXkQ, 2j6s)");
+        assert!(!cashback_flag(&build(&[0, 0])), "0000 = plain (BxPw, AqFq, 6AxS)");
+        assert!(!cashback_flag(&build(&[0])), "1-byte tail predates the argument");
+        assert!(!cashback_flag(&build(&[1, 0])), "mayhem without cashback");
+        assert!(cashback_flag(&build(&[1, 1])), "mayhem with cashback");
+        assert!(!cashback_flag(&build(&[])), "no tail");
     }
 
     /// The trailing flags after `creator` vary in length: Option<bool> None is ONE byte,

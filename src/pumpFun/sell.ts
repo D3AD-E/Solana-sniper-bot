@@ -16,6 +16,7 @@ import {
   PUMP_PROGRAM,
   SEED_BONDING_CURVE_V2,
   SEED_CREATOR_VAULT,
+  SEED_USER_VOLUME_ACCUMULATOR,
   SYSTEM_PROGRAM,
 } from './constants';
 import { PumpGlobal } from './global';
@@ -50,6 +51,10 @@ export type Position = {
   bondingCurve: PublicKey;
   associatedBondingCurve: PublicKey;
   creator: PublicKey;
+  /** launch created with cashback enabled: its sell REQUIRES the user_volume_accumulator
+   *  remaining account, which non-cashback launches REJECT (both trapped bags live,
+   *  2026-08-26: errors 6073/6074). Carried from the create via the Fill wire. */
+  cashback: boolean;
 };
 
 /**
@@ -76,26 +81,34 @@ export function sellInstruction(
   const creatorVault = pda([SEED_CREATOR_VAULT, position.creator.toBuffer()], PUMP_PROGRAM);
   const bondingCurveV2 = pda([SEED_BONDING_CURVE_V2, position.mint.toBuffer()], PUMP_PROGRAM);
 
+  const keys = [
+    ro(GLOBAL),
+    rw(global.feeRecipient),
+    ro(position.mint),
+    rw(position.bondingCurve),
+    rw(position.associatedBondingCurve),
+    rw(position.tokenAccount),
+    { pubkey: seller, isSigner: true, isWritable: true },
+    ro(SYSTEM_PROGRAM),
+    rw(creatorVault),
+    ro(position.tokenProgram),
+    ro(EVENT_AUTHORITY),
+    ro(PUMP_PROGRAM),
+    ro(FEE_CONFIG),
+    ro(FEE_PROGRAM),
+  ];
+  // remaining accounts are CONDITIONAL on the launch type (verified against successful
+  // sells of both kinds, 2026-08-26): cashback launches take
+  // [user_volume_accumulator, bonding_curve_v2, buyback]; everything else takes
+  // [bonding_curve_v2, buyback] and rejects the accumulator.
+  if (position.cashback) {
+    keys.push(rw(pda([SEED_USER_VOLUME_ACCUMULATOR, seller.toBuffer()], PUMP_PROGRAM)));
+  }
+  keys.push(rw(bondingCurveV2), rw(global.buybackFeeRecipients[0]));
+
   return new TransactionInstruction({
     programId: PUMP_PROGRAM,
-    keys: [
-      ro(GLOBAL),
-      rw(global.feeRecipient),
-      ro(position.mint),
-      rw(position.bondingCurve),
-      rw(position.associatedBondingCurve),
-      rw(position.tokenAccount),
-      { pubkey: seller, isSigner: true, isWritable: true },
-      ro(SYSTEM_PROGRAM),
-      rw(creatorVault),
-      ro(position.tokenProgram),
-      ro(EVENT_AUTHORITY),
-      ro(PUMP_PROGRAM),
-      ro(FEE_CONFIG),
-      ro(FEE_PROGRAM),
-      rw(bondingCurveV2),
-      rw(global.buybackFeeRecipients[0]),
-    ],
+    keys,
     data: Buffer.concat([DISC_SELL, u64le(amount), u64le(minSolOutput)]),
   });
 }
